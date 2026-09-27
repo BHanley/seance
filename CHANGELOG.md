@@ -19,6 +19,8 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- Phone web views show one pane at a time, with tabs across the top to switch
+  panes. The active terminal fills the screen above the keyboard.
 - `seance --help`, `seance -h`, and `seance help` show the control-plane CLI
   help without opening a desktop window or connecting to a daemon.
 - Drag the desktop sidebar's right edge to resize it; its width persists.

@@ -141,11 +141,12 @@ input:focus {
   height: var(--m-vh, 100%);
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
-  grid-template-rows: var(--topbar-h) auto auto 1fr;
+  grid-template-rows: var(--topbar-h) auto auto auto minmax(0, 1fr);
   grid-template-areas:
     "topbar topbar"
     "asks   asks"
     "sidebar awaken"
+    "sidebar pane-tabs"
     "sidebar tiles";
 }
 
@@ -247,6 +248,43 @@ input:focus {
   flex-direction: column;
   gap: 0;
   padding: 0;
+}
+
+#pane-tabs {
+  grid-area: pane-tabs;
+  display: none;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  padding: 0 4px;
+  gap: 4px;
+}
+.pane-tab {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 44px;
+  max-width: 200px;
+  padding: 0 12px;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.pane-tab[aria-selected="true"] {
+  background: var(--surface);
+  border-bottom-color: var(--flame);
+  color: var(--text);
+}
+.pane-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ── topbar bits ────────────────────────────────────────────────────── */
@@ -1603,7 +1641,7 @@ input:focus {
   display: none;
 }
 
-@media (max-width: 820px) {
+@media (max-width: 820px), (pointer: coarse) and (hover: none) {
   /* minmax(0,1fr), not 1fr: a `1fr` track still floors at the widest item's
      min-content, and #topbar's min-width is auto — so the PR chip strip (one
      chip per open PR) was sizing the whole column to 888px on a 390px screen
@@ -1616,21 +1654,23 @@ input:focus {
       "topbar"
       "asks"
       "awaken"
+      "pane-tabs"
       "tiles";
   }
   #topbar {
     min-width: 0;
   }
 
-  /* ceil(sqrt(n)) tiling is aspect-blind — two panes in portrait become two
-     ~190px columns. Stack them and scroll instead. */
   #tiles {
     grid-template-columns: minmax(0, 1fr) !important;
-    grid-template-rows: none !important;
-    grid-auto-rows: minmax(55vh, 1fr) !important;
-    grid-auto-rows: minmax(55dvh, 1fr) !important;
-    overflow-y: auto;
-    overscroll-behavior-y: contain;
+    grid-template-rows: minmax(0, 1fr) !important;
+    overflow: hidden;
+  }
+  #pane-tabs:not([hidden]) {
+    display: flex;
+  }
+  .tile-zoom {
+    display: none;
   }
 
   #sidebar {
@@ -2029,28 +2069,12 @@ body.m-kb-open #m-bar {
   display: none;
 }
 
-/* Keyboard up: you are typing into ONE pane, so show exactly that one and let
-   it fill the space above the accessory bar. Without this the tile keeps its
-   55dvh minimum — measured against the LAYOUT viewport, which the keyboard
-   doesn't shrink — and stays taller than the visible area. Hidden tiles have
-   a zero rect, and sync_sizes() skips anything under 8px, so this can't emit
-   a bogus 2x2 resize for the panes it hides. */
-body.m-kb-open #tiles {
-  grid-template-columns: minmax(0, 1fr) !important;
-  grid-template-rows: none !important;
-  grid-auto-rows: minmax(0, 1fr) !important;
-  overflow: hidden;
-}
-body.m-kb-open #tiles .tile:not(.focused) {
-  display: none;
-}
-
 /* Installed to the home screen there is no browser chrome above us, so the
    status bar / notch overlaps the topbar. In Safari these insets are 0 and
    this changes nothing. */
-@media (max-width: 820px) {
+@media (max-width: 820px), (pointer: coarse) and (hover: none) {
   #app {
-    grid-template-rows: calc(var(--topbar-h) + env(safe-area-inset-top)) auto auto 1fr;
+    grid-template-rows: calc(var(--topbar-h) + env(safe-area-inset-top)) auto auto auto minmax(0, 1fr);
   }
   #topbar {
     padding-top: env(safe-area-inset-top);
@@ -2060,7 +2084,7 @@ body.m-kb-open #tiles .tile:not(.focused) {
 /* ── recording state ────────────────────────────────────────────────────── */
 /* Bigger + pulsing, because the one thing you must never be wrong about is
    whether it's still listening. */
-@media (max-width: 820px) {
+@media (max-width: 820px), (pointer: coarse) and (hover: none) {
   #m-mic.rec {
     transform: scale(1.18);
     border-color: #e06c6c;
@@ -2173,7 +2197,7 @@ body.m-kb-open #tiles .tile:not(.focused) {
 /* One line, all of it the circle name. Everything that was competing for the
    390px — PR chips, the connection word, the probe toggle — moves into the
    circle menu behind a tap on the title. */
-@media (max-width: 820px) {
+@media (max-width: 820px), (pointer: coarse) and (hover: none) {
   #topbar {
     gap: 6px;
   }

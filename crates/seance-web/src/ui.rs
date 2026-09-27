@@ -126,6 +126,15 @@ const QUICKLAUNCH_PATH: &str = "~/.config/seance/quicklaunch.json";
 /// mtime poll throttle for the quicklaunch hot reload (native: 2s).
 const QL_POLL_MS: f64 = 2000.0;
 
+thread_local! {
+    static PHONE_QUERY: Option<web_sys::MediaQueryList> = web_sys::window()
+        .and_then(|w| w.match_media("(max-width: 820px), (pointer: coarse) and (hover: none)").ok().flatten());
+}
+
+pub(crate) fn phone_layout() -> bool {
+    PHONE_QUERY.with(|query| query.as_ref().is_some_and(|q| q.matches()))
+}
+
 // ── quicklaunch model (mirrors src/app/quicklaunch.rs) ──────────────────────
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
@@ -267,6 +276,9 @@ pub struct Chrome {
     topbar: Element,
     sidebar: Element,
     tiles: Element,
+    pane_tabs: Element,
+    tab_refs: HashMap<String, (Element, Element, Element)>,
+    tab_keys: Vec<KeyClosure>,
     toasts: Element,
     asks: Element,
     /// The awaken bar above the tile area (sleeping circles).
@@ -331,6 +343,11 @@ impl Chrome {
         let topbar = need(&doc, "topbar")?;
         let sidebar = need(&doc, "sidebar")?;
         let tiles = need(&doc, "tiles")?;
+        let pane_tabs = doc.create_element("div")?;
+        pane_tabs.set_id("pane-tabs");
+        pane_tabs.set_attribute("role", "tablist")?;
+        pane_tabs.set_attribute("aria-label", "Panes")?;
+        need(&doc, "app")?.insert_before(&pane_tabs, Some(&tiles))?;
         let toasts = need(&doc, "toasts")?;
         // The asks banner is optional in the shell; synthesise it if absent so
         // an older index.html still works.
@@ -375,6 +392,9 @@ impl Chrome {
             topbar,
             sidebar,
             tiles,
+            pane_tabs,
+            tab_refs: HashMap::new(),
+            tab_keys: Vec::new(),
             toasts,
             asks,
             awaken,
@@ -434,6 +454,8 @@ impl Chrome {
         self.rename.keys.borrow_mut().clear();
         *self.rename.open.borrow_mut() = None;
         self.tile_refs.clear();
+        self.tab_refs.clear();
+        self.tab_keys.clear();
         self.ws_refs.clear();
         self.focused = state.focused_pane.clone();
 
@@ -1229,6 +1251,7 @@ impl Chrome {
             Some(ws) => state.panes_in(ws).into_iter().filter(|p| p.tiled).collect(),
             None => Vec::new(),
         };
+        self.build_pane_tabs(state, &all)?;
 
         if all.is_empty() {
             self.tiles
@@ -1248,11 +1271,20 @@ impl Chrome {
         let zoomed: Option<String> = state
             .zoomed
             .clone()
+            .filter(|_| !phone_layout())
             .filter(|z| all.iter().any(|p| p.slug == *z));
 
-        let panes: Vec<&PaneInfo> = match &zoomed {
-            Some(z) => all.into_iter().filter(|p| p.slug == *z).collect(),
-            None => all,
+        let panes: Vec<&PaneInfo> = if phone_layout() {
+            selected
+                .and_then(|ws| state.focused_pane_in(ws))
+                .or_else(|| all.first().copied())
+                .into_iter()
+                .collect()
+        } else {
+            match &zoomed {
+                Some(z) => all.into_iter().filter(|p| p.slug == *z).collect(),
+                None => all,
+            }
         };
 
         // Every workspace (for the pane menu's "move to →" items).
@@ -1305,6 +1337,108 @@ impl Chrome {
         Ok(())
     }
 
+    fn build_pane_tabs(&mut self, state: &ClientState, panes: &[&PaneInfo]) -> Result<(), JsValue> {
+        let had_keyboard_focus = self
+            .doc
+            .active_element()
+            .is_some_and(|el| el.class_name() == "pane-tab");
+        let scroll = self.pane_tabs.scroll_left();
+        self.pane_tabs.set_inner_html("");
+        if panes.len() < 2 {
+            self.pane_tabs.set_attribute("hidden", "")?;
+            return Ok(());
+        }
+        self.pane_tabs.remove_attribute("hidden")?;
+        let focused = state
+            .focused_pane_in(&panes[0].workspace)
+            .map(|p| p.slug.as_str());
+        let mut active = None;
+        for (index, pane) in panes.iter().enumerate() {
+            let button = mk(&self.doc, "button", "pane-tab")?;
+            button.set_attribute("type", "button")?;
+            button.set_attribute("role", "tab")?;
+            button.set_attribute(
+                "tabindex",
+                if focused == Some(&pane.slug) {
+                    "0"
+                } else {
+                    "-1"
+                },
+            )?;
+            button.set_attribute("data-slug", &pane.slug)?;
+            button.set_attribute("aria-controls", &format!("pane-{}", pane.slug))?;
+            button.set_attribute(
+                "aria-selected",
+                if focused == Some(&pane.slug) {
+                    "true"
+                } else {
+                    "false"
+                },
+            )?;
+            button.set_attribute("title", &pane.name)?;
+            let dot = mk(&self.doc, "span", "dot")?;
+            let name = text_el(&self.doc, "span", "pane-tab-name", &pane.name)?;
+            button.append_child(&dot)?;
+            button.append_child(&name)?;
+            let actions = self.actions.clone();
+            let slug = pane.slug.clone();
+            bind(&button, "mousedown", &mut self.structural, |ev| {
+                ev.prevent_default()
+            })?;
+            bind_click(&button, &mut self.structural, move |ev| {
+                ev.prevent_default();
+                if ev.detail() > 0 {
+                    if let Some(target) = ev
+                        .current_target()
+                        .and_then(|t| t.dyn_into::<web_sys::HtmlElement>().ok())
+                    {
+                        let _ = target.blur();
+                    }
+                }
+                actions.focus_pane(&slug);
+            })?;
+            let actions = self.actions.clone();
+            let slugs: Vec<String> = panes.iter().map(|p| p.slug.clone()).collect();
+            bind_key(&button, &mut self.tab_keys, move |ev| {
+                ev.stop_propagation();
+                let next = match ev.key().as_str() {
+                    "ArrowLeft" => (index + slugs.len() - 1) % slugs.len(),
+                    "ArrowRight" => (index + 1) % slugs.len(),
+                    "Home" => 0,
+                    "End" => slugs.len() - 1,
+                    _ => return,
+                };
+                ev.prevent_default();
+                actions.focus_pane(&slugs[next]);
+            })?;
+            self.pane_tabs.append_child(&button)?;
+            if focused == Some(&pane.slug) {
+                active = Some(button.clone());
+            }
+            self.tab_refs.insert(pane.slug.clone(), (button, name, dot));
+        }
+        self.pane_tabs.set_scroll_left(scroll);
+        if let Some(active) = active {
+            if had_keyboard_focus {
+                if let Some(button) = active.dyn_ref::<web_sys::HtmlElement>() {
+                    let _ = button.focus();
+                }
+            }
+            let rect = active.get_bounding_client_rect();
+            let strip = self.pane_tabs.get_bounding_client_rect();
+            let offset = if rect.left() < strip.left() {
+                rect.left() - strip.left()
+            } else if rect.right() > strip.right() {
+                rect.right() - strip.right()
+            } else {
+                0.0
+            };
+            self.pane_tabs
+                .set_scroll_left(self.pane_tabs.scroll_left() + offset as i32);
+        }
+        Ok(())
+    }
+
     fn build_tile(
         &mut self,
         pane: &PaneInfo,
@@ -1314,6 +1448,7 @@ impl Chrome {
         let doc = self.doc.clone();
         let slug = pane.slug.clone();
         let tile = mk(&doc, "div", "tile")?;
+        tile.set_id(&format!("pane-{slug}"));
         tile.set_attribute("data-slug", &slug)?;
 
         let header = mk(&doc, "div", "tile-header")?;
@@ -1563,7 +1698,29 @@ impl Chrome {
     }
 
     fn apply_badges(&mut self, state: &ClientState) {
-        let focused = state.focused_pane.clone().or_else(|| self.focused.clone());
+        let focused = state
+            .selected_workspace
+            .as_deref()
+            .and_then(|ws| state.focused_pane_in(ws))
+            .map(|p| p.slug.clone())
+            .or_else(|| self.focused.clone());
+
+        for (slug, (button, name, dot)) in &self.tab_refs {
+            if let Some(pane) = state.pane(slug) {
+                name.set_text_content(Some(&pane.name));
+                let _ = button.set_attribute("title", &pane.name);
+                let status = state.statuses.get(slug).map(|s| s.state.as_str());
+                dot.set_class_name(&format!("dot {}", dot_class(status, pane.exited)));
+                let _ = button.set_attribute(
+                    "aria-selected",
+                    if focused.as_deref() == Some(slug) {
+                        "true"
+                    } else {
+                        "false"
+                    },
+                );
+            }
+        }
 
         for (slug, refs) in &self.tile_refs {
             let Some(pane) = state.pane(slug) else {

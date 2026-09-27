@@ -123,7 +123,7 @@ drag-and-drop, no "send to new window".
 
 ## Phone chrome
 
-Everything under `@media (max-width: 820px)` is plain JS in `www/index.html`,
+Phone controls use plain JS in `www/index.html`,
 appended to `<body>` — `ui.rs` clears `#topbar`/`#sidebar` on every re-render
 and would eat anything parented there. It reaches the websocket only through
 the `seance_mobile_*` exports (`lib.rs`): drawer, circle menu, swipe
@@ -133,6 +133,13 @@ two-row accessory bar of modifiers / control codes / arrows with `paste` and
 `done` in a right-hand column. Paste goes through `navigator.clipboard`
 (hence https, i.e. the tunnel, not the raw tailnet http URL) and falls back to
 a long-press textarea sheet when the browser refuses.
+
+On narrow screens (820px or less), and touch-only devices in either orientation,
+`ui.rs` shows one pane at a time. Multiple panes become a horizontally scrollable
+tab row below the circle header; tapping a tab switches the terminal and input
+focus. The terminal fills the remaining height, including above the keyboard.
+Closing the selected pane selects a remaining pane. Desktop browsers retain
+the tiled layout and zoom controls.
 
 Two things the desktop reaches with a modifier or a second click, and a
 finger cannot:

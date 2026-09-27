@@ -82,6 +82,7 @@ pub struct App {
     views: RefCell<HashMap<String, PaneView>>,
     dirty_grids: RefCell<HashSet<String>>,
     need_rebuild: Cell<bool>,
+    phone_layout: Cell<bool>,
     badges_dirty: Cell<bool>,
     /// Highest grid frame seq acked back to the daemon. Flow control: the
     /// daemon holds frames (and merges them) past a small in-flight window, so
@@ -163,6 +164,7 @@ impl App {
             views: RefCell::new(HashMap::new()),
             dirty_grids: RefCell::new(HashSet::new()),
             need_rebuild: Cell::new(false),
+            phone_layout: Cell::new(ui::phone_layout()),
             badges_dirty: Cell::new(false),
             acked_grid_seq: Cell::new(0),
             structure_rev_bound: Cell::new(0),
@@ -258,7 +260,11 @@ impl App {
     }
 
     fn focused_pane(&self) -> Option<String> {
-        self.state.borrow().focused_pane.clone()
+        let ws = self.selected_workspace()?;
+        self.state
+            .borrow()
+            .focused_pane_in(&ws)
+            .map(|p| p.slug.clone())
     }
 
     /// Public mirror for keymap execution.
@@ -618,6 +624,10 @@ impl App {
     }
 
     fn frame(self: &Rc<Self>) {
+        let phone_layout = ui::phone_layout();
+        if self.phone_layout.replace(phone_layout) != phone_layout {
+            self.need_rebuild.set(true);
+        }
         {
             // Finish detection re-sorts the sidebar; cheap, once per frame.
             let mut st = self.state.borrow_mut();
@@ -758,7 +768,7 @@ impl App {
         // login) owns the keyboard — its own handlers deal with Enter/Escape.
         if let Some(active) = document().active_element() {
             let tag = active.tag_name();
-            if tag == "INPUT" || tag == "TEXTAREA" {
+            if tag == "INPUT" || tag == "TEXTAREA" || active.class_name() == "pane-tab" {
                 return;
             }
         }

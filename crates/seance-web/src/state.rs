@@ -631,6 +631,17 @@ impl ClientState {
         self.panes.iter().find(|p| p.slug == slug)
     }
 
+    pub fn focused_pane_in(&self, workspace: &str) -> Option<&PaneInfo> {
+        let mut panes = self
+            .panes
+            .iter()
+            .filter(|p| p.workspace == workspace && p.tiled);
+        panes
+            .clone()
+            .find(|p| self.focused_pane.as_deref() == Some(&p.slug))
+            .or_else(|| panes.next())
+    }
+
     /// Fold one daemon event into the store. `now_ms` stamps activity rows
     /// and touch bumps (pass `performance.now()`; tests pass 0).
     pub fn apply_event(&mut self, ev: GuiEvent, now_ms: f64) -> Applied {
@@ -922,6 +933,22 @@ mod tests {
                 "asks":[],"statuses":[]}"#,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn pane_focus_stays_in_circle_and_recovers_when_a_tab_disappears() {
+        let mut st = ClientState::default();
+        st.apply_event(state_event(), 0.0);
+        let mut second = st.panes[0].clone();
+        second.slug = "w-2".into();
+        st.panes.push(second);
+        st.focused_pane = Some("w-2".into());
+        assert_eq!(st.focused_pane_in("lab").unwrap().slug, "w-2");
+        st.panes.retain(|p| p.slug != "w-2");
+        assert_eq!(st.focused_pane_in("lab").unwrap().slug, "w-1");
+        assert!(st.focused_pane_in("empty").is_none());
+        st.panes[0].tiled = false;
+        assert!(st.focused_pane_in("lab").is_none());
     }
 
     #[test]
