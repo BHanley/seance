@@ -65,9 +65,9 @@ pub struct ScratchpadStore {
 }
 
 impl ScratchpadStore {
-    /// Create the store, ensuring `~/.local/share/seance/scratch/` exists.
+    /// Create the scratch directory under the daemon's state directory.
     pub fn new() -> Result<Self> {
-        let dir = PathBuf::from(shellexpand::tilde("~/.local/share/seance/scratch").into_owned());
+        let dir = crate::runtime::state_data_dir().join("scratch");
         Self::with_dir(dir)
     }
 

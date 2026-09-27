@@ -352,7 +352,7 @@ impl Engine {
         PtySession::spawn(
             slug.to_string(),
             SpawnConfig {
-                command: command.to_string(),
+                command: crate::agents::isolate_codex(command),
                 cwd,
                 env,
                 cols: 100,

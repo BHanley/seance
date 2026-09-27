@@ -288,6 +288,58 @@ fn begin_and_complete_task_lifecycle() {
 }
 
 #[test]
+fn finish_rejects_invalid_task_before_any_mutation() {
+    with_test_state_dir("finish-task-identity", || {
+        let scratch = temp_scratch("finish-task-identity");
+        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
+        let own = eng.push_stub_pane("worker", "main");
+        let other = eng.push_stub_pane("unrelated", "main");
+        let cancelled = eng.begin_task(&own, "original assignment");
+        let current = eng.begin_task(&own, "replacement assignment");
+        let foreign = eng.begin_task(&other, "other worker's assignment");
+        let path = eng
+            .panes
+            .iter()
+            .find(|p| p.slug == own)
+            .unwrap()
+            .scratch_path
+            .clone();
+        std::fs::write(&path, "keep this pad").unwrap();
+        eng.statuses.insert(own.clone(), ("working".into(), None));
+        let request = |task| ControlRequest::Finish {
+            pane: None,
+            body: Some("completed work".into()),
+            append: true,
+            status: "done".into(),
+            status_note: None,
+            empty_ok: false,
+            task,
+            scope: None,
+            from: Some(own.clone()),
+        };
+        for id in [&cancelled, &foreign, "task-missing"] {
+            let result = eng.handle_control(request(Some(id.to_string())));
+            assert!(!result.ok, "invalid task {id} accepted");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "keep this pad");
+            assert_eq!(eng.statuses[&own].0, "working");
+            assert_eq!(eng.active_tasks[&own], current);
+            assert_eq!(eng.tasks[&current].status, "open");
+            assert!(!eng.pad_revs.contains_key(&own));
+        }
+        let result = eng.handle_control(request(None));
+        assert!(result.ok, "{:?}", result.error);
+        assert_eq!(result.data.unwrap()["task_id"], current);
+        assert_eq!(eng.tasks[&current].status, "done");
+        assert_eq!(eng.tasks[&foreign].status, "open");
+        assert_eq!(eng.tasks[&cancelled].status, "cancelled");
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert!(!eng.handle_control(request(Some(current))).ok);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), body);
+        let _ = std::fs::remove_dir_all(scratch);
+    });
+}
+
+#[test]
 fn finish_done_requires_body_or_empty_ok() {
     with_test_state_dir("finish-ev", || {
         let scratch = temp_scratch("finish-ev");

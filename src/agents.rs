@@ -231,6 +231,34 @@ pub fn command_line(profile: &AgentProfile) -> String {
     parts.join(" ")
 }
 
+pub(crate) fn isolate_codex(command: &str) -> String {
+    isolate_codex_with(command, |bin| {
+        Command::new(bin).arg("--help").output().is_ok_and(|out| {
+            out.status.success()
+                && String::from_utf8_lossy(&out.stdout)
+                    .split_whitespace()
+                    .any(|word| word == "--no-daemon")
+        })
+    })
+}
+
+fn isolate_codex_with(command: &str, supports: impl FnOnce(&str) -> bool) -> String {
+    let command = command.trim();
+    let (bin, rest) = command
+        .split_once(char::is_whitespace)
+        .unwrap_or((command, ""));
+    if Path::new(bin)
+        .file_name()
+        .is_some_and(|name| name == "codex")
+        && !rest.split_whitespace().any(|arg| arg == "--no-daemon")
+        && supports(bin)
+    {
+        format!("{bin} --no-daemon {rest}")
+    } else {
+        command.to_string()
+    }
+}
+
 /// Boot-dialog clear sequences after `--wait-ready` (raw PTY bytes).
 ///
 /// Agents often present a first-run trust/update modal. Masters should not have
@@ -321,6 +349,29 @@ pub struct DoctorRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_launch_isolated_only_when_supported() {
+        assert_eq!(
+            isolate_codex_with("/opt/codex --yolo", |_| true),
+            "/opt/codex --no-daemon --yolo"
+        );
+        assert_eq!(
+            isolate_codex_with("codex -a never", |_| false),
+            "codex -a never"
+        );
+        for command in [
+            "codex --no-daemon --yolo",
+            "claude",
+            "bash -lc codex",
+            "codex-wrapper",
+        ] {
+            assert_eq!(
+                isolate_codex_with(command, |_| panic!("must not probe")),
+                command
+            );
+        }
+    }
 
     #[test]
     fn shell_profile_resolves() {

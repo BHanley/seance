@@ -3,6 +3,7 @@
 //! A thin, dependency-free command-line front end over the Unix-socket protocol
 //! defined in [`crate::control`]. See crate-level docs on the original module.
 
+mod identity;
 mod parse;
 mod phone;
 mod print;
@@ -35,6 +36,11 @@ Visibility is the product. If `$SEANCE_SESSION` is set, you are in a pane now.
 - `$SEANCE_SCRATCHPAD` shared notes path (screens scroll away)
 - `$SEANCE_SOCKET`     control socket (ctl finds it)
 
+Shared Codex app-servers can inherit a different pane's environment. `ctl`
+rejects that identity; relaunch Codex in the intended pane with `--no-daemon`.
+Seance adds this flag to direct Codex launches when the binary supports it.
+Do not guess or override `SEANCE_SESSION` to bypass the check.
+
 ### Hot path — worker (you received a task)
 
 1. Re-read your assignment (durable, not scrollback):
@@ -48,6 +54,8 @@ Visibility is the product. If `$SEANCE_SESSION` is set, you are in a pane now.
      EOF`
    or `finish --file PATH --status done`.
    `status=done` **requires a body**. Returns `task=… status=done rev=N pad=…B`.
+   Use `--task ID` from your assignment to reject stale or foreign completions
+   before the pad or status changes.
 
 ### Hot path — orchestrator (you drive siblings)
 
@@ -69,6 +77,9 @@ seance ctl wait w-claude-4 w-grok-4 w-codex-4 --status done --cat
   Use `--badge-only` only if you intentionally skip evidence.
 - `--cat` / `--harvest` prints each pad body after success (one round-trip fan-in).
 - `send` returns `task_id`; roster shows `task=task-N`.
+- Each `send` cancels the pane's previous open task, even if the worker is still
+  running it. A wait for the old task to become done will time out. For a mid-run
+  note, use a shared file or `send-raw` (no new task); otherwise track the new id.
 
 ### File / markdown panes (show a document live — NOT a shell)
 
@@ -190,6 +201,12 @@ fn run_local(args: Vec<String>) -> i32 {
         }
     };
     let mut sub_args: Vec<String> = it.collect();
+    if !matches!(sub.as_str(), "help" | "-h" | "--help" | "skill") {
+        if let Err(error) = identity::validate(from.as_deref()) {
+            eprintln!("seance ctl: {error}");
+            return 1;
+        }
+    }
     // Client-side flag: after successful `new`, block until agent boot-ready.
     let wait_ready = sub_args.iter().any(|a| a == "--wait-ready");
     if wait_ready {

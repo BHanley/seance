@@ -28,6 +28,9 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Fixed
 
+- Codex panes use `--no-daemon` when supported; `ctl` rejects shared-server
+  or mismatched pane identity instead of finishing another pane's task.
+  `finish --task` rejects foreign, unknown, or superseded tasks before writing.
 - Mousewheel scrolling over the Codex transcript now sends the pointer's
   position, so wheel events reach the transcript instead of the prompt.
 

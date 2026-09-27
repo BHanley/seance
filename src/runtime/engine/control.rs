@@ -1180,6 +1180,11 @@ impl Engine {
                         if let Err(e) = assert_self_or_cross(&slug, &from, &author) {
                             return err(e);
                         }
+                        if let Some(tid) = task.as_deref() {
+                            if let Err(e) = self.validate_finish_task(&slug, tid) {
+                                return err(e);
+                            }
+                        }
                         let mut rev = self.pad_revs.get(&slug).copied().unwrap_or(0);
                         if let Some(body) = body.filter(|b| !b.trim().is_empty()) {
                             let stamp = format!(
@@ -1386,6 +1391,23 @@ impl Engine {
         id
     }
 
+    fn validate_finish_task(&self, slug: &str, tid: &str) -> Result<(), String> {
+        let task = self
+            .tasks
+            .get(tid)
+            .ok_or_else(|| format!("finish: no task '{tid}'"))?;
+        if task.pane != slug {
+            return Err(format!(
+                "finish: task '{tid}' belongs to pane '{}', not '{slug}'",
+                task.pane
+            ));
+        }
+        if task.status != "open" || self.active_tasks.get(slug).map(String::as_str) != Some(tid) {
+            return Err(format!("finish: task '{tid}' is {} and is not an open current task; read `ctl task` before finishing", task.status));
+        }
+        Ok(())
+    }
+
     /// Mark active (or named) task done; returns task_id if any.
     pub(crate) fn complete_active_task(
         &mut self,
@@ -1398,11 +1420,10 @@ impl Engine {
         let Some(tid) = tid else {
             return None;
         };
+        if self.validate_finish_task(slug, &tid).is_err() {
+            return None;
+        }
         if let Some(t) = self.tasks.get_mut(&tid) {
-            if t.pane != slug && want.is_some() {
-                // Explicit task id for wrong pane — ignore quietly.
-                return None;
-            }
             t.status = "done".into();
             t.finished_ms = Some(now_ms());
             if let Some(p) = self.panes.iter().find(|p| p.slug == slug) {

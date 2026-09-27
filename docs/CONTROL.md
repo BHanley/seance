@@ -205,6 +205,15 @@ Spawned sessions get five env vars so the agent inside knows it's under seance:
 - `SEANCE_SCRATCHPAD` — absolute path to its own scratchpad file,
 - `SEANCE_SOCKET` — the control socket to talk back on.
 
+Seance adds `--no-daemon` to direct `codex` launches when the installed Codex
+supports it. Shared Codex app-servers can retain another pane's
+`SEANCE_SESSION`; identity-bound `ctl` calls from that process tree are
+rejected. Existing Codex sessions using a shared app-server need relaunching
+with `--no-daemon`. `ctl` also rejects an environment identity that differs
+from the original pane process, or whose ancestry cannot be verified.
+Launch isolation and task validation run in the daemon:
+deploy their updates with `seance upgrade`, not a GUI restart.
+
 ---
 
 ## CLI reference — `seance ctl`
@@ -240,11 +249,19 @@ Notes:
 
 - **`send`**: shell expands `$VARS` — use `--file`/`--stdin`. Inject creates a
   **task envelope** (`task_id`), sets `status=working`, records pad baseline.
-  Sidecars: `<scratch>.taskid` / `<scratch>.task.json`.
+  It cancels the previous task even if the worker is still running. For
+  coordinator notes, use `send-raw` (no task creation) or a shared file;
+  otherwise track the new task id. Sidecars: `<scratch>.taskid` /
+  `<scratch>.task.json`.
 - **`wait --status done`**: evidence-bound (pad must grow since inject) unless
   `--badge-only`. Prints `done …` (not `ready`) when waiting on done.
+  `--task ID` waits for that exact task; a cancelled task times out even if
+  the worker completes a newer task.
 - **`--cat` / `harvest`**: after success, print each pane's pad body (fan-in).
 - **`finish`**: pad body + status + task close; `done` requires body.
+  `--task ID` must name the pane's active task. Unknown, foreign-pane,
+  cancelled, completed, or superseded ids are rejected before changing the
+  scratchpad or status.
 - **Roster** prefers **slug** when name≠slug (ctl needs slug).
 - **`pr-link`** (0.13): the daemon normally scrapes PR URLs off pane output
   itself — these verbs are for backfill and hygiene. `add` seeds a link
