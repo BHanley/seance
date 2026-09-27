@@ -55,6 +55,7 @@ use self::workspaces::WorkspaceAttention;
 enum RenameTarget {
     Pane(String),
     Workspace(String),
+    Group { key: String, prefix: String },
 }
 
 /// What the right drawer shows. Notes live on the *back of a pane* now
@@ -186,6 +187,8 @@ pub struct SeanceApp {
     pending_focus: Option<String>,
     /// Sidebar workspace-list scroll — cycling must reveal the selection.
     sidebar_scroll: gpui::ScrollHandle,
+    sidebar_width: f32,
+    layout_writer: std::sync::mpsc::Sender<String>,
     /// UI-initiated spawn/create: open the inline rename field as soon as the
     /// target exists (workspace is immediate; pane waits for PaneSpawned).
     pending_rename: Option<RenameTarget>,
@@ -306,6 +309,10 @@ pub struct SeanceApp {
 /// Active sash drag state.
 #[derive(Clone)]
 enum SashDrag {
+    Sidebar {
+        start_x: f32,
+        width: f32,
+    },
     /// Classic 2-pane ratio drag.
     TwoPane,
     /// Adjacent panes in a multi-pane row (horizontal sash).
@@ -445,9 +452,11 @@ impl SeanceApp {
             focus_handle: cx.focus_handle(),
             session_counter: 0,
             rail_push: RailPush::spawn(Arc::clone(&client)),
+            layout_writer: spawn_layout_writer(Arc::clone(&client)),
             client,
             pending_focus: None,
             sidebar_scroll: gpui::ScrollHandle::new(),
+            sidebar_width: DEFAULT_SIDEBAR_WIDTH,
             pending_rename: None,
             rename_next_spawn: false,
             grid_batch_visible: false,
@@ -514,7 +523,7 @@ impl SeanceApp {
         }
         // Shared layout lives daemon-side (thin clients see the same tiling).
         // One blocking bridge call at boot; defaults on any failure.
-        let (split, weights, row_weights) = load_layout_json(
+        let (split, weights, row_weights, sidebar_width) = load_layout_json(
             app.client
                 .layout_load()
                 .ok()
@@ -525,6 +534,7 @@ impl SeanceApp {
         app.split_ratio = split;
         app.pane_weights = weights;
         app.row_weights = row_weights;
+        app.sidebar_width = sidebar_width;
 
         // The rail arrangement is daemon-owned too (0.23). Whatever the daemon
         // holds wins over the local cache, and a window that disagrees is the
@@ -1888,7 +1898,9 @@ impl SeanceApp {
             |this: &mut SeanceApp, input, event: &InputEvent, window, cx| match event {
                 InputEvent::PressEnter { .. } => {
                     let value = input.read(cx).value().to_string();
-                    this.commit_rename(value.trim(), cx);
+                    if !this.commit_rename(value.trim(), cx) {
+                        return;
+                    }
                     // Pane if the circle has one; else app root so chords work
                     // on a brand-new empty workspace (focus=None eats keys).
                     this.restore_keyboard_focus(window, cx);
@@ -1947,6 +1959,7 @@ impl SeanceApp {
                 .find(|p| p.slug == *slug)
                 .map(|p| p.name.clone()),
             RenameTarget::Workspace(w) => Some(w.clone()),
+            RenameTarget::Group { prefix, .. } => Some(prefix.clone()),
         };
         let Some(current) = current else {
             // Target not ready yet — retry next frame.
@@ -1963,13 +1976,34 @@ impl SeanceApp {
         });
     }
 
-    fn commit_rename(&mut self, new_name: &str, cx: &mut Context<Self>) {
+    fn commit_rename(&mut self, new_name: &str, cx: &mut Context<Self>) -> bool {
+        if let Some((RenameTarget::Group { prefix, .. }, _)) = &self.renaming {
+            let labels = match workspaces::group_rename_labels(
+                &self.workspaces(),
+                |ws| self.workspace_label(ws),
+                prefix,
+                new_name,
+            ) {
+                Ok(labels) => labels,
+                Err(message) => {
+                    crate::desktop_notify::notify("seance · rename group", message);
+                    return false;
+                }
+            };
+            for (slug, label) in labels {
+                if let Err(e) = self.client.rename_workspace(&slug, &label) {
+                    crate::desktop_notify::notify("seance · rename failed", &e.to_string());
+                    return false;
+                }
+                self.workspace_names.insert(slug, label);
+            }
+        }
         let Some((target, _)) = self.renaming.take() else {
-            return;
+            return true;
         };
         if new_name.is_empty() {
             cx.notify();
-            return;
+            return true;
         }
         match target {
             RenameTarget::Pane(slug) => {
@@ -1989,7 +2023,23 @@ impl SeanceApp {
                     .insert(slug.clone(), new_name.to_string());
                 let _ = self.client.rename_workspace(&slug, new_name);
             }
+            RenameTarget::Group { .. } => {}
         }
+        cx.notify();
+        true
+    }
+
+    fn finish_layout_resize(&mut self, cx: &mut Context<Self>) {
+        if self.sash_drag.take().is_none() {
+            return;
+        }
+        save_layout_daemon(
+            &self.layout_writer,
+            self.split_ratio,
+            &self.pane_weights,
+            &self.row_weights,
+            self.sidebar_width,
+        );
         cx.notify();
     }
 
@@ -2712,6 +2762,17 @@ impl Render for SeanceApp {
                 let label = this.workspace_label(&act.0);
                 this.start_rename(RenameTarget::Workspace(act.0.clone()), &label, window, cx);
             }))
+            .on_action(cx.listener(|this, act: &ActRenameGroup, window, cx| {
+                this.start_rename(
+                    RenameTarget::Group {
+                        key: act.0.clone(),
+                        prefix: act.1.clone(),
+                    },
+                    &act.1,
+                    window,
+                    cx,
+                );
+            }))
             .on_action(cx.listener(|_this, act: &ActShareReplay, _, _cx| {
                 share_replay_open(&act.0);
             }))
@@ -2767,12 +2828,20 @@ impl Render for SeanceApp {
                 let Some(drag) = this.sash_drag.clone() else {
                     return;
                 };
+                if ev.pressed_button != Some(gpui::MouseButton::Left) {
+                    this.finish_layout_resize(cx);
+                    return;
+                }
                 let bounds = window.bounds();
                 let x: f32 = ev.position.x.into();
                 let w: f32 = bounds.size.width.into();
-                let main_left = 232.0;
+                let main_left = this.sidebar_width;
                 let main_w = (w - main_left).max(100.0);
                 match drag {
+                    SashDrag::Sidebar { start_x, width } => {
+                        this.sidebar_width =
+                            clamp_sidebar_width(width + x - start_x).min((w - 320.).max(160.));
+                    }
                     SashDrag::TwoPane => {
                         let ratio = ((x - main_left) / main_w).clamp(0.2, 0.8);
                         this.split_ratio = ratio;
@@ -2820,19 +2889,15 @@ impl Render for SeanceApp {
                 }
                 cx.notify();
             }))
-            .on_mouse_up(
+            .capture_any_mouse_up(cx.listener(|this, ev: &gpui::MouseUpEvent, _, cx| {
+                if ev.button == gpui::MouseButton::Left {
+                    this.finish_layout_resize(cx);
+                }
+            }))
+            .on_mouse_up_out(
                 gpui::MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
-                    if this.sash_drag.is_some() {
-                        this.sash_drag = None;
-                        save_layout_daemon(
-                            &this.client,
-                            this.split_ratio,
-                            &this.pane_weights,
-                            &this.row_weights,
-                        );
-                        cx.notify();
-                    }
+                    this.finish_layout_resize(cx);
                 }),
             )
             .child(sidebar_el)

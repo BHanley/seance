@@ -21,9 +21,6 @@ const GLYPH_W: f32 = 15.;
 const TIME_W: f32 = 34.;
 /// How far a cluster's members sit inside their header.
 const CLUSTER_INDENT: f32 = 14.;
-/// The left rail's width. Anything drawn beside the rail (a host menu's panel)
-/// needs it too, so it lives here rather than as a literal in the layout.
-pub(super) const RAIL_WIDTH: f32 = 232.;
 
 use super::actions::*;
 use super::util::{
@@ -31,7 +28,7 @@ use super::util::{
     DraggedPane,
 };
 use super::workspaces::{banish_arm_live, WorkspaceAttention};
-use super::{RenameTarget, SeanceApp};
+use super::{RenameTarget, SashDrag, SeanceApp};
 
 impl SeanceApp {
     /// `✦` popover: every GUI window attached to this daemon, with a kill
@@ -493,6 +490,21 @@ impl SeanceApp {
         cx: &Context<Self>,
     ) -> gpui::AnyElement {
         let key = crate::subscriptions_pref::group_key(section.key(), prefix);
+        if let Some((
+            RenameTarget::Group {
+                key: rename_key, ..
+            },
+            input,
+        )) = &self.renaming
+        {
+            if *rename_key == key {
+                return div()
+                    .px_2()
+                    .py_1p5()
+                    .child(Input::new(input))
+                    .into_any_element();
+            }
+        }
         let collapsed = self.subs_pref.is_collapsed(&key);
         let count = members.len();
         let att = if collapsed {
@@ -505,6 +517,8 @@ impl SeanceApp {
         };
         let label = prefix.to_string();
         let toggle_key = key.clone();
+        let rename_key = key.clone();
+        let rename_prefix = prefix.to_string();
         div()
             .id(SharedString::from(format!("group-{key}")))
             .h(px(ROW_H))
@@ -520,6 +534,12 @@ impl SeanceApp {
                 this.save_arrangement();
                 cx.notify();
             }))
+            .context_menu(move |menu, _, _| {
+                menu.menu(
+                    "rename group",
+                    Box::new(ActRenameGroup(rename_key.clone(), rename_prefix.clone())),
+                )
+            })
             .child(
                 div()
                     .flex_none()
@@ -953,7 +973,8 @@ impl SeanceApp {
         div()
             .id("sidebar")
             .flex_none()
-            .w(px(RAIL_WIDTH))
+            .relative()
+            .w(px(self.sidebar_width))
             .h_full()
             .flex()
             .flex_col()
@@ -1114,6 +1135,26 @@ impl SeanceApp {
                             .tooltip(tip("open the grimoire — full guide to seance"))
                             .child("?"),
                     ),
+            )
+            .child(
+                div()
+                    .id("sidebar-resize")
+                    .absolute()
+                    .right_0()
+                    .top_0()
+                    .w(px(5.))
+                    .h_full()
+                    .cursor_col_resize()
+                    .hover(|s| s.bg(SeancePalette::flame_dim()))
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, ev: &gpui::MouseDownEvent, window, cx| {
+                        sidebar_press_no_select(window, cx);
+                        this.sash_drag = Some(SashDrag::Sidebar {
+                            start_x: ev.position.x.into(),
+                            width: this.sidebar_width,
+                        });
+                        cx.stop_propagation();
+                        cx.notify();
+                    })),
             )
     }
 }

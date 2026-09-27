@@ -216,7 +216,6 @@ impl SeanceApp {
                         self.pane_rename_input(&pane.slug),
                         flipped,
                         true, // is_zoomed
-                        self.phone_linked(&pane.slug).is_some(),
                         cx,
                     )),
             )
@@ -343,7 +342,6 @@ impl SeanceApp {
                             self.pane_rename_input(&left.slug),
                             flipped_l,
                             false,
-                            self.phone_linked(&left.slug).is_some(),
                             cx,
                         )),
                 )
@@ -381,7 +379,6 @@ impl SeanceApp {
                             self.pane_rename_input(&right.slug),
                             flipped_r,
                             false,
-                            self.phone_linked(&right.slug).is_some(),
                             cx,
                         )),
                 )
@@ -469,7 +466,6 @@ impl SeanceApp {
                             self.pane_rename_input(&pane.slug),
                             flipped,
                             false,
-                            self.phone_linked(&pane.slug).is_some(),
                             cx,
                         )),
                 );

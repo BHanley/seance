@@ -65,7 +65,7 @@ src/app/               the GPUI app, split by surface:
   layout.rs            layout.json load/save (pure parse/serialize split)
   util.rs              pure helpers (tips, status colors, drag types)
   chrome.rs            render_pane, help overlay, asks/activity/stage strips
-  pads.rs              scratchpad drawer + phone spine
+  pads.rs              scratchpad drawer + phone-bind path for status bridge
   overview.rs          ctrl+shift+space live map
   sidebar.rs           left rail: pinned rows above a rule, everything else below,
                        context menus, host list

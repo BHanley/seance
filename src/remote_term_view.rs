@@ -196,6 +196,42 @@ struct ViewMetrics {
     rows: u16,
 }
 
+impl ViewMetrics {
+    fn cell_at(self, pos: Point<Pixels>) -> Option<CellPos> {
+        if self.cell_w <= 0. || self.line_h <= 0. || self.cols == 0 || self.rows == 0 {
+            return None;
+        }
+        let col = (f32::from(pos.x - self.origin.x) / self.cell_w).floor() as i32;
+        let row = (f32::from(pos.y - self.origin.y) / self.line_h).floor() as i32;
+        Some(CellPos {
+            col: col.clamp(0, self.cols as i32 - 1) as u16,
+            row: row.clamp(0, self.rows as i32 - 1) as u16,
+        })
+    }
+}
+
+fn mouse_wheel_bytes(snap: &GridSnapshot, cell: CellPos, lines: i32) -> Vec<u8> {
+    let col = cell.col.saturating_add(1);
+    let row = cell.row.saturating_add(1);
+    let button: u8 = if lines > 0 { 64 } else { 65 };
+    let mut bytes = Vec::new();
+    for _ in 0..lines.unsigned_abs() {
+        if snap.sgr_mouse {
+            bytes.extend_from_slice(format!("\x1b[<{button};{col};{row}M").as_bytes());
+        } else {
+            bytes.extend_from_slice(&[
+                0x1b,
+                b'[',
+                b'M',
+                32 + button,
+                32 + (col.min(223) as u8),
+                32 + (row.min(223) as u8),
+            ]);
+        }
+    }
+    bytes
+}
+
 pub struct RemoteTerminalView {
     pub terminal: gpui::Entity<RemoteTerminal>,
     focus_handle: FocusHandle,
@@ -227,17 +263,7 @@ impl RemoteTerminalView {
     }
 
     fn cell_at(&self, pos: Point<Pixels>, cx: &App) -> Option<CellPos> {
-        let m = self.metrics(cx)?;
-        if m.cell_w <= 0. || m.line_h <= 0. || m.cols == 0 || m.rows == 0 {
-            return None;
-        }
-        let rel_x = f32::from(pos.x - m.origin.x);
-        let rel_y = f32::from(pos.y - m.origin.y);
-        let col = (rel_x / m.cell_w).floor() as i32;
-        let row = (rel_y / m.line_h).floor() as i32;
-        let col = col.clamp(0, m.cols as i32 - 1) as u16;
-        let row = row.clamp(0, m.rows as i32 - 1) as u16;
-        Some(CellPos { row, col })
+        self.metrics(cx)?.cell_at(pos)
     }
 
     fn clear_selection(&mut self) {
@@ -580,25 +606,12 @@ impl RemoteTerminalView {
         let wheel_up = lines > 0;
 
         if snap.mouse_mode {
-            let col = (snap.cursor_col as u16).saturating_add(1).max(1);
-            let row = (snap.cursor_row as u16).saturating_add(1).max(1);
-            let button: u8 = if wheel_up { 64 } else { 65 };
-            let mut bytes = Vec::new();
-            for _ in 0..n {
-                if snap.sgr_mouse {
-                    bytes.extend_from_slice(format!("\x1b[<{button};{col};{row}M").as_bytes());
-                } else {
-                    bytes.extend_from_slice(&[
-                        0x1b,
-                        b'[',
-                        b'M',
-                        32 + button,
-                        32 + (col.min(223) as u8),
-                        32 + (row.min(223) as u8),
-                    ]);
-                }
-            }
-            self.terminal.read(cx).write_bytes(bytes);
+            let Some(cell) = self.cell_at(event.position, cx) else {
+                return;
+            };
+            self.terminal
+                .read(cx)
+                .write_bytes(mouse_wheel_bytes(&snap, cell, lines));
         } else if snap.alt_screen && snap.alternate_scroll {
             let key: &[u8] = if snap.app_cursor {
                 if wheel_up {
@@ -1491,6 +1504,61 @@ mod tests {
 
     fn at(row: u16, col: u16) -> CellPos {
         CellPos { row, col }
+    }
+
+    #[test]
+    fn wheel_over_transcript_reports_pointer_instead_of_composer_cursor() {
+        let mut snap = GridSnapshot::empty("codex");
+        snap.cols = 165;
+        snap.rows = 61;
+        snap.cursor_col = 2;
+        snap.cursor_row = 57;
+        snap.mouse_mode = true;
+        snap.sgr_mouse = true;
+        let metrics = ViewMetrics {
+            origin: point(px(360.), px(72.)),
+            cell_w: 10.,
+            line_h: 20.,
+            cols: snap.cols,
+            rows: snap.rows,
+        };
+        let cell = metrics.cell_at(point(px(465.), px(238.))).unwrap();
+        assert_eq!(cell, at(8, 10));
+        assert_eq!(
+            mouse_wheel_bytes(&snap, cell, 2),
+            b"\x1b[<64;11;9M\x1b[<64;11;9M"
+        );
+        assert_eq!(mouse_wheel_bytes(&snap, cell, -1), b"\x1b[<65;11;9M");
+    }
+
+    #[test]
+    fn wheel_legacy_coordinates_stay_inside_the_encoding_range() {
+        let snap = GridSnapshot::empty("legacy");
+        assert_eq!(
+            mouse_wheel_bytes(&snap, at(8, 10), 1),
+            [27, b'[', b'M', 96, 43, 41]
+        );
+        assert_eq!(
+            mouse_wheel_bytes(&snap, at(400, 500), -1),
+            [27, b'[', b'M', 97, 255, 255]
+        );
+    }
+
+    #[test]
+    fn pointer_cells_clamp_to_the_grid_and_require_layout_metrics() {
+        assert_eq!(ViewMetrics::default().cell_at(point(px(0.), px(0.))), None);
+        let metrics = ViewMetrics {
+            origin: point(px(232.), px(40.)),
+            cell_w: 10.,
+            line_h: 20.,
+            cols: 80,
+            rows: 24,
+        };
+        assert_eq!(metrics.cell_at(point(px(0.), px(0.))), Some(at(0, 0)));
+        assert_eq!(
+            metrics.cell_at(point(px(2000.), px(2000.))),
+            Some(at(23, 79))
+        );
     }
 
     #[test]

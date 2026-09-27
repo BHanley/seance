@@ -53,7 +53,7 @@ the keyboard). Point `--command` at whatever agent CLI you use.
 ## Features
 
 - **Live multi-pane terminals** — real PTYs, selection, scrollback; weighted tile grid with drag sashes (n≥2)
-- **Workspaces** — keep circles of work apart; sidebar drag-reorder
+- **Workspaces** — keep circles of work apart; resize the desktop sidebar by dragging its right edge. Right-click a prefix group → rename group (e.g. `paceline-*` → `pl-*`), preserving suffixes and running sessions.
 - **Notes on the back of every pane** — shared markdown (`$SEANCE_SCRATCHPAD`)
 - **Pad drawer** — stage chip / ▤ shows task inject body + pad tail (live-refreshes)
 - **Stage strip** — urgency-sorted roster chips (click focus+pad, double-click zoom)
@@ -61,7 +61,7 @@ the keyboard). Point `--command` at whatever agent CLI you use.
 - **Control plane** — `seance ctl` so any pane (or external script) can spawn, send, wait, harvest
 - **Orchestrator A+** — `--agent` profiles, evidence-bound `wait --status done`, `send --file`, task envelopes, `harvest`, event-driven wait, boot-clear
 - **Human-in-the-loop** — `ask`, `propose`, seize/release/drive
-- **Phone a pane** — ☎ / `ctl phone` opens a telegram topic and seeds a **stage card** (workspace, roster, ctl how-to). No participant claim — you drive panes with normal `seance ctl` on this host. Optional needs-human one-liners post to the topic when linked.
+- **Phone a pane (CLI)** — `ctl phone` opens a telegram topic and seeds a **stage card** (workspace, roster, ctl how-to). No participant claim — you drive panes with normal `seance ctl` on this host. Optional needs-human one-liners post to the topic when linked.
 - **Browser thin client** — `seance web` serves a wasm/WebGL2 client with native-parity chrome over a token-authed websocket
 - **Session replay** — always-on 48h DVR; prompt-chapter player, trim/publish editor, shareable static bundles
 - **Daemon architecture** — upgrade binary without killing the circle (concurrent-upgrade gate)
@@ -93,6 +93,7 @@ Add `--with-skills` to install the `seance-control` skill for local ChatGPT
 Work, Codex, and Claude. See [remote CLI setup](docs/REMOTE.md#cli-files).
 
 ```bash
+seance --help                    # command reference (same as seance ctl --help)
 seance ctl skill                 # agent-facing protocol (⚡ arm / paste)
 seance ctl doctor
 seance ctl roster
@@ -102,6 +103,8 @@ seance ctl wait w --status done --timeout 600 --cat
 seance ctl harvest w1 w2 w3 --timeout 900
 seance ctl phone w               # telegram topic + stage card (no claim)
 ```
+
+`seance -h` and `seance help` also show the command reference.
 
 Multi-agent live test: `./scripts/agent-collab-test.sh`  
 Thorough smoke: `./scripts/e2e-thorough.sh`  
@@ -183,8 +186,9 @@ attention routing free.
 | stage chip click | focus + pad drawer |
 | stage chip double-click | zoom |
 | ⚡ | arm agent (`ctl skill` orientation) |
-| ☎ | phone pane (telegram stage card) |
 | ▤ | pad drawer |
+| sidebar right-edge drag | resize sidebar (width persists) |
+| group right-click → rename group | replace the prefix across pinned and unpinned workspaces |
 | sash drag | resize 2-pane ratio or multi-pane weights |
 
 ## Architecture (short)

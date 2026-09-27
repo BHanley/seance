@@ -1,8 +1,4 @@
-//! Scratchpad / pad drawer and the one-button telegram "phone" spine for a
-//! pane: reading the pad + task sidecar (DAEMON-machine files, via the
-//! render-safe `RemoteCache`), the phone-bind sidecar, and rendering the pad
-//! inspector drawer. Data is at most one ~2s refresh tick stale — same feel
-//! as the old local-disk poll.
+//! Pad inspector: scratchpad and task sidecars read through the daemon cache.
 
 use gpui::{div, prelude::*, Context, SharedString};
 
@@ -46,99 +42,6 @@ impl SeanceApp {
         Self::scratch_path(slug, "telegram.json")
     }
 
-    fn phone_bind_json(&self, slug: &str) -> Option<serde_json::Value> {
-        let bytes = self.remote_cache.get(&Self::phone_bind_path(slug))?;
-        serde_json::from_str(&bytes).ok()
-    }
-
-    pub(super) fn phone_linked(&self, slug: &str) -> Option<String> {
-        self.phone_bind_json(slug).and_then(|v| {
-            v.get("topic_id")
-                .and_then(|t| t.as_str())
-                .map(|s| s.to_string())
-        })
-    }
-
-    fn phone_link(&self, slug: &str) -> Option<String> {
-        self.phone_bind_json(slug).and_then(|v| {
-            v.get("link")
-                .and_then(|t| t.as_str())
-                .map(|s| s.to_string())
-        })
-    }
-
-    /// One-button telegram topic for a pane (shells `seance ctl phone`).
-    pub(super) fn phone_pane(&mut self, slug: &str, cx: &mut Context<Self>) {
-        let slug = slug.to_string();
-        // If already linked, open telegram if we have a link + pad drawer.
-        if let Some(tid) = self.phone_linked(&slug) {
-            if let Some(link) = self.phone_link(&slug) {
-                crate::sysopen::open_detached(&link);
-            }
-            crate::desktop_notify::notify(
-                "seance · already phoned",
-                &format!("{slug} → topic {tid}"),
-            );
-            self.open_pad_drawer(&slug, cx);
-            return;
-        }
-        // Off UI thread — vita open_topic can take seconds. The local `seance`
-        // binary is correct here: it inherits SEANCE_SOCKET and reaches the
-        // right daemon. After success, pull the fresh bind file over the
-        // bridge (still on the background executor) so the UI update below
-        // sees the new topic without waiting for a refresh tick.
-        let slug_bg = slug.clone();
-        let cache = std::sync::Arc::clone(&self.remote_cache);
-        cx.spawn(async move |this, cx| {
-            let out = cx
-                .background_executor()
-                .spawn(async move {
-                    let out = std::process::Command::new("seance")
-                        .args(["ctl", "phone", &slug_bg])
-                        .output();
-                    if matches!(&out, Ok(o) if o.status.success()) {
-                        let _ = cache.fetch_now(&SeanceApp::phone_bind_path(&slug_bg));
-                    }
-                    out
-                })
-                .await;
-            let Some(this) = this.upgrade() else { return };
-            this.update(cx, |app, cx| {
-                match out {
-                    Ok(o) if o.status.success() => {
-                        let topic = app.phone_linked(&slug).unwrap_or_else(|| {
-                            String::from_utf8_lossy(&o.stdout).trim().to_string()
-                        });
-                        if let Some(link) = app.phone_link(&slug) {
-                            crate::sysopen::open_detached(&link);
-                        }
-                        crate::desktop_notify::notify(
-                            "seance · phone linked",
-                            &format!("{slug} → {topic}"),
-                        );
-                        app.open_pad_drawer(&slug, cx);
-                    }
-                    Ok(o) => {
-                        let err = String::from_utf8_lossy(&o.stderr);
-                        crate::desktop_notify::notify(
-                            "seance · phone failed",
-                            if err.trim().is_empty() {
-                                "ctl phone failed (is vita up?)"
-                            } else {
-                                err.trim()
-                            },
-                        );
-                    }
-                    Err(e) => {
-                        crate::desktop_notify::notify("seance · phone failed", &format!("{e}"));
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
     pub(super) fn render_pad_drawer(&self, slug: &str, cx: &Context<Self>) -> impl IntoElement {
         // Include tick so GPUI re-renders when pad_refresh_tick advances.
         let _tick = self.pad_refresh_tick;
@@ -151,7 +54,6 @@ impl SeanceApp {
             .unwrap_or_else(|| slug.to_string());
         let st = self.statuses.get(slug);
         let (pad, task_id, task_json) = self.load_pad_bundle(slug);
-        let phone = self.phone_linked(slug);
         let status_line = match st {
             Some(s) => match &s.note {
                 Some(n) if !n.is_empty() => format!("{} · {n}", s.state),
@@ -197,7 +99,6 @@ impl SeanceApp {
             }
         };
 
-        let slug_phone = slug.to_string();
         let slug_flip = slug.to_string();
 
         div()
@@ -235,54 +136,22 @@ impl SeanceApp {
                     ),
             )
             .child(
-                div()
-                    .text_xs()
-                    .text_color(SeancePalette::text_faint())
-                    .child(match &phone {
-                        Some(t) => format!("☎ topic {t}"),
-                        None => "☎ not phoned".into(),
-                    }),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap_2()
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("pad-phone-{slug}")))
-                            .px_2()
-                            .py_0p5()
-                            .rounded_md()
-                            .text_xs()
-                            .text_color(SeancePalette::violet())
-                            .bg(SeancePalette::surface())
-                            .hover(|s| s.bg(SeancePalette::border()))
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.phone_pane(&slug_phone, cx);
-                            }))
-                            .child(if phone.is_some() {
-                                "☎ re-show"
-                            } else {
-                                "☎ phone"
-                            }),
-                    )
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("pad-flip-{slug}")))
-                            .px_2()
-                            .py_0p5()
-                            .rounded_md()
-                            .text_xs()
-                            .text_color(SeancePalette::flame())
-                            .bg(SeancePalette::surface())
-                            .hover(|s| s.bg(SeancePalette::border()))
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.flip_notes_for(&slug_flip, window, cx);
-                            }))
-                            .child("✎ edit notes"),
-                    ),
+                div().flex().gap_2().child(
+                    div()
+                        .id(SharedString::from(format!("pad-flip-{slug}")))
+                        .px_2()
+                        .py_0p5()
+                        .rounded_md()
+                        .text_xs()
+                        .text_color(SeancePalette::flame())
+                        .bg(SeancePalette::surface())
+                        .hover(|s| s.bg(SeancePalette::border()))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.flip_notes_for(&slug_flip, window, cx);
+                        }))
+                        .child("✎ edit notes"),
+                ),
             )
             .child(
                 div()

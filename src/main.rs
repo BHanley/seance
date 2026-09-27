@@ -48,6 +48,13 @@ fn main() {
 
     let args: Vec<String> = std::env::args().collect();
 
+    if matches!(
+        args.get(1).map(String::as_str),
+        Some("--help") | Some("-h") | Some("help")
+    ) {
+        std::process::exit(ctl::run_ctl(vec!["--help".into()]));
+    }
+
     // `seance --version` / `-V` / `version` — never open the GUI.
     if matches!(
         args.get(1).map(String::as_str),

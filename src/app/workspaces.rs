@@ -37,6 +37,30 @@ pub(super) fn rel_label(delta_ms: u64) -> String {
 }
 use super::{RenameTarget, SeanceApp};
 
+pub(super) fn group_rename_labels(
+    circles: &[String],
+    label_of: impl Fn(&str) -> String,
+    prefix: &str,
+    new_prefix: &str,
+) -> Result<Vec<(String, String)>, &'static str> {
+    let new_prefix = new_prefix.trim();
+    if new_prefix.is_empty() || new_prefix.contains('-') {
+        return Err("use a non-empty group name without hyphens");
+    }
+    let prefix = prefix.trim().to_ascii_lowercase();
+    Ok(circles
+        .iter()
+        .filter_map(|slug| {
+            let label = label_of(slug);
+            if seance_core::grouping::prefix_of(&label).as_deref() != Some(prefix.as_str()) {
+                return None;
+            }
+            let (_, suffix) = label.split_once('-')?;
+            Some((slug.clone(), format!("{new_prefix}-{suffix}")))
+        })
+        .collect())
+}
+
 /// One circle's rail position: working band first, then by the clock the row
 /// displays, name as the tiebreak.
 ///
@@ -1051,6 +1075,52 @@ impl SeanceApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn group_rename_changes_labels_and_preserves_slugs_and_full_suffixes() {
+        let circles = ["desk", "arch", "mobile", "loose", "other"].map(str::to_string);
+        let labels = |slug: &str| {
+            match slug {
+                "desk" => "paceline-desk",
+                "arch" => "PACELINE-arch-v2",
+                "mobile" => " paceline -ios",
+                "loose" => "paceline",
+                _ => "pacelines-other",
+            }
+            .to_string()
+        };
+        let renamed = group_rename_labels(&circles, labels, "paceline", " pl ").unwrap();
+        assert_eq!(
+            renamed,
+            vec![
+                ("desk".into(), "pl-desk".into()),
+                ("arch".into(), "pl-arch-v2".into()),
+                ("mobile".into(), "pl-ios".into()),
+            ]
+        );
+        let rows = seance_core::grouping::group_by_prefix(&circles, |slug| {
+            renamed
+                .iter()
+                .find(|(id, _)| id == slug)
+                .map(|(_, label)| label.clone())
+                .unwrap_or_else(|| labels(slug))
+        });
+        assert!(matches!(&rows[0], SectionRow::Group { prefix, members }
+            if prefix == "pl" && members == &["desk", "arch", "mobile"]));
+    }
+
+    #[test]
+    fn group_rename_rejects_names_that_cannot_be_a_prefix() {
+        for invalid in ["", "  ", "pl-desk", "pl-"] {
+            assert!(group_rename_labels(
+                &["paceline-desk".into()],
+                str::to_string,
+                "paceline",
+                invalid
+            )
+            .is_err());
+        }
+    }
 
     /// Drive the history the way the app does: every selection change is
     /// folded in by the render-time observer, including the ones our own

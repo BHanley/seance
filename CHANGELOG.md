@@ -15,6 +15,27 @@ When shipping a versioned commit (`seance 0.9.N — …`):
 
 Unreleased work can sit under `## [Unreleased]` until the version bump.
 
+## [Unreleased]
+
+### Added
+
+- `seance --help`, `seance -h`, and `seance help` show the control-plane CLI
+  help without opening a desktop window or connecting to a daemon.
+- Drag the desktop sidebar's right edge to resize it; its width persists.
+- Right-click a prefix group → **rename group** to replace the prefix on all
+  matching workspace labels, across pinned and unpinned sections. Suffixes,
+  workspace identities, and running sessions stay intact.
+
+### Fixed
+
+- Mousewheel scrolling over the Codex transcript now sends the pointer's
+  position, so wheel events reach the transcript instead of the prompt.
+
+### Removed
+
+- Telegram phone buttons from desktop pane headers and the pad drawer.
+  `seance ctl phone` remains available.
+
 ## [0.26.2] — 2026-09-13
 
 ### Added

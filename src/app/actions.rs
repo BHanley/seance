@@ -110,6 +110,10 @@ Confirm you're oriented and ready, then wait for the next instruction.";
 #[action(namespace = seance, no_json)]
 pub struct ActRenameWorkspace(pub String);
 
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActRenameGroup(pub String, pub String);
+
 /// Open the web replay editor for a workspace (sidebar context menu).
 #[derive(Action, Clone, PartialEq, Deserialize)]
 #[action(namespace = seance, no_json)]

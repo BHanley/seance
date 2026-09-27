@@ -436,7 +436,6 @@ pub(super) fn render_pane(
     rename: Option<&Entity<InputState>>,
     flipped: Option<&Entity<ScratchpadDrawer>>,
     is_zoomed: bool,
-    phone_linked: bool,
     cx: &Context<SeanceApp>,
 ) -> impl IntoElement {
     let is_active = active == Some(pane.slug.as_str());
@@ -747,34 +746,6 @@ pub(super) fn render_pane(
                             .child("⚡"),
                     )
                 })
-                // Phone: one-button telegram topic (vita seam).
-                .when(has_terminal, |d| {
-                    let linked = phone_linked;
-                    d.child(
-                        div()
-                            .id(SharedString::from(format!("phone-{slug}")))
-                            .flex_none()
-                            .text_xs()
-                            .text_color(if linked {
-                                SeancePalette::violet()
-                            } else {
-                                SeancePalette::text_faint()
-                            })
-                            .hover(|s| s.text_color(SeancePalette::violet()))
-                            .cursor_pointer()
-                            .on_click(cx.listener({
-                                let slug = slug.clone();
-                                move |this, _, _, cx| {
-                                    this.phone_pane(&slug, cx);
-                                    cx.stop_propagation();
-                                }
-                            }))
-                            .tooltip(tip(
-                                "phone — open a telegram topic seeded with workspace roster + seance ctl how-to",
-                            ))
-                            .child("☎"),
-                    )
-                })
                 // Pad drawer (quick inspect without flip).
                 .child(
                     div()
@@ -1008,7 +979,6 @@ pub(super) fn render_help() -> gpui::AnyElement {
         // ── pane chrome ────────────────────────────────────────────────────
         .child(h1("pane chrome (title strip)"))
         .child(row("⚡", "arm — one-click inject seance orientation into this agent"))
-        .child(row("☎", "phone — telegram topic + stage card (roster/ctl how-to; no participant claim)"))
         .child(row("▤", "pad drawer — task inject body + scratchpad tail"))
         .child(row("💬", "whisper — open a compose bar; Enter injects into the agent"))
         .child(row("double-click title", "rename pane inline (Enter commits, Esc cancels)"))
@@ -1117,6 +1087,8 @@ pub(super) fn render_help() -> gpui::AnyElement {
         .child(row("middle-click", "paste PRIMARY selection (mouse-drag select fills it)"))
         .child(row("mouse drag", "select text (copies on release)"))
         .child(row("wheel", "scroll scrollback"))
+        .child(row("sidebar edge", "drag to resize; width is saved"))
+        .child(row("group right-click", "rename group — replaces the prefix on every matching workspace"))
         .child(row("2-pane sash", "drag the vertical divider to resize"))
         .child(section("ghost command (agent proposed)"))
         .child(row("enter / tab", "accept + run the dimmed ghost command"))

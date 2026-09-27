@@ -480,7 +480,7 @@ impl SeanceApp {
         let chip = load_chip_bounds(&open.id);
         let (left, bottom, max_h) = match chip {
             Some(b) => panel_placement(b, viewport_h, 6., 8.),
-            None => (super::sidebar::RAIL_WIDTH + 8., 8., 400.),
+            None => (self.sidebar_width + 8., 8., 400.),
         };
         // The list scrolls inside whatever room there is above the chip.
         let list_max_h = (max_h - 34.).clamp(80., 400.);
