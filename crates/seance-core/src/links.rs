@@ -6,10 +6,10 @@
 
 use crate::snapshot::GridSnapshot;
 
-/// Rows joined either side of the hit row while each ends in a non-blank cell.
-/// A snapshot carries no WRAPPED flag, so "the row is full to the last column"
-/// is the only wrap signal there is; the cap bounds a full screen of
-/// box-drawing from being glued into one line.
+/// Rows joined either side of the hit row while each one continues. A
+/// snapshot carries no WRAPPED flag, so continuation is inferred (see
+/// [`continues`]); the cap bounds a screen of box-drawing from being glued
+/// into one line.
 const STITCH_MAX: u16 = 6;
 
 fn is_url_char(c: char) -> bool {
@@ -34,6 +34,58 @@ pub fn url_at_cell(snap: &GridSnapshot, row: u16, col: u16) -> Option<String> {
     http_url_at(&line, hit)
 }
 
+/// How row `r` flows into row `r + 1`, if it does.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Wrap {
+    /// The terminal wrapped: the row is full to its last column. Joined raw.
+    Soft,
+    /// The program wrapped (Claude/ink break a long line at their text-box
+    /// width, short of the edge, and indent the rest): the row's text ends in
+    /// the middle of a URL and the next row, after its indent, carries on
+    /// with a URL-shaped token. Joined without the gap.
+    Hard,
+}
+
+fn row_chars(snap: &GridSnapshot, r: u16) -> &[crate::snapshot::CellSnap] {
+    let cols = snap.cols as usize;
+    &snap.cells[r as usize * cols..(r as usize + 1) * cols]
+}
+
+/// Does row `r` carry on into `r + 1`?
+///
+/// The hard case is a guess from the text alone, tuned to never glue a URL
+/// onto prose: row `r` must END in URL characters (no closing `.`, `)` …)
+/// and row `r + 1` must OPEN with a token of URL characters that is not a
+/// plain word (it has a digit, `/`, `.` …) — `…/ri` + `dewithgps/pull/1`
+/// joins, `…/x` + `tra text` does not. Only the URL covering the hit is ever
+/// returned, so a join elsewhere on the row is harmless.
+fn continues(snap: &GridSnapshot, r: u16) -> Option<Wrap> {
+    let rows = (snap.cells.len() / snap.cols.max(1) as usize) as u16;
+    if r + 1 >= rows {
+        return None;
+    }
+    let this = row_chars(snap, r);
+    if this.last().is_some_and(|c| c.c != ' ') {
+        return Some(Wrap::Soft);
+    }
+    let text: String = this.iter().map(|c| c.c).collect();
+    let last = text.trim_end().rsplit(' ').next().unwrap_or("");
+    let ends_mid_url = !last.is_empty()
+        && last.chars().all(is_url_char)
+        && !last.ends_with(['.', ',', ';', ':', ')', ']', '!', '?', '\''])
+        && (last.contains("://") || last.contains('/') || last.contains('.'));
+    if !ends_mid_url {
+        return None;
+    }
+    let next: String = row_chars(snap, r + 1).iter().map(|c| c.c).collect();
+    let first = next.trim_start().split(' ').next().unwrap_or("");
+    let continuation = !first.is_empty()
+        && next.starts_with(' ') == text.starts_with(' ')
+        && first.chars().all(is_url_char)
+        && !first.chars().all(|c| c.is_ascii_alphabetic());
+    continuation.then_some(Wrap::Hard)
+}
+
 /// The wrapped run of rows containing `row`, as one string, plus where `col`
 /// landed in it. A phone terminal is ~45 columns wide, so any URL worth
 /// tapping is wrapped — resolving one row alone hands back a fragment that
@@ -47,28 +99,38 @@ fn logical_line(snap: &GridSnapshot, row: u16, col: u16) -> Option<(String, usiz
     if row >= rows {
         return None;
     }
-    let full = |r: u16| -> bool {
-        let last = (r as usize + 1) * cols - 1;
-        snap.cells.get(last).map(|c| c.c != ' ').unwrap_or(false)
-    };
-
     let mut start = row;
-    while start > 0 && row - start < STITCH_MAX && full(start - 1) {
+    while start > 0 && row - start < STITCH_MAX && continues(snap, start - 1).is_some() {
         start -= 1;
     }
     let mut end = row;
-    while end + 1 < rows && end - row < STITCH_MAX && full(end) {
+    while end - row < STITCH_MAX && continues(snap, end).is_some() {
         end += 1;
     }
 
-    let mut line = String::with_capacity(cols * (end - start + 1) as usize);
+    let mut line: Vec<char> = Vec::with_capacity(cols * (end - start + 1) as usize);
+    let mut hit = 0;
+    let mut joined_hard = false;
     for r in start..=end {
-        let base = r as usize * cols;
-        for c in 0..cols {
-            line.push(snap.cells[base + c].c);
+        let mut cells: Vec<char> = row_chars(snap, r).iter().map(|c| c.c).collect();
+        let mut lead = 0;
+        if joined_hard {
+            lead = cells.iter().take_while(|c| **c == ' ').count();
+            cells.drain(..lead);
         }
+        let hard = continues(snap, r) == Some(Wrap::Hard) && r < end;
+        if hard {
+            while cells.last() == Some(&' ') {
+                cells.pop();
+            }
+        }
+        if r == row {
+            hit = line.len() + (col as usize).saturating_sub(lead);
+        }
+        line.extend(cells);
+        joined_hard = hard;
     }
-    Some((line, (row - start) as usize * cols + col as usize))
+    Some((line.into_iter().collect(), hit))
 }
 
 /// The http(s) URL in `line` whose character range covers `col`.
@@ -203,6 +265,65 @@ mod tests {
         let want = Some("https://github.com/ridewithgps/rwgps/pull/12345");
         assert_eq!(url_at_cell(&snap, 0, 10).as_deref(), want);
         assert_eq!(url_at_cell(&snap, 1, 2).as_deref(), want);
+    }
+
+    /// Claude/ink wrap a long URL themselves — short of the right edge, with
+    /// the rest indented — which the full-row rule never saw. Real frames
+    /// from 2026-09-28; a tap on any piece must open the whole URL.
+    #[test]
+    fn a_program_wrapped_url_is_stitched_across_its_indent() {
+        let snap = grid_of(
+            48,
+            &[
+                "     prod. https://github.com/ridewithgps/ri",
+                "     dewithgps/pull/23996",
+            ],
+        );
+        let want = Some("https://github.com/ridewithgps/ridewithgps/pull/23996");
+        assert_eq!(url_at_cell(&snap, 0, 20).as_deref(), want);
+        assert_eq!(url_at_cell(&snap, 1, 8).as_deref(), want);
+
+        // Word-wrapped at a '/', far from the edge, prose after it.
+        let snap = grid_of(
+            50,
+            &[
+                "  v2 is live at https://vita-reports.ham.xyz",
+                "  /s/675a4e6f8887. There are no more",
+            ],
+        );
+        let want = Some("https://vita-reports.ham.xyz/s/675a4e6f8887");
+        assert_eq!(url_at_cell(&snap, 0, 20).as_deref(), want);
+        assert_eq!(url_at_cell(&snap, 1, 4).as_deref(), want);
+
+        // Markdown hanging indent; the closing paren is not part of the URL.
+        let snap = grid_of(
+            80,
+            &[
+                "      41  - [thread](https://rwgps.slack.com/archives/C05RT3C611P/p179026479900",
+                "          6399)",
+            ],
+        );
+        assert_eq!(
+            url_at_cell(&snap, 0, 30).as_deref(),
+            Some("https://rwgps.slack.com/archives/C05RT3C611P/p1790264799006399")
+        );
+    }
+
+    /// Never glue a finished URL onto the next line's prose.
+    #[test]
+    fn a_url_that_ends_its_line_is_not_glued_to_prose() {
+        let snap = grid_of(
+            50,
+            &[
+                "  see https://a.io/x",
+                "  tra text here",
+                "  https://b.io/y.",
+                "  2 more",
+            ],
+        );
+        assert_eq!(url_at_cell(&snap, 0, 8).as_deref(), Some("https://a.io/x"));
+        // Sentence-final '.' closes it even though "2" looks like a continuation.
+        assert_eq!(url_at_cell(&snap, 2, 5).as_deref(), Some("https://b.io/y"));
     }
 
     /// Stitching must not walk off into unrelated rows: a row that ends in a

@@ -924,6 +924,7 @@ mod tests {
             text: "x".into(),
             submit: true,
             force: false,
+            queue: false,
             scope: Some("lab".into()),
             from: Some("orch".into()),
         };
