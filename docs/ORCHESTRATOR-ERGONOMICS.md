@@ -41,7 +41,7 @@ actually fired, because `new` didn't return the command. Dialogs are now
 answered from the screen (`agents::boot_dialog_answer`: trust gets Enter, the
 update menu gets Skip). Permission prompts are never auto-answered.
 
-## Batch 2 — item 11 (commit below, undeployed)
+## Batch 2 — item 11 (commit 4a96cc5, undeployed)
 
 | # | Request | Change | Side | Test |
 |---|---------|--------|------|------|
