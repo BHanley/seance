@@ -47,7 +47,30 @@ update menu gets Skip). Permission prompts are never auto-answered.
 |---|---------|--------|------|------|
 | 11 | untrusted cwd: ready took ~2 min, then the first send's Enter answered Claude's trust prompt and Claude exited (v2-go-touchup, events 58148-58156) | The real Claude 2.1.280 dialog opens with the cursor on **"❯ No, exit"**, so any Enter quits. `--wait-ready` now detects a trust dialog and **fails at once** (0.3s), naming it and leaving the pane at the prompt. `--trust` (on `new` and `handoff`) accepts it one checked step at a time: an arrow toward the "Yes" line, re-read the screen, and Enter only when the cursor is on "Yes". Codex update menus are skipped. `send` / `note-agent` refuse to paste into any modal (from batch 1). This also corrects batch 1, which answered trust with a bare Enter: fine on Codex, fatal on Claude. | ctl | `agents::trust_is_navigated_to_yes_never_blind_enter` + a classifier frame test, both from the live dialog; live: no-trust → exit 1 in 0.3s, send refused, `--trust` → idle in 3.6s |
 
-### Needs a maintenance window
+## Batch 3 — 2026-09-28 (commit 6ea2193, undeployed)
+
+Batches 1–2 were deployed at ~6:55am 9-28 (`seance upgrade` from d06e5d7).
+
+| # | Request | Change | Side | Test |
+|---|---------|--------|------|------|
+| 1 | `send` to a busy pane: opened task-284 (cancelling task-283) and then "failed" | Root cause: Claude folds mid-turn input into the running turn without echoing it, so confirm saw nothing and re-pasted (event log: two writes). Now `send` **looks first**: busy means **exit 4**, nothing sent, no task opened. `--queue` makes the daemon record a `queued` task, and its queue pump (`engine/queue.rs`, 500ms) injects it after 1.5s of stable idle and confirms with the shared judge (Enter re-pressed / one re-paste / else `failed`). An unconfirmed send is **rolled back** by the new `task_fail` op: it is marked `failed` and the task it cancelled is reopened (`supersedes` on the record). | daemon (queue, task_fail) + ctl | engine test; live: busy → exit 4 (task-10 untouched); `--queue` → task-9 delivered after idle; stty-echo pane → exit 3, task-12 failed, task-11 reopened |
+| 2 | `wait --artifact` fires on the first write | `--artifact-match REGEX` / `--artifact-contains TEXT` (dot matches newlines). `wait --task` also follows a queued task, and counts a task that finished before a later one became current as done. | ctl | `artifact_match_waits_for_the_closing_block` |
+| 3 | context headroom | `context_left_pct` from Claude "Context left until auto-compact: N%" / "N% until auto-compact" and Codex "N% context left". | daemon | frame tests (no live pane showed it today) |
+| 4 | queued input | `queued_input: true` when Claude shows "Press up to edit queued messages" / "ctrl+x ctrl+s to send now". That placeholder no longer reads as typed text. **Count: not offered**, because the screen shows one hint however many notes are queued and a count would be a guess. `queued_tasks` lists the daemon's `--queue` tasks instead. | daemon | live frame test (v2-simp-rails) |
+| 5 | roster JSON undocumented | `ctl skill` lists every row field, the task statuses and the exit codes. | ctl | — |
+| 6 | note-agent to a Claude main agent waiting on a subagent "never delivered" | It **was** delivered: Claude queued it in the main composer (focus is not on the agents panel). The deployed judge didn't know the queued marker, so it re-pasted, and the event log shows 5×~1010-byte writes, so several copies are probably queued on v2-simp-ios. Now "queued" counts as delivered (`via: "queued"`), busy panes are never re-pasted, and `--interrupt` delivers at once via Claude's ctrl+x ctrl+s. **Verified live: that interrupts the turn**, cancelling the running tool call, and the agent answers the notes and stops. Use it only when that is what you want. | ctl + core | judge tests; live: 3 notes queued once each; `--interrupt` → read, turn interrupted |
+
+### Needs a maintenance window (batch 3)
+
+`cargo build --release && seance upgrade` for the daemon half: the queue
+pump, `task_fail`, and the new row fields. ctl-only parts (busy refusal,
+`--artifact-match`, no re-paste into busy panes) work on the deployed daemon
+once the binary is rebuilt. `send --queue` against the old daemon refuses
+with "needs `seance upgrade`" instead of sending now. A failed send against
+the old daemon can't roll back and says so. New exit code **4** (busy) means
+the dispatcher should treat 4 as "not sent; queue or wait".
+
+### Needs a maintenance window (batches 1–2, done 9-28)
 
 1. **`cargo build --release && seance upgrade`**: daemon half (activity,
    quota, status row, new-response fields, parent). Sessions survive, but
