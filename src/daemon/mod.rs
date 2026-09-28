@@ -123,6 +123,22 @@ fn run_daemon_inner(args: Vec<String>) -> Result<()> {
     prwatch::start_pr_watch_poller(Arc::clone(&engine));
     // Idle circles stop holding RAM (12h; restorable circles only).
     sleepsweep::start_sleep_sweeper(Arc::clone(&engine));
+    // `send --queue`: deliver queued tasks when their pane goes idle.
+    {
+        let engine = Arc::clone(&engine);
+        std::thread::Builder::new()
+            .name("seance-send-queue".into())
+            .spawn(move || loop {
+                std::thread::sleep(crate::runtime::engine::queue::PUMP_EVERY);
+                let Ok(mut eng) = engine.lock() else { continue };
+                let now = crate::runtime::engine::helpers::now_ms();
+                if eng.pump_send_queue(now) {
+                    eng.persist();
+                    eng.push_state_to_all();
+                }
+            })
+            .ok();
+    }
 
     // Write pid file.
     let pid_path = daemon_pid_path();

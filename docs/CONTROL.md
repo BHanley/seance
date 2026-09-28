@@ -267,7 +267,24 @@ Notes:
   `awaiting-input` · `limited` · `exited` · `unknown`, plus
   `activity_evidence` (the deciding screen line) and `quota`. The classifier
   lives in `seance-core/src/agent_state.rs` and is pinned by real frames.
+- **Busy panes (`send`)**: ctl looks before sending. A `busy` pane is refused
+  (exit **4**, no task opened). `--queue` sends `{"op":"send","queue":true}`:
+  the daemon records the task as `queued`, returns `{task_id, status:
+  "queued", position}`, and its queue pump (`engine/queue.rs`, every 500ms)
+  injects it after the pane has read `idle` for 1.5s, then confirms it with
+  the shared judge (Enter re-pressed, one re-paste, else `failed`).
+- **`task_fail`** `{id, reason?}`: mark an open/queued task `failed`. If
+  injecting it cancelled the pane's previous open task, that task is reopened
+  (`restored` in the reply). ctl calls it when a send's delivery can't be
+  confirmed. Capability: `send`.
+- **Queued input (`note-agent`)**: a busy Claude parks pasted text behind the
+  running turn ("Press up to edit queued messages"). That counts as delivered
+  (`via: "queued"`, row `queued_input: true`), and ctl never re-pastes into a
+  busy pane. `--interrupt` presses Claude's ctrl+x ctrl+s ("send now"), which
+  interrupts the turn and cancels the in-flight tool call.
 - **`wait --artifact PATH`**: the file exists with ≥ `--min-bytes`.
+  `--artifact-match REGEX` / `--artifact-contains TEXT` also require the body
+  to match (dot matches newlines).
   `--fresh` requires it to be written after the `--task` was sent (or after
   the wait began). `--either` ORs it with the other conditions, which is the
   robust completion pattern. `wait` exits 1 at once if the pane is gone or

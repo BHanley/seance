@@ -80,6 +80,22 @@ pub enum ControlRequest {
         /// Bypass human ownership (emergency). Prefer `seize`/`release`.
         #[serde(default)]
         force: bool,
+        /// Don't inject now: open the task as `queued` and let the daemon
+        /// deliver it when the pane is next idle (`send --queue`).
+        #[serde(default)]
+        queue: bool,
+        #[serde(default)]
+        scope: Option<String>,
+        #[serde(default)]
+        from: Option<String>,
+    },
+
+    /// Mark a task failed (e.g. its paste never landed). If injecting it had
+    /// cancelled the pane's previous open task, that task is reopened.
+    TaskFail {
+        id: String,
+        #[serde(default)]
+        reason: Option<String>,
         #[serde(default)]
         scope: Option<String>,
         #[serde(default)]
@@ -585,6 +601,7 @@ impl ControlRequest {
             Self::List { from, .. }
             | Self::New { from, .. }
             | Self::Send { from, .. }
+            | Self::TaskFail { from, .. }
             | Self::SendRaw { from, .. }
             | Self::Read { from, .. }
             | Self::Status { from, .. }
@@ -661,6 +678,7 @@ impl ControlRequest {
             } => workspace.as_deref().or(scope.as_deref()),
             Self::List { scope, .. }
             | Self::Send { scope, .. }
+            | Self::TaskFail { scope, .. }
             | Self::SendRaw { scope, .. }
             | Self::Read { scope, .. }
             | Self::Status { scope, .. }

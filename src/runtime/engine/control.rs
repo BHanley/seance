@@ -194,6 +194,7 @@ impl Engine {
                 text,
                 submit,
                 force,
+                queue,
                 scope,
                 from,
             } => match find(self, &pane, &scope) {
@@ -206,6 +207,27 @@ impl Engine {
                         events::log(&act, Some(&ws), Some(&slug), "agency.denied", e.clone());
                         return err(e);
                     }
+                    if exited || self.panes[idx].kind == "file" {
+                        return err(if exited {
+                            "pane has exited (tombstone)".into()
+                        } else {
+                            "not a terminal pane".into()
+                        });
+                    }
+                    // `--queue`: hold it; the pump injects when the pane is
+                    // idle (see queue.rs). Nothing touches the PTY now and the
+                    // running task stays open.
+                    if queue && !self.panes[idx].asleep {
+                        let (tid, position) = self.queue_task(&slug, &text, &act);
+                        events::log(&act, Some(&ws), Some(&slug), "task_queued", tid.clone());
+                        self.persist();
+                        return ok(json!({
+                            "slug": slug,
+                            "task_id": tid,
+                            "status": "queued",
+                            "position": position,
+                        }));
+                    }
                     // Addressing a sleeping pane wakes it. Anything else makes
                     // every orchestrator break silently the first time it
                     // talks to a circle that dozed off.
@@ -217,69 +239,11 @@ impl Engine {
                         self.push_state_to_all();
                     }
                     if self.panes[idx].session.is_none() {
-                        return err(if exited {
-                            "pane has exited (tombstone)".into()
-                        } else {
-                            "not a terminal pane".into()
-                        });
+                        return err("not a terminal pane".into());
                     }
-                    self.panes[idx].agency.agent_claim(&act);
-                    events::log_ex(
-                        &act,
-                        Some(&ws),
-                        Some(&slug),
-                        "ctl_send",
-                        format!("sent {} chars", text.len()),
-                        events::LogOpts {
-                            origin: Some("ctl_send".into()),
-                            ..Default::default()
-                        },
-                    );
-                    // Dispatch envelope + working badge + pad baseline (before inject consumes text).
-                    let task_id = self.begin_task(&slug, &text);
-                    self.record_event(
-                        &slug,
-                        seance_core::replay::ReplayEvent::Send {
-                            from: act.clone(),
-                            text: text.clone(),
-                            submit,
-                        },
-                    );
-                    if let Some(session) = self.panes[idx].session.as_ref() {
-                        session.set_input_origin(&act);
-                        session.scroll_to_bottom();
-                        session.inject(text, submit);
-                    }
+                    let task_id = self.inject_task(idx, text, submit, &act, None);
                     let (pad_rev, pad_bytes) =
                         self.inject_baselines.get(&slug).copied().unwrap_or((0, 0));
-                    self.statuses.insert(
-                        slug.clone(),
-                        ("working".into(), Some(format!("inject from {act}"))),
-                    );
-                    self.broadcast(GuiEvent::Status {
-                        slug: slug.clone(),
-                        state: "working".into(),
-                        note: Some(format!("inject from {act}")),
-                    });
-                    events::log(
-                        &act,
-                        Some(&ws),
-                        Some(&slug),
-                        "status_set",
-                        format!("working: inject from {act} task={task_id}"),
-                    );
-                    events::log(&act, Some(&ws), Some(&slug), "task_open", task_id.clone());
-                    self.broadcast_agency(&slug);
-                    self.broadcast(GuiEvent::InputOrigin {
-                        pane: slug.clone(),
-                        origin: act.clone(),
-                    });
-                    self.broadcast(GuiEvent::Touch {
-                        slug: slug.clone(),
-                        verb: "⚡ driven".into(),
-                        actor: act,
-                    });
-                    self.persist();
                     ok(json!({
                         "slug": slug,
                         "task_id": task_id,
@@ -290,6 +254,34 @@ impl Engine {
                 }
                 Err(e) => err(e),
             },
+            TaskFail {
+                id,
+                reason,
+                scope,
+                from,
+            } => {
+                let Some(t) = self.tasks.get(&id) else {
+                    return err(format!("no task '{id}'"));
+                };
+                let slug = t.pane.clone();
+                if let Err(e) = find(self, &slug, &scope) {
+                    return err(e);
+                }
+                match self.fail_task(&id, reason.as_deref().unwrap_or("failed")) {
+                    Ok(restored) => {
+                        events::log(
+                            &actor(&from),
+                            None,
+                            Some(&slug),
+                            "task_failed",
+                            format!("{id} restored={}", restored.as_deref().unwrap_or("-")),
+                        );
+                        self.persist();
+                        ok(json!({"task_id": id, "status": "failed", "restored": restored}))
+                    }
+                    Err(e) => err(e),
+                }
+            }
             SendRaw {
                 pane,
                 bytes_b64,
@@ -1334,6 +1326,79 @@ impl Engine {
         }
     }
 
+    /// Paste `text` into pane `idx` as a task: opens a new task, or activates
+    /// the queued `queued` one. Owns the envelope bookkeeping (baseline,
+    /// working badge, events, broadcasts) for `send` and the queue pump.
+    pub(super) fn inject_task(
+        &mut self,
+        idx: usize,
+        text: String,
+        submit: bool,
+        act: &str,
+        queued: Option<String>,
+    ) -> String {
+        let slug = self.panes[idx].slug.clone();
+        let ws = self.panes[idx].workspace.clone();
+        self.panes[idx].agency.agent_claim(act);
+        events::log_ex(
+            act,
+            Some(&ws),
+            Some(&slug),
+            "ctl_send",
+            format!("sent {} chars", text.len()),
+            events::LogOpts {
+                origin: Some("ctl_send".into()),
+                ..Default::default()
+            },
+        );
+        // Dispatch envelope + working badge + pad baseline (before inject consumes text).
+        let task_id = match queued {
+            Some(tid) => self.activate_queued(&slug, &tid),
+            None => self.begin_task(&slug, &text),
+        };
+        self.record_event(
+            &slug,
+            seance_core::replay::ReplayEvent::Send {
+                from: act.to_string(),
+                text: text.clone(),
+                submit,
+            },
+        );
+        if let Some(session) = self.panes[idx].session.as_ref() {
+            session.set_input_origin(act);
+            session.scroll_to_bottom();
+            session.inject(text, submit);
+        }
+        let note = format!("inject from {act}");
+        self.statuses
+            .insert(slug.clone(), ("working".into(), Some(note.clone())));
+        self.broadcast(GuiEvent::Status {
+            slug: slug.clone(),
+            state: "working".into(),
+            note: Some(note),
+        });
+        events::log(
+            act,
+            Some(&ws),
+            Some(&slug),
+            "status_set",
+            format!("working: inject from {act} task={task_id}"),
+        );
+        events::log(act, Some(&ws), Some(&slug), "task_open", task_id.clone());
+        self.broadcast_agency(&slug);
+        self.broadcast(GuiEvent::InputOrigin {
+            pane: slug.clone(),
+            origin: act.to_string(),
+        });
+        self.broadcast(GuiEvent::Touch {
+            slug: slug.clone(),
+            verb: "⚡ driven".into(),
+            actor: act.to_string(),
+        });
+        self.persist();
+        task_id
+    }
+
     fn bump_pad_rev(&mut self, slug: &str) -> u64 {
         let e = self.pad_revs.entry(slug.to_string()).or_insert(0);
         *e = e.saturating_add(1);
@@ -1352,15 +1417,7 @@ impl Engine {
         let pad_rev = self.pad_revs.get(slug).copied().unwrap_or(0);
         self.inject_baselines
             .insert(slug.to_string(), (pad_rev, pad_bytes));
-        // Supersede prior open task on this pane.
-        if let Some(old) = self.active_tasks.remove(slug) {
-            if let Some(t) = self.tasks.get_mut(&old) {
-                if t.status == "open" {
-                    t.status = "cancelled".into();
-                    t.finished_ms = Some(now_ms());
-                }
-            }
-        }
+        let superseded = self.supersede_active(slug);
         self.task_counter = self.task_counter.saturating_add(1);
         let id = format!("task-{}", self.task_counter);
         // Cap stored body so state.json stays sane (full inject usually fits).
@@ -1382,6 +1439,8 @@ impl Engine {
             status: "open".into(),
             created_ms: now_ms(),
             finished_ms: None,
+            supersedes: superseded,
+            ..Default::default()
         };
         // Sidecar next to scratchpad so workers can discover task_id without
         // env (agents don't re-exec on inject). Paths:

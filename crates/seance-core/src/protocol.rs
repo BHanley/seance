@@ -592,7 +592,7 @@ pub struct InjectBaseline {
 }
 
 /// Dispatch envelope for one inject→finish cycle (0.9.6).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct TaskRecord {
     pub id: String,
     pub pane: String,
@@ -601,13 +601,27 @@ pub struct TaskRecord {
     /// Full inject text (durable inbox for workers / orchestrators).
     #[serde(default)]
     pub body: String,
-    /// open | done | cancelled | orphaned
+    /// queued | open | done | cancelled | failed | orphaned
     #[serde(default = "default_task_open")]
     pub status: String,
     #[serde(default)]
     pub created_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_ms: Option<u64>,
+    /// The open task this one cancelled when it was injected. A failed
+    /// delivery reopens it (`task_fail`), so a send that never landed
+    /// doesn't strand the work the agent is still doing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supersedes: Option<String>,
+    /// Principal that queued it (`send --queue`); the daemon injects as them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued_by: Option<String>,
+    /// How delivery was confirmed (busy / echo / queued / resubmit …).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<String>,
+    /// Why it failed or was cancelled, when seance knows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 fn default_task_open() -> String {

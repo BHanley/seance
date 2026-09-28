@@ -362,7 +362,9 @@ COMMANDS:
     send PANE TEXT...             new task: paste + submit + confirm delivery
          --file PATH | --stdin    verbatim body (avoids shell $ expansion)
          --no-submit  --force  --retry N  --no-confirm  --confirm-secs S
+         --queue                  busy pane? queue it; daemon delivers when idle
     note-agent PANE TEXT...       paste into the CURRENT task (no new task/cancel)
+         --interrupt              queued behind a turn? interrupt the turn to deliver
     handoff PANE [--agent A]      successor in same cwd gets PANE's open task
          --name NEW  --note TEXT  --keep (don't kill PANE)
     send-raw PANE BYTES           raw PTY bytes (Ctrl-C = $'\\x03')
@@ -394,6 +396,7 @@ COMMANDS:
          --status done [--cat|--harvest]  --badge-only  --task ID
          --scratchpad [--since-inject|--any-pad] --min-bytes N
          --artifact PATH [--fresh] [--either]   result file (OR other conds)
+         --artifact-match REGEX | --artifact-contains TEXT   …once it matches
          --owner none  --ready  --any  --timeout S
     task|inbox [--id ID] [PANE]   durable inject body (default: self)
     doctor                        agent profiles + binary health

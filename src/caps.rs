@@ -271,6 +271,7 @@ pub fn op_name(req: &crate::control::ControlRequest) -> &'static str {
         List { .. } => "list",
         New { .. } => "new",
         Send { .. } => "send",
+        TaskFail { .. } => "send",
         SendRaw { .. } => "send_raw",
         Read { .. } => "read",
         Status { .. } => "status",
@@ -372,6 +373,7 @@ mod tests {
             text: "x".into(),
             submit: true,
             force: false,
+            queue: false,
             scope: None,
             from: None,
         };

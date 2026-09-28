@@ -988,3 +988,66 @@ fn new_from_a_pane_records_parent_and_status_carries_the_row() {
         let _ = std::fs::remove_dir_all(&scratch);
     });
 }
+
+#[test]
+fn queued_send_leaves_the_running_task_alone_and_fail_rolls_back() {
+    with_test_state_dir("send-queue", || {
+        let scratch = temp_scratch("send-queue");
+        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
+        let w = eng.push_stub_pane("w", "lab");
+        let running = eng.begin_task(&w, "long job");
+
+        // --queue on a busy pane: task opens as queued; the running one stays open.
+        let resp = eng.handle_control(ControlRequest::Send {
+            pane: w.clone(),
+            text: "run this next".into(),
+            submit: true,
+            force: false,
+            queue: true,
+            scope: None,
+            from: Some("orch".into()),
+        });
+        // Stub panes have no PTY: queueing must not need one.
+        let data = resp.data.unwrap_or_else(|| panic!("{:?}", resp.error));
+        let queued = data["task_id"].as_str().unwrap().to_string();
+        assert_eq!(data["status"], "queued");
+        assert_eq!(data["position"], 1);
+        assert_eq!(eng.tasks[&running].status, "open");
+        assert_eq!(eng.active_tasks.get(&w), Some(&running));
+        assert_eq!(eng.queued_for(&w), vec![queued.clone()]);
+        assert_eq!(eng.tasks[&queued].queued_by.as_deref(), Some("agent:orch"));
+
+        // Activation supersedes the running task; a failed delivery reopens it.
+        eng.activate_queued(&w, &queued);
+        assert_eq!(eng.tasks[&running].status, "cancelled");
+        assert_eq!(
+            eng.tasks[&queued].supersedes.as_deref(),
+            Some(running.as_str())
+        );
+        let resp = eng.handle_control(ControlRequest::TaskFail {
+            id: queued.clone(),
+            reason: Some("delivery not confirmed".into()),
+            scope: None,
+            from: None,
+        });
+        assert!(resp.ok, "{:?}", resp.error);
+        assert_eq!(resp.data.unwrap()["restored"], running.as_str());
+        assert_eq!(eng.tasks[&queued].status, "failed");
+        assert_eq!(eng.tasks[&running].status, "open");
+        assert_eq!(eng.active_tasks.get(&w), Some(&running));
+        // Only open/queued tasks can fail.
+        assert!(eng.fail_task(&queued, "again").is_err());
+
+        // A send that superseded nothing fails without restoring anything.
+        let solo = eng.begin_task(&w, "second");
+        assert_eq!(eng.tasks[&running].status, "cancelled");
+        assert_eq!(eng.fail_task(&solo, "x").unwrap(), Some(running.clone()));
+
+        // Pane gone → its queue is cancelled by the pump.
+        let (q2, _) = eng.queue_task(&w, "later", "cli");
+        eng.kill_pane(&w);
+        assert!(eng.pump_send_queue(now_ms()));
+        assert_eq!(eng.tasks[&q2].status, "cancelled");
+        let _ = std::fs::remove_dir_all(&scratch);
+    });
+}

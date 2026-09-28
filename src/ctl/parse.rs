@@ -178,12 +178,20 @@ pub(crate) fn with_identity(
             text,
             submit,
             force,
+            queue,
             ..
         } => Send {
             pane,
             text,
             submit,
             force,
+            queue,
+            scope,
+            from,
+        },
+        TaskFail { id, reason, .. } => TaskFail {
+            id,
+            reason,
             scope,
             from,
         },
@@ -504,6 +512,7 @@ pub(crate) fn parse_send(args: Vec<String>) -> Result<ControlRequest, String> {
         text,
         submit,
         force,
+        queue: false,
         scope: None,
         from: None,
     })

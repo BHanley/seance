@@ -22,6 +22,8 @@ use super::{send_request, ConnectError};
 
 /// Exit code when the daemon accepted a send but delivery was not confirmed.
 pub(super) const EXIT_UNDELIVERED: i32 = 3;
+/// Exit code when `send` refused a busy pane (nothing sent, no task opened).
+pub(super) const EXIT_BUSY: i32 = 4;
 
 /// Identity every request in this module is stamped with.
 #[derive(Clone)]
@@ -50,6 +52,15 @@ impl Ctx {
             Err(ConnectError::Protocol(e)) => {
                 Err(self.fail(1, &format!("bad response: {e}"), None))
             }
+        }
+    }
+
+    /// Round-trip without reporting errors (best-effort follow-ups).
+    fn call_quiet(&self, req: ControlRequest) -> Option<Value> {
+        let req = with_identity(req, self.scope.clone(), self.from.clone());
+        match send_request(&req) {
+            Ok(ControlResponse { ok: true, data, .. }) => Some(data.unwrap_or(Value::Null)),
+            _ => None,
         }
     }
 
@@ -142,6 +153,12 @@ pub(super) fn run_send(mut args: Vec<String>, ctx: &Ctx) -> i32 {
 
 /// Send + confirm; the response data gains `delivery`. Shared by `send`,
 /// `new --task-file` and `handoff`.
+///
+/// Order matters (2026-09-28, v2-simplify-spec): look at the pane FIRST. A
+/// busy pane is refused before anything is opened (exit 4) — or, with
+/// `--queue`, handed to the daemon's queue, which delivers it when the pane
+/// goes idle. A send whose delivery can't be confirmed is rolled back with
+/// `task_fail`, which reopens the task it had cancelled.
 fn send_task(
     ctx: &Ctx,
     req: ControlRequest,
@@ -158,6 +175,57 @@ fn send_task(
     if let Some(b) = &before {
         modal_guard(ctx, pane, b)?;
     }
+    let busy = before
+        .as_ref()
+        .is_some_and(|b| b.activity == Activity::Busy);
+    if opts.queue {
+        let row = ctx.call(ControlRequest::Status {
+            pane: pane.to_string(),
+            scope: None,
+            from: None,
+        })?;
+        let Some(waiting) = row.get("queued_tasks").and_then(|q| q.as_array()) else {
+            return Err(ctx.fail(
+                1,
+                "send --queue: this daemon predates the send queue; it needs `seance upgrade`",
+                None,
+            ));
+        };
+        // Idle with nothing ahead of it: deliver now. Otherwise keep order.
+        if busy || !waiting.is_empty() || before.is_none() {
+            let ControlRequest::Send {
+                pane,
+                text,
+                submit,
+                force,
+                ..
+            } = req
+            else {
+                unreachable!("send_task takes a Send");
+            };
+            return ctx.call(ControlRequest::Send {
+                pane,
+                text,
+                submit,
+                force,
+                queue: true,
+                scope: None,
+                from: None,
+            });
+        }
+    } else if busy {
+        let b = before.as_ref().expect("busy implies a look");
+        return Err(ctx.fail(
+            EXIT_BUSY,
+            &format!(
+                "'{pane}' is busy ({}). Nothing sent and no task opened: the running \
+                 task is untouched. `send --queue` runs this next when the pane goes idle; \
+                 `note-agent` adds to the current task",
+                b.evidence.as_deref().unwrap_or("busy")
+            ),
+            None,
+        ));
+    }
     let mut data = ctx.call(req)?;
     let Some(before) = before else {
         return Ok(data);
@@ -170,11 +238,31 @@ fn send_task(
         Err(e) => {
             data["delivery"] = json!({"confirmed": false});
             let tid = data["task_id"].as_str().unwrap_or("?").to_string();
-            Err(ctx.fail(
-                EXIT_UNDELIVERED,
-                &format!("send: {e}. Task {tid} is open; re-send or check the pane"),
-                Some(&data),
-            ))
+            // Roll back: the task never landed, so it must not stay open
+            // (and the one it cancelled comes back). Old daemons lack the op.
+            let rollback = ctx.call_quiet(ControlRequest::TaskFail {
+                id: tid.clone(),
+                reason: Some("delivery not confirmed".into()),
+                scope: None,
+                from: None,
+            });
+            let tail = match &rollback {
+                Some(r) => {
+                    data["rolled_back"] = json!(true);
+                    data["restored"] = r["restored"].clone();
+                    format!(
+                        "Task {tid} marked failed{}",
+                        r["restored"]
+                            .as_str()
+                            .map(|t| format!("; {t} reopened"))
+                            .unwrap_or_default()
+                    )
+                }
+                None => format!(
+                    "Task {tid} is open (daemon can't roll back); re-send or check the pane"
+                ),
+            };
+            Err(ctx.fail(EXIT_UNDELIVERED, &format!("send: {e}. {tail}"), Some(&data)))
         }
     }
 }
@@ -191,6 +279,9 @@ pub(super) fn run_note_agent(mut args: Vec<String>, ctx: &Ctx) -> i32 {
         println!(
             "note-agent PANE TEXT... | --file PATH | --stdin\n  \
              paste a note into the pane's running task (no new task, no cancel)\n  \
+             --interrupt  if Claude queues it behind a running turn, deliver it NOW by\n  \
+                          interrupting the turn (cancels the running tool call; the agent\n  \
+                          answers and stops — re-send its task if it should continue)\n  \
              --no-submit  --no-confirm  --retry N  --confirm-secs S"
         );
         return 0;
@@ -236,7 +327,24 @@ pub(super) fn run_note_agent(mut args: Vec<String>, ctx: &Ctx) -> i32 {
     if let Some(before) = before {
         match confirm(&pane, &text, &before, &opts, &ctx.scope, &ctx.from) {
             Ok(d) => {
-                data["delivery"] = json!({"confirmed": true, "via": d.via, "attempts": d.attempts})
+                let mut via = d.via;
+                // Claude parked it behind the running turn (e.g. the main
+                // agent is waiting on a subagent). --interrupt presses Claude's
+                // "ctrl+x ctrl+s to send now", which cancels the in-flight
+                // tool call and ends the turn (verified live 2026-09-28).
+                let still_queued = via == "queued"
+                    || probe(&pane, &ctx.scope, &ctx.from).is_some_and(|p| p.queued_input);
+                if still_queued && opts.interrupt {
+                    via = send_queued_now(&pane, ctx);
+                }
+                data["delivery"] = json!({"confirmed": true, "via": via, "attempts": d.attempts});
+                if (via == "queued" || (still_queued && via != "interrupted")) && !ctx.json {
+                    eprintln!(
+                        "note: queued behind '{pane}''s running turn — the agent reads it when \
+                         the turn yields (status shows queued_input=true). --interrupt delivers \
+                         it now by interrupting the turn (cancels the running tool call)."
+                    );
+                }
             }
             Err(e) => {
                 data["delivery"] = json!({"confirmed": false});
@@ -245,6 +353,24 @@ pub(super) fn run_note_agent(mut args: Vec<String>, ctx: &Ctx) -> i32 {
         }
     }
     ctx.done("send", data)
+}
+
+/// Press ctrl+x ctrl+s (Claude: "send now") and wait for the queued-input
+/// marker to clear. Claude interrupts the running turn to do it — the tool
+/// call in flight is cancelled and the agent does not resume on its own.
+/// Returns the delivery label.
+fn send_queued_now(pane: &str, ctx: &Ctx) -> &'static str {
+    if super::deliver::raw(pane, b"\x18\x13", &ctx.scope, &ctx.from).is_err() {
+        return "queued";
+    }
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(300));
+        if probe(pane, &ctx.scope, &ctx.from).is_some_and(|p| !p.queued_input) {
+            return "interrupted";
+        }
+    }
+    "queued"
 }
 
 /// Block until a freshly spawned pane can take a paste: its process runs,
@@ -449,6 +575,7 @@ pub(super) fn run_new(mut args: Vec<String>, wait_ready: bool, ctx: &Ctx) -> i32
             text: text.clone(),
             submit: true,
             force: false,
+            queue: false,
             scope: None,
             from: None,
         };
@@ -611,6 +738,7 @@ pub(super) fn run_handoff(args: Vec<String>, ctx: &Ctx) -> i32 {
         text: text.clone(),
         submit: true,
         force: false,
+        queue: false,
         scope: None,
         from: None,
     };

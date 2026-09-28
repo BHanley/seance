@@ -48,6 +48,22 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   - `wait --artifact PATH --either --fresh` returns when a result file lands
     *or* the task is finished. `wait` now fails fast when the pane is gone or
     exited, or when `--task` was superseded, instead of timing out.
+- **Send queue** (`ctl send --queue`): a busy pane gets the task as `queued`,
+  and the daemon delivers it once the pane is idle, with the same delivery
+  confirmation. Without `--queue`, `send` to a busy pane is refused up front
+  (exit 4, nothing opened). A send whose delivery can't be confirmed is rolled
+  back: the new `task_fail` op marks it `failed` and reopens the task it had
+  cancelled.
+- `wait --artifact-match REGEX` / `--artifact-contains TEXT`: wait for a
+  progressively written result file to match (e.g. its closing ```json block).
+  `wait --task` keeps waiting on a queued task.
+- Rows gain `context_left_pct` (Claude "…until auto-compact", Codex "context
+  left"), `queued_input` (Claude "Press up to edit queued messages") and
+  `queued_tasks`. `ctl skill` documents every roster/status JSON field.
+- `note-agent` reports `via: "queued"` when Claude parks the note behind a
+  running turn, and no longer re-pastes it (that stacked five copies on one
+  pane). `--interrupt` delivers it now via Claude's "send now", which
+  interrupts the turn.
 - Drag the desktop sidebar's right edge to resize it; its width persists.
 - Right-click a prefix group → **rename group** to replace the prefix on all
   matching workspace labels, across pinned and unpinned sections. Suffixes,

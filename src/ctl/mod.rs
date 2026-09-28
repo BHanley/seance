@@ -72,9 +72,11 @@ seance ctl roster                              # slug, activity, status, task, p
 seance ctl new --name w --cwd "$PWD" --agent claude --task-file /tmp/task.md --json
 # (name taken → slug is w-2; always use the returned slug)
 # untrusted cwd → ready fails naming the trust dialog; add --trust to accept it
-seance ctl send w-2 --file /tmp/next.md        # new task; confirms delivery (exit 3 if not)
+seance ctl send w-2 --file /tmp/next.md        # new task; refuses a BUSY pane (exit 4)
+seance ctl send w-2 --file /tmp/next.md --queue  # busy? queued; daemon delivers when idle
 seance ctl note-agent w-2 "also cover X"       # into the CURRENT task: no new task, no cancel
-seance ctl wait w-2 --task task-N --artifact /abs/result.md --either --fresh --timeout 21600
+seance ctl wait w-2 --task task-N --artifact /abs/result.md --either --fresh \
+    --artifact-match '```json' --timeout 21600
 seance ctl handoff w-2 --agent claude --note "codex hit its limit"   # same cwd, task re-sent
 ```
 
@@ -82,22 +84,46 @@ seance ctl handoff w-2 --agent claude --note "codex hit its limit"   # same cwd,
 absolute path (`.tmp` then `mv`), then
 `wait PANE --task ID --artifact PATH --either --fresh`: returns when the file
 lands *or* the task is finished, and fails fast (exit 1) if the pane dies or
-the task is superseded. `--fresh` ignores a stale file from an earlier run.
+the task is cancelled/failed. `--fresh` ignores a stale file from an earlier
+run; `--artifact-match REGEX` (or `--artifact-contains TEXT`) waits until a
+progressively written file matches, e.g. its closing ```json block.
 
 - `activity` (daemon, per pane): `busy` · `idle` · `awaiting-input` (a modal
   wants an answer) · `limited` (hit a usage wall → `handoff`) · `exited` ·
   `unknown` (shells). `quota` shows what the TUI prints (Claude statusline
   `5h/7d used %`, Codex `weekly % left`).
-- `send` confirms the paste landed (agent went busy / text echoed / Enter
-  re-pressed if it sat in the composer), re-pastes once (`--retry N`), else
-  exits **3** naming the open task. `--no-confirm` skips. Refuses to paste into
-  a modal.
+- `send` looks first: a **busy** pane is refused (exit **4**, nothing sent, no
+  task opened, running task untouched). `--queue` instead opens the task as
+  `queued`; the daemon delivers it once the pane reads idle and confirms it.
+  An idle pane: paste, confirm it landed (busy / echoed / Enter re-pressed),
+  re-paste once (`--retry N`), else exit **3** and the task is rolled back to
+  `failed` (the task it cancelled is reopened). Refuses to paste into a modal.
+- `note-agent` into a busy Claude may be **queued** behind the running turn
+  (`delivery.via = "queued"`, status `queued_input: true`): the agent reads it
+  when the turn yields. `--interrupt` delivers it now by interrupting the turn,
+  which cancels the running tool call; the agent then answers and stops.
 - Each `send` cancels the pane's previous open task, even if the worker is still
   running it. Mid-task notes go through `note-agent`, never a second `send`.
 - `wait --status done` requires **pad growth since inject** (not badge-only).
   `--cat` / `--harvest` prints each pad body after success.
 - Panes you spawn from inside a pane record you as `parent`;
   `roster --parent SLUG` lists your helpers, `roster --top` hides everyone's.
+
+**`roster --json` / `brief --json`**: `data.panes` is a list of rows;
+`status PANE --json` returns one row as `data`. Row fields:
+`slug` (the id to address) · `name` · `kind` (terminal|file) · `workspace` /
+`workspace_name` · `cwd` · `command` · `parent` · `running` · `asleep` ·
+`exited` / `exit_code` · `activity` (busy|idle|awaiting-input|limited|exited|
+unknown) · `activity_evidence` (the deciding screen line) · `quota`
+({account, five_hour_used_pct, seven_day_used_pct, five_hour_left_pct,
+weekly_left_pct}, only what the TUI shows) · `context_left_pct` · `queued_input`
+(text waiting behind a running turn) · `queued_tasks` (ids from `send --queue`,
+oldest first) · `task_id` / `task_status` (current, else latest task) ·
+`status` / `status_note` (badge) · `owner` / `drive_mode` / `human_idle` ·
+`scratchpad` / `scratchpad_bytes` / `pad_rev` / `inject_pad_rev` /
+`inject_pad_bytes` · `open_asks` · `title` · `tiled`. Task statuses: queued ·
+open · done · cancelled · failed. `task --id T --json` adds `supersedes`,
+`delivery`, `note`.
 
 ### File / markdown panes (show a document live — NOT a shell)
 
@@ -138,7 +164,7 @@ viewer vs process. Roster `kind` is `file` vs `terminal`.
 - `phone` / `telegram-topic` — open vita telegram topic + seed stage card (no participant claim)
 - `prompts [q]` — precanned prompt library
 
-Exit: 0 ok · 1 failed · 2 not reachable · 3 sent but delivery unconfirmed. Scope: `$SEANCE_WORKSPACE`; `--all` only if asked.
+Exit: 0 ok · 1 failed · 2 not reachable · 3 sent but unconfirmed (rolled back) · 4 pane busy, nothing sent. Scope: `$SEANCE_WORKSPACE`; `--all` only if asked.
 Circles are addressable by slug or by label; `ctl whoami` is the authority on
 which one you are in.
 
@@ -1138,6 +1164,7 @@ mod tests {
             text: "hi".into(),
             submit: true,
             force: false,
+            queue: false,
             scope: None,
             from: None,
         };

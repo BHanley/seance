@@ -81,6 +81,14 @@ pub struct AgentState {
     pub evidence: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quota: Option<Quota>,
+    /// Context window left before the agent compacts: Claude's
+    /// "…until auto-compact: N%" / "N% until auto-compact", Codex's
+    /// "N% context left".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_left_pct: Option<u32>,
+    /// Text is waiting behind a running turn (Claude: "Press up to edit
+    /// queued messages"). The agent hasn't read it yet.
+    pub queued_input: bool,
 }
 
 /// Lines above the input box that count as "live status" territory.
@@ -139,6 +147,13 @@ const PLACEHOLDERS: &[&str] = &[
     "Run /review on my current changes",
     "Use /skills to list available skills",
     "Try \"",
+    "Press up to edit queued messages",
+];
+
+/// Claude's marks for input queued behind a running turn.
+const QUEUED: &[&str] = &[
+    "Press up to edit queued messages",
+    "ctrl+x ctrl+s to send now",
 ];
 
 /// Classify a pane from its rendered screen (as `ctl read` returns it) and
@@ -147,10 +162,15 @@ pub fn classify(screen: &str, title: Option<&str>) -> AgentState {
     let lines: Vec<&str> = screen.lines().collect();
     let quota = parse_quota(&lines);
     let quota = (!quota.is_empty()).then_some(quota);
+    let context_left_pct = parse_context_left(&lines);
+    let bottom = &lines[lines.len().saturating_sub(TAIL_WINDOW + STATUS_WINDOW)..];
+    let queued_input = bottom.iter().any(|l| QUEUED.iter().any(|m| l.contains(m)));
     let verdict = |activity: Activity, evidence: Option<&str>| AgentState {
         activity,
         evidence: evidence.map(|l| l.trim().to_string()),
         quota: quota.clone(),
+        context_left_pct,
+        queued_input,
     };
 
     let tail_start = lines.len().saturating_sub(TAIL_WINDOW + STATUS_WINDOW);
@@ -267,17 +287,46 @@ fn is_spinner_line(line: &str) -> bool {
             .is_some_and(|verb| !verb.is_empty() && verb.chars().all(char::is_alphabetic))
 }
 
-fn parse_quota(lines: &[&str]) -> Quota {
-    let mut q = Quota::default();
-    // One token stream for the whole screen: warnings wrap ("less than 5% of
-    // your weekly" / "limit left."), so a per-line scan would miss them.
-    let tokens: Vec<String> = lines
+/// Lowercased word tokens of the whole screen; `%` stays attached.
+fn tokens(lines: &[&str]) -> Vec<String> {
+    lines
         .iter()
         .flat_map(|l| l.split(|c: char| c.is_whitespace() || c == ':' || c == '·' || c == '•'))
         .map(|t| t.trim_matches(|c: char| !c.is_alphanumeric() && c != '%'))
         .filter(|t| !t.is_empty())
         .map(str::to_lowercase)
-        .collect();
+        .collect()
+}
+
+fn parse_context_left(lines: &[&str]) -> Option<u32> {
+    let toks = tokens(lines);
+    let mut found = None;
+    for (i, tok) in toks.iter().enumerate() {
+        let Some(pct) = tok.strip_suffix('%').and_then(|n| n.parse::<u32>().ok()) else {
+            continue;
+        };
+        let next = |k: usize| toks.get(i + k).map(String::as_str).unwrap_or("");
+        let prev = |k: usize| {
+            i.checked_sub(k)
+                .and_then(|j| toks.get(j))
+                .map(String::as_str)
+                .unwrap_or("")
+        };
+        let codex = next(1) == "context" && next(2) == "left";
+        let claude_after = next(1) == "until" && next(2) == "auto-compact";
+        let claude_before = prev(1) == "auto-compact" && prev(2) == "until";
+        if codex || claude_after || claude_before {
+            found = Some(pct);
+        }
+    }
+    found
+}
+
+fn parse_quota(lines: &[&str]) -> Quota {
+    let mut q = Quota::default();
+    // One token stream for the whole screen: warnings wrap ("less than 5% of
+    // your weekly" / "limit left."), so a per-line scan would miss them.
+    let tokens = tokens(lines);
     for (i, tok) in tokens.iter().enumerate() {
         let Some(pct) = tok.strip_suffix('%').and_then(|n| n.parse::<u32>().ok()) else {
             continue;
@@ -305,6 +354,79 @@ fn parse_quota(lines: &[&str]) -> Quota {
             Some(l[a + 1..b].to_string())
         });
     q
+}
+
+/// One look at a pane for delivery confirmation: screen + verdict.
+#[derive(Clone, Debug)]
+pub struct Look {
+    pub activity: Activity,
+    pub evidence: Option<String>,
+    pub queued_input: bool,
+    pub screen: String,
+}
+
+impl Look {
+    pub fn of(screen: String, title: Option<&str>) -> Self {
+        let st = classify(&screen, title);
+        Self {
+            activity: st.activity,
+            evidence: st.evidence,
+            queued_input: st.queued_input,
+            screen,
+        }
+    }
+}
+
+/// What one look after writing `text` into a pane says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Judgement {
+    Delivered(&'static str),
+    /// The text sits in the composer, unsubmitted — press Enter.
+    Stuck,
+    Pending,
+}
+
+/// Did the write of `text` land, comparing the look `before` it with `now`?
+/// Shared by `ctl send` / `note-agent` and the daemon's send queue.
+pub fn judge(before: &Look, now: &Look, text: &str) -> Judgement {
+    if now.activity == Activity::AwaitingInput && before.activity != Activity::AwaitingInput {
+        return Judgement::Delivered("modal");
+    }
+    if composer_holds(&now.screen, text) {
+        return Judgement::Stuck;
+    }
+    if now.queued_input && !before.queued_input {
+        return Judgement::Delivered("queued");
+    }
+    if now.activity == Activity::Busy && before.activity != Activity::Busy {
+        return Judgement::Delivered("busy");
+    }
+    if echoes(&now.screen, text) > echoes(&before.screen, text) {
+        // Echoed into Claude's queue (behind an already-queued note).
+        return Judgement::Delivered(if now.queued_input { "queued" } else { "echo" });
+    }
+    if before.activity == Activity::Unknown && now.screen != before.screen {
+        return Judgement::Delivered("changed");
+    }
+    Judgement::Pending
+}
+
+/// How many times the head of `text` appears on `screen`, whitespace
+/// ignored — transcripts re-wrap and indent a message at pane width.
+fn echoes(screen: &str, text: &str) -> usize {
+    let needle: String = text
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .take(20)
+        .collect();
+    if needle.chars().count() < 6 {
+        return 0;
+    }
+    let hay: String = screen.chars().filter(|c| !c.is_whitespace()).collect();
+    hay.matches(needle.as_str()).count()
 }
 
 #[cfg(test)]
@@ -448,6 +570,74 @@ mod tests {
                  created or one you trust? (Like your own code)\n ❯ No, exit\n   Yes, I trust this \
                  folder\n Enter to confirm · Esc to cancel";
         assert_eq!(classify(s, None).activity, Activity::AwaitingInput);
+    }
+
+    // v2-simp-rails, 2026-09-28: a note-agent message queued mid-turn.
+    const CLAUDE_QUEUED: &str = "❯ COORDINATOR NOTE: spec gate review 3 lists Rails items;
+  'Rails lane'.
+  ctrl+x ctrl+s to send now
+─────────────────────────────────────────
+❯ Press up to edit queued messages
+─────────────────────────────────────────
+  [account-2] 5h:52% 7d:12%
+  ⏵⏵ bypass permissions on · 1 shell · ← for agents";
+
+    #[test]
+    fn queued_input_detected_and_not_mistaken_for_typed_text() {
+        let s = classify(CLAUDE_QUEUED, Some("◐ Paceline"));
+        assert_eq!(s.activity, Activity::Busy);
+        assert!(s.queued_input);
+        assert_eq!(composer_text(CLAUDE_QUEUED).as_deref(), Some(""));
+        assert!(!classify(CLAUDE_BUSY, None).queued_input);
+    }
+
+    #[test]
+    fn context_left_in_every_known_phrasing() {
+        let at = |s: &str| classify(s, None).context_left_pct;
+        assert_eq!(
+            at("  ⏵⏵ bypass permissions on · Context left until auto-compact: 9%"),
+            Some(9)
+        );
+        assert_eq!(at("  12% until auto-compact · /compact"), Some(12));
+        assert_eq!(
+            at("› Ask Codex\n  gpt-5 high · 95% context left · weekly 12% left"),
+            Some(95)
+        );
+        assert_eq!(at(CLAUDE_BUSY), None);
+        // Codex's weekly figure is not context.
+        assert_eq!(
+            classify(CODEX_BUSY, None).quota.unwrap().weekly_left_pct,
+            Some(12)
+        );
+    }
+
+    #[test]
+    fn judge_reads_queue_busy_echo_and_stuck() {
+        let look = |s: &str| Look::of(s.to_string(), None);
+        let idle = look("✻ Baked for 7m\n────\n❯\n────");
+        let busy = look("✶ Osmosing… (3s)\n────\n❯\n────");
+        assert_eq!(judge(&idle, &busy, "do it"), Judgement::Delivered("busy"));
+        assert_eq!(judge(&idle, &idle, "do the thing"), Judgement::Pending);
+        let stuck = look("✻ Baked\n────\n❯ do the thing now please\n────");
+        assert_eq!(
+            judge(&idle, &stuck, "do the thing now please"),
+            Judgement::Stuck
+        );
+        let queued = Look::of(CLAUDE_QUEUED.to_string(), Some("◐ x"));
+        assert_eq!(
+            judge(&busy, &queued, "COORDINATOR NOTE"),
+            Judgement::Delivered("queued")
+        );
+        assert_eq!(judge(&busy, &busy, "a note"), Judgement::Pending);
+        // A second note behind an already-queued one still reads "queued".
+        let two = Look::of(
+            CLAUDE_QUEUED.replace("❯ COORDINATOR", "❯ second note here\n❯ COORDINATOR"),
+            Some("◐ x"),
+        );
+        assert_eq!(
+            judge(&queued, &two, "second note here"),
+            Judgement::Delivered("queued")
+        );
     }
 
     #[test]

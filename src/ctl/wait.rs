@@ -34,6 +34,8 @@ pub(crate) fn run_wait(
     // --either: the artifact OR the other conditions (the robust "result file
     // or task done" completion). --fresh: the artifact must postdate the task.
     let mut either = false;
+    // Progressively written results: done only when the file matches.
+    let mut artifact_match: Option<regex::Regex> = None;
     let mut fresh = false;
     let mut it = args.into_iter();
     while let Some(a) = it.next() {
@@ -50,6 +52,21 @@ pub(crate) fn run_wait(
             "--cat" | "--harvest" => cat_pads = true,
             "--task" => task_id = it.next(),
             "--either" | "--or" => either = true,
+            "--artifact-match" | "--artifact-contains" => {
+                let raw = it.next().unwrap_or_default();
+                let pat = if a == "--artifact-contains" {
+                    regex::escape(&raw)
+                } else {
+                    raw
+                };
+                match regex::Regex::new(&format!("(?s){pat}")) {
+                    Ok(re) => artifact_match = Some(re),
+                    Err(e) => {
+                        eprintln!("seance ctl wait: bad --artifact-match: {e}");
+                        return 1;
+                    }
+                }
+            }
             "--fresh" => fresh = true,
             "--min-bytes" => {
                 min_bytes = it.next().and_then(|v| v.parse().ok()).unwrap_or(1);
@@ -70,6 +87,8 @@ pub(crate) fn run_wait(
                      --task ID       wait until that task_id is done\n  \
                      --scratchpad [--since-inject|--any-pad] --min-bytes N\n  \
                      --artifact PATH [--fresh] [--either]  file exists (non-empty); --fresh = written\n  \
+                     --artifact-match REGEX | --artifact-contains TEXT  …and its body matches\n  \
+                     (e.g. '```json' for a closing block; (?s) is on, so . spans lines)\n  \
                      after the task was sent; --either = artifact OR the other conditions\n  \
                      --owner none  --ready  --any  --timeout S\n  \
                      Fails fast (exit 1) when the pane is gone/exited or --task was superseded,\n  \
@@ -121,6 +140,11 @@ pub(crate) fn run_wait(
         None
     };
     let artifact_ok = |path: &str| -> bool {
+        if let Some(re) = &artifact_match {
+            if !artifact_body_matches(path, re) {
+                return false;
+            }
+        }
         artifact_ready(
             std::fs::metadata(path).ok().as_ref(),
             min_bytes,
@@ -294,8 +318,15 @@ pub(crate) fn run_wait(
                 let tstat = row.get("task_status").and_then(|v| v.as_str());
                 // Match this dispatch: done only when THIS id reports done
                 // (and preferably with pad evidence when evidence=true).
-                ok &= got == Some(want_tid.as_str()) && tstat == Some("done");
-                if evidence && ok {
+                // A task that finished before a later (queued) one became
+                // current is still done — ask for it by id.
+                ok &= if got == Some(want_tid.as_str()) {
+                    tstat == Some("done")
+                } else {
+                    task_state(want_tid, &scope, &from).as_deref() == Some("done")
+                };
+                // The row's pad baseline belongs to the CURRENT task only.
+                if evidence && ok && got == Some(want_tid.as_str()) {
                     let inj_rev = row.get("inject_pad_rev").and_then(|v| v.as_u64());
                     let inj_bytes = row
                         .get("inject_pad_bytes")
@@ -347,14 +378,20 @@ pub(crate) fn run_wait(
             if let (Some(want), false) = (&task_id, art) {
                 let got = row.get("task_id").and_then(|v| v.as_str());
                 if got.is_some_and(|g| g != want) {
-                    return wait_fail(
-                        json_out,
-                        &format!(
-                            "task {want} on '{pane}' was superseded by {} (each send cancels the \
-                             previous task; use note-agent for mid-task notes)",
-                            got.unwrap_or("?")
-                        ),
-                    );
+                    // Not the pane's current task: queued (wait on), or
+                    // cancelled/failed (fail now).
+                    let state = task_state(want, &scope, &from);
+                    if !matches!(state.as_deref(), Some("queued" | "open" | "done")) {
+                        return wait_fail(
+                            json_out,
+                            &format!(
+                                "task {want} on '{pane}' is {} (current task {}; each send \
+                                 cancels the previous one — use note-agent or send --queue)",
+                                state.as_deref().unwrap_or("unknown"),
+                                got.unwrap_or("?")
+                            ),
+                        );
+                    }
                 }
             }
 
@@ -757,6 +794,27 @@ pub(crate) fn artifact_ready(
         .is_some_and(|d| d.as_millis() as u64 + 2000 >= since)
 }
 
+/// `--artifact-match`: the file's current body matches `re`.
+pub(crate) fn artifact_body_matches(path: &str, re: &regex::Regex) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|body| re.is_match(&body))
+}
+
+/// A task's status by id (None if unknown / unreachable).
+fn task_state(id: &str, scope: &Option<String>, from: &Option<String>) -> Option<String> {
+    let req = with_identity(
+        ControlRequest::Task {
+            pane: None,
+            id: Some(id.to_string()),
+            scope: None,
+            from: None,
+        },
+        scope.clone(),
+        from.clone(),
+    );
+    let d = send_request(&req).ok()?.data?;
+    d.get("status")?.as_str().map(String::from)
+}
+
 fn wait_fail(json_out: bool, msg: &str) -> i32 {
     if json_out {
         println!("{}", serde_json::json!({"ok": false, "error": msg}));
@@ -769,6 +827,29 @@ fn wait_fail(json_out: bool, msg: &str) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn artifact_match_waits_for_the_closing_block() {
+        let dir = std::env::temp_dir().join(format!("seance-artm-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("r.md");
+        let path = f.to_string_lossy().to_string();
+        // What agents do: findings first, the fenced json verdict last.
+        let closing = regex::Regex::new(r"(?s)```json\s*\{.*\}\s*```").unwrap();
+        std::fs::write(&f, "## findings\n- one\n").unwrap();
+        assert!(!artifact_body_matches(&path, &closing));
+        std::fs::write(&f, "## findings\n- one\n```json\n{\"ready\": true}\n```\n").unwrap();
+        assert!(artifact_body_matches(&path, &closing));
+        // --artifact-contains is a literal.
+        let lit =
+            regex::Regex::new(&format!("(?s){}", regex::escape("{\"ready\": true}"))).unwrap();
+        assert!(artifact_body_matches(&path, &lit));
+        assert!(!artifact_body_matches(
+            &dir.join("missing").to_string_lossy(),
+            &lit
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn artifact_ready_checks_size_and_freshness() {

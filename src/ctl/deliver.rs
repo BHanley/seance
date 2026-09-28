@@ -32,6 +32,13 @@ use super::send_request;
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct DeliverOpts {
     pub confirm: bool,
+    /// note-agent: if Claude queues the note behind a running turn, press its
+    /// "ctrl+x ctrl+s to send now". That INTERRUPTS the turn (the in-flight
+    /// tool call is cancelled and the agent stops after answering), so it is
+    /// never implied — `--interrupt` only.
+    pub interrupt: bool,
+    /// send: a busy pane gets the task queued daemon-side, not refused.
+    pub queue: bool,
     pub retries: u32,
     pub window: Duration,
 }
@@ -40,6 +47,8 @@ impl Default for DeliverOpts {
     fn default() -> Self {
         Self {
             confirm: true,
+            interrupt: false,
+            queue: false,
             retries: 1,
             window: Duration::from_secs(15),
         }
@@ -54,6 +63,8 @@ pub(super) fn take_deliver_flags(args: &mut Vec<String>) -> Result<DeliverOpts, 
     while let Some(a) = it.next() {
         match a.as_str() {
             "--no-confirm" => opts.confirm = false,
+            "--interrupt" => opts.interrupt = true,
+            "--queue" => opts.queue = true,
             "--retry" => {
                 opts.retries = it
                     .next()
@@ -74,24 +85,9 @@ pub(super) fn take_deliver_flags(args: &mut Vec<String>) -> Result<DeliverOpts, 
     Ok(opts)
 }
 
-/// One look at a pane: rendered screen + the classifier's verdict.
-#[derive(Clone, Debug)]
-pub(super) struct Probe {
-    pub activity: Activity,
-    pub evidence: Option<String>,
-    pub screen: String,
-}
-
-impl Probe {
-    pub fn of(screen: String, title: Option<&str>) -> Self {
-        let st = agent_state::classify(&screen, title);
-        Self {
-            activity: st.activity,
-            evidence: st.evidence,
-            screen,
-        }
-    }
-}
+/// One look at a pane (screen + verdict); the judge is shared with the
+/// daemon's send queue.
+pub(super) use seance_core::agent_state::{judge, Judgement, Look as Probe};
 
 pub(super) fn probe(pane: &str, scope: &Option<String>, from: &Option<String>) -> Option<Probe> {
     let ask = |req| send_request(&with_identity(req, scope.clone(), from.clone())).ok();
@@ -119,52 +115,6 @@ pub(super) fn probe(pane: &str, scope: &Option<String>, from: &Option<String>) -
     .and_then(|r| r.data)
     .and_then(|d| d.get("title").and_then(|t| t.as_str()).map(String::from));
     Some(Probe::of(screen, title.as_deref()))
-}
-
-/// What one look after the write says.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Judgement {
-    Delivered(&'static str),
-    /// The text sits in the composer, unsubmitted — press Enter.
-    Stuck,
-    Pending,
-}
-
-pub(super) fn judge(before: &Probe, now: &Probe, text: &str) -> Judgement {
-    if now.activity == Activity::AwaitingInput && before.activity != Activity::AwaitingInput {
-        return Judgement::Delivered("modal");
-    }
-    if agent_state::composer_holds(&now.screen, text) {
-        return Judgement::Stuck;
-    }
-    if now.activity == Activity::Busy && before.activity != Activity::Busy {
-        return Judgement::Delivered("busy");
-    }
-    if echoes(&now.screen, text) > echoes(&before.screen, text) {
-        return Judgement::Delivered("echo");
-    }
-    if before.activity == Activity::Unknown && now.screen != before.screen {
-        return Judgement::Delivered("changed");
-    }
-    Judgement::Pending
-}
-
-/// How many times the head of `text` appears on `screen`, whitespace
-/// ignored — transcripts re-wrap and indent a message at pane width.
-fn echoes(screen: &str, text: &str) -> usize {
-    let needle: String = text
-        .lines()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("")
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .take(20)
-        .collect();
-    if needle.chars().count() < 6 {
-        return 0;
-    }
-    let hay: String = screen.chars().filter(|c| !c.is_whitespace()).collect();
-    hay.matches(needle.as_str()).count()
 }
 
 /// Bracketed paste + (optionally) Enter as raw PTY bytes: the delivery path
@@ -267,6 +217,15 @@ pub(super) fn confirm(
                 Judgement::Pending => stuck_since = None,
             }
             last = now;
+        }
+        // A busy agent takes input mid-turn without echoing it (Claude folds
+        // it into the running turn). Re-pasting there duplicates the text —
+        // what queued five copies into v2-simp-ios on 2026-09-28.
+        if before.activity == Activity::Busy && !agent_state::composer_holds(&last.screen, text) {
+            return Ok(Delivery {
+                via: "mid-turn",
+                attempts,
+            });
         }
         if attempts > opts.retries {
             return Err(format!(

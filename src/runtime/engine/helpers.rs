@@ -26,6 +26,9 @@ pub(crate) fn task_json(t: &TaskRecord) -> serde_json::Value {
         "finished_ms": t.finished_ms,
         "body": t.body,
         "body_chars": t.body.len(),
+        "supersedes": t.supersedes,
+        "delivery": t.delivery,
+        "note": t.note,
     })
 }
 
@@ -241,6 +244,7 @@ mod tests {
             status: "open".into(),
             created_ms: 100,
             finished_ms: None,
+            ..Default::default()
         };
         let v = task_json(&t);
         assert_eq!(v["id"], "t1");
@@ -271,6 +275,7 @@ mod tests {
             status: "open".into(),
             created_ms: 1,
             finished_ms: None,
+            ..Default::default()
         };
         write_task_sidecar(&scratch, &rec);
         assert_eq!(
