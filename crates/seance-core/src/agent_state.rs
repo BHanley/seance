@@ -104,6 +104,7 @@ const AWAITING: &[&str] = &[
     "trust this folder",
     "Do you trust",
     "Yes, I trust",
+    "one you trust?",
     "Enter to select",
     "Skip until next version",
 ];
@@ -438,6 +439,15 @@ mod tests {
         assert_eq!(s.activity, Activity::Limited);
         assert_eq!(s.quota.unwrap().weekly_left_pct, Some(0));
         assert_eq!(classify(CLAUDE_LIMITED, None).activity, Activity::Limited);
+    }
+
+    #[test]
+    fn claude_trust_dialog_is_awaiting_input() {
+        // Claude 2.1.280, live: default cursor is "No, exit".
+        let s = " Accessing workspace:\n /var/tmp/x\n Quick safety check: Is this a project you \
+                 created or one you trust? (Like your own code)\n ❯ No, exit\n   Yes, I trust this \
+                 folder\n Enter to confirm · Esc to cancel";
+        assert_eq!(classify(s, None).activity, Activity::AwaitingInput);
     }
 
     #[test]

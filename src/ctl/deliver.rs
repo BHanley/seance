@@ -191,7 +191,7 @@ pub(super) fn paste_raw(
     Ok(())
 }
 
-fn raw(
+pub(super) fn raw(
     pane: &str,
     bytes: &[u8],
     scope: &Option<String>,

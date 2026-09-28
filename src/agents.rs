@@ -259,28 +259,63 @@ fn isolate_codex_with(command: &str, supports: impl FnOnce(&str) -> bool) -> Str
     }
 }
 
-/// The keystrokes that dismiss a first-run modal on `screen`, or `None`
-/// when nothing on screen is a boot dialog we answer.
-///
-/// Read from the screen, never a per-profile script: Codex shows *either*
-/// an update menu (option 2 = Skip) *or* a trust dialog (option 2 = "No,
-/// quit"), and a blind `2\r` quits it. Permission prompts are never
-/// answered here — those are the human's (or the orchestrator's) call.
-pub fn boot_dialog_answer(screen: &str) -> Option<&'static [u8]> {
+/// A first-run modal an agent shows before its prompt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BootDialog {
+    /// "Do you trust this folder?" — accepting lets the agent run
+    /// project-local config and hooks, so ctl only does it on `--trust`.
+    Trust,
+    /// Codex's update menu — skipping is always safe.
+    Update,
+}
+
+pub fn boot_dialog(screen: &str) -> Option<BootDialog> {
     let trust = [
         "trust this folder",
         "Do you trust the contents",
         "Do you trust the files",
-        "Yes, I trust",
+        "one you trust?",
     ];
     if trust.iter().any(|m| screen.contains(m)) {
-        // Option 1 (highlighted by default) is "Yes" on Claude and Codex.
-        return Some(b"\r");
+        return Some(BootDialog::Trust);
     }
     if screen.contains("Update available") && screen.contains("2. Skip") {
-        return Some(b"2\r");
+        return Some(BootDialog::Update);
     }
     None
+}
+
+/// The next keystroke(s) toward accepting `dialog`, read from where the
+/// cursor actually is — never a fixed script. Claude's trust dialog puts
+/// the cursor on **"No, exit"** (Enter quits Claude: pane v2-go-touchup,
+/// 2026-09-27) while Codex's puts it on "1. Yes, continue". So for trust
+/// this returns ONE step: Enter when the cursor line says "Yes", else one
+/// arrow toward the "Yes" line; the caller re-reads the screen and asks
+/// again. `None` when the options can't be found — then nothing is sent.
+pub fn boot_dialog_step(screen: &str, dialog: BootDialog) -> Option<&'static [u8]> {
+    if dialog == BootDialog::Update {
+        return Some(b"2\r");
+    }
+    let lines: Vec<&str> = screen.lines().collect();
+    let cursor = lines.iter().rposition(|l| {
+        let t = l.trim_start();
+        t.starts_with('❯') || t.starts_with('›')
+    })?;
+    let is_yes = |l: &str| {
+        let t = l.trim_start().trim_start_matches(['❯', '›']).trim_start();
+        let t = t
+            .trim_start_matches(|c: char| c.is_ascii_digit() || c == '.')
+            .trim_start();
+        t.starts_with("Yes")
+    };
+    let lo = cursor.saturating_sub(4);
+    let hi = (cursor + 5).min(lines.len());
+    let yes = (lo..hi).find(|&i| is_yes(lines[i]))?;
+    Some(match yes.cmp(&cursor) {
+        std::cmp::Ordering::Equal => b"\r",
+        std::cmp::Ordering::Greater => b"\x1b[B",
+        std::cmp::Ordering::Less => b"\x1b[A",
+    })
 }
 
 /// Guess profile name from a command line (for post-spawn boot clear).
@@ -358,17 +393,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn boot_dialogs_answered_from_the_screen() {
-        let codex_trust = "> You are in /tmp\n  Do you trust the contents of this directory?\n\
-                           › 1. Yes, continue\n  2. No, quit\n  Press enter to continue";
-        assert_eq!(boot_dialog_answer(codex_trust), Some(&b"\r"[..]));
-        let claude_trust =
-            " Do you trust the files in this folder?\n ❯ 1. Yes, I trust this folder";
-        assert_eq!(boot_dialog_answer(claude_trust), Some(&b"\r"[..]));
+    fn trust_is_navigated_to_yes_never_blind_enter() {
+        // Claude 2.1.280, sampled live: cursor starts on "No, exit".
+        let claude = " Accessing workspace:\n /var/tmp/x\n Quick safety check: Is this a \
+                      project you created or one you trust? (Like your own code)\n\
+                      \n ❯ No, exit\n   Yes, I trust this folder\n Enter to confirm · Esc to cancel";
+        assert_eq!(boot_dialog(claude), Some(BootDialog::Trust));
+        assert_eq!(
+            boot_dialog_step(claude, BootDialog::Trust),
+            Some(&b"\x1b[B"[..]),
+            "Enter here would quit Claude"
+        );
+        let moved = claude
+            .replace(" ❯ No, exit", "   No, exit")
+            .replace("   Yes, I trust", " ❯ Yes, I trust");
+        assert_eq!(
+            boot_dialog_step(&moved, BootDialog::Trust),
+            Some(&b"\r"[..])
+        );
+
+        let codex = "> You are in /tmp\n  Do you trust the contents of this directory?\n\
+                     › 1. Yes, continue\n  2. No, quit\n  Press enter to continue";
+        assert_eq!(boot_dialog(codex), Some(BootDialog::Trust));
+        assert_eq!(boot_dialog_step(codex, BootDialog::Trust), Some(&b"\r"[..]));
+
         let update = "✨ Update available! 0.157 -> 0.158\n› 1. Update now\n  2. Skip\n  3. Skip until next version";
-        assert_eq!(boot_dialog_answer(update), Some(&b"2\r"[..]));
+        assert_eq!(boot_dialog(update), Some(BootDialog::Update));
+        assert_eq!(
+            boot_dialog_step(update, BootDialog::Update),
+            Some(&b"2\r"[..])
+        );
+
         let permission = " Do you want to proceed?\n ❯ 1. Yes\n   2. No";
-        assert_eq!(boot_dialog_answer(permission), None);
+        assert_eq!(boot_dialog(permission), None);
+        // Options not found → send nothing.
+        assert_eq!(
+            boot_dialog_step("Do you trust the files?", BootDialog::Trust),
+            None
+        );
     }
 
     #[test]

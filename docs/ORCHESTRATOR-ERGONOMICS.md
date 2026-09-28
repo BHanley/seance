@@ -41,6 +41,12 @@ actually fired, because `new` didn't return the command. Dialogs are now
 answered from the screen (`agents::boot_dialog_answer`: trust gets Enter, the
 update menu gets Skip). Permission prompts are never auto-answered.
 
+## Batch 2 — item 11 (commit below, undeployed)
+
+| # | Request | Change | Side | Test |
+|---|---------|--------|------|------|
+| 11 | untrusted cwd: ready took ~2 min, then the first send's Enter answered Claude's trust prompt and Claude exited (v2-go-touchup, events 58148-58156) | The real Claude 2.1.280 dialog opens with the cursor on **"❯ No, exit"**, so any Enter quits. `--wait-ready` now detects a trust dialog and **fails at once** (0.3s), naming it and leaving the pane at the prompt. `--trust` (on `new` and `handoff`) accepts it one checked step at a time: an arrow toward the "Yes" line, re-read the screen, and Enter only when the cursor is on "Yes". Codex update menus are skipped. `send` / `note-agent` refuse to paste into any modal (from batch 1). This also corrects batch 1, which answered trust with a bare Enter: fine on Codex, fatal on Claude. | ctl | `agents::trust_is_navigated_to_yes_never_blind_enter` + a classifier frame test, both from the live dialog; live: no-trust → exit 1 in 0.3s, send refused, `--trust` → idle in 3.6s |
+
 ### Needs a maintenance window
 
 1. **`cargo build --release && seance upgrade`**: daemon half (activity,

@@ -55,9 +55,12 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Fixed
 
-- `new --wait-ready` boot-clear answers dialogs from the screen. The old Codex
-  sequence (`2\r`) would have picked "No, quit" on Codex's trust dialog.
-  It never actually fired, because `new` didn't return the command.
+- A folder-trust dialog can no longer be answered by accident. Claude's
+  dialog opens on **"No, exit"**, so the first `send`'s Enter quit Claude.
+  `new --wait-ready` now stops at once and names a trust dialog.
+  `new … --trust` (and `handoff --trust`) accepts it by moving the cursor to
+  "Yes" one checked step at a time; a blind keystroke is never sent. Codex
+  update menus are skipped. `send` refuses to paste into any modal.
 - Codex panes use `--no-daemon` when supported; `ctl` rejects shared-server
   or mismatched pane identity instead of finishing another pane's task.
   `finish --task` rejects foreign, unknown, or superseded tasks before writing.

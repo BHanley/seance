@@ -71,6 +71,7 @@ seance ctl roster                              # slug, activity, status, task, p
 # spawn + boot + first task, one JSON line: {slug, name, workspace, cwd, task_id, delivery}
 seance ctl new --name w --cwd "$PWD" --agent claude --task-file /tmp/task.md --json
 # (name taken → slug is w-2; always use the returned slug)
+# untrusted cwd → ready fails naming the trust dialog; add --trust to accept it
 seance ctl send w-2 --file /tmp/next.md        # new task; confirms delivery (exit 3 if not)
 seance ctl note-agent w-2 "also cover X"       # into the CURRENT task: no new task, no cancel
 seance ctl wait w-2 --task task-N --artifact /abs/result.md --either --fresh --timeout 21600

@@ -357,6 +357,7 @@ COMMANDS:
          --file PATH              file pane (live md/text viewer; no PTY)
          --wait-ready             block until agent TUI accepts inject
          --task-file PATH         then send a first task (implies --wait-ready)
+         --trust                  accept a folder-trust dialog (else ready fails, naming it)
          --json                   one line: slug name workspace cwd task_id delivery
     send PANE TEXT...             new task: paste + submit + confirm delivery
          --file PATH | --stdin    verbatim body (avoids shell $ expansion)

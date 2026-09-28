@@ -248,19 +248,26 @@ pub(super) fn run_note_agent(mut args: Vec<String>, ctx: &Ctx) -> i32 {
 }
 
 /// Block until a freshly spawned pane can take a paste: its process runs,
-/// any profile boot dialog is cleared, and the screen reads `idle` (agents)
-/// or holds still (shells) for `stable`.
+/// boot dialogs are dealt with, and the screen reads `idle` (agents) or
+/// holds still (shells) for `stable`.
+///
+/// Update menus are skipped. A **trust** dialog is accepted only with
+/// `trust` (`--trust`); otherwise this fails at once naming it — before
+/// 9f5f444 the wait sat ~2 min and the first send's Enter picked Claude's
+/// default "No, exit". Any other modal is left alone and reported.
 pub(super) fn wait_boot_ready(
     ctx: &Ctx,
     slug: &str,
     command: &str,
     timeout: Duration,
+    trust: bool,
 ) -> Result<(), String> {
+    use crate::agents::{boot_dialog, boot_dialog_step, BootDialog};
     let stable = Duration::from_millis(1200);
     let started = Instant::now();
     let profile = crate::agents::guess_profile_from_command(command).unwrap_or("");
     let is_agent = !profile.is_empty() && profile != "shell";
-    let mut answered = 0;
+    let mut steps = 0;
     let mut last = String::new();
     let mut since = Instant::now();
     while started.elapsed() < timeout {
@@ -268,30 +275,33 @@ pub(super) fn wait_boot_ready(
         let Some(p) = probe(slug, &ctx.scope, &ctx.from) else {
             continue;
         };
-        if p.activity == Activity::AwaitingInput {
-            // Codex can stack an update menu on a trust dialog: answer each
-            // (bounded), and leave anything else for the caller to see.
-            if let Some(keys) =
-                crate::agents::boot_dialog_answer(&p.screen).filter(|_| answered < 3)
-            {
-                answered += 1;
-                if !ctx.json {
-                    eprintln!(
-                        "boot-clear '{slug}': {}",
-                        p.evidence.as_deref().unwrap_or("dialog")
-                    );
-                }
-                ctx.call(ControlRequest::SendRaw {
-                    pane: slug.to_string(),
-                    bytes_b64: super::parse::base64_encode(keys),
-                    force: true,
-                    scope: None,
-                    from: None,
-                })
-                .map_err(|_| format!("'{slug}': could not answer its boot dialog"))?;
-                std::thread::sleep(Duration::from_millis(500));
-                continue;
+        if let Some(dialog) = boot_dialog(&p.screen) {
+            if dialog == BootDialog::Trust && !trust {
+                return Err(format!(
+                    "'{slug}' is asking whether to trust its folder ({}). Nothing was sent; \
+                     the pane is left at that prompt. Re-run with --trust to accept it, or \
+                     answer it in the pane",
+                    p.evidence.as_deref().unwrap_or("trust dialog")
+                ));
             }
+            // One verified step at a time: the next probe decides the next key.
+            let Some(keys) = boot_dialog_step(&p.screen, dialog).filter(|_| steps < 8) else {
+                return Err(format!(
+                    "'{slug}' shows a boot dialog ctl can't navigate ({}); answer it in the pane",
+                    p.evidence.as_deref().unwrap_or("?")
+                ));
+            };
+            steps += 1;
+            if !ctx.json {
+                eprintln!(
+                    "boot-clear '{slug}': {dialog:?} → {}",
+                    String::from_utf8_lossy(keys).escape_debug()
+                );
+            }
+            super::deliver::raw(slug, keys, &ctx.scope, &ctx.from)
+                .map_err(|e| format!("'{slug}': could not answer its boot dialog: {e}"))?;
+            std::thread::sleep(Duration::from_millis(400));
+            continue;
         }
         if p.screen != last {
             last = p.screen.clone();
@@ -320,6 +330,7 @@ pub(super) fn wait_boot_ready(
 
 /// Pull `name VALUE`-style flags for `new` that the daemon never sees.
 struct NewExtras {
+    trust: bool,
     task_file: Option<String>,
     task_stdin: bool,
     ready_secs: u64,
@@ -327,6 +338,7 @@ struct NewExtras {
 
 fn take_new_extras(args: &mut Vec<String>) -> Result<NewExtras, String> {
     let mut x = NewExtras {
+        trust: false,
         task_file: None,
         task_stdin: false,
         ready_secs: 180,
@@ -337,6 +349,7 @@ fn take_new_extras(args: &mut Vec<String>) -> Result<NewExtras, String> {
         match a.as_str() {
             "--task-file" => x.task_file = Some(it.next().ok_or("new: --task-file needs PATH")?),
             "--task-stdin" => x.task_stdin = true,
+            "--trust" => x.trust = true,
             "--ready-timeout" => {
                 x.ready_secs = it
                     .next()
@@ -415,9 +428,13 @@ pub(super) fn run_new(mut args: Vec<String>, wait_ready: bool, ctx: &Ctx) -> i32
         if !ctx.json {
             eprintln!("waiting until '{slug}' is boot-ready…");
         }
-        if let Err(e) =
-            wait_boot_ready(ctx, &slug, &command, Duration::from_secs(extras.ready_secs))
-        {
+        if let Err(e) = wait_boot_ready(
+            ctx,
+            &slug,
+            &command,
+            Duration::from_secs(extras.ready_secs),
+            extras.trust,
+        ) {
             data["ready"] = json!(false);
             return ctx.fail(1, &format!("new: {e}"), Some(&data));
         }
@@ -486,6 +503,7 @@ pub(super) fn run_handoff(args: Vec<String>, ctx: &Ctx) -> i32 {
     let mut name = None;
     let mut note = None;
     let mut keep = false;
+    let mut trust = false;
     let mut it = args.into_iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -493,9 +511,10 @@ pub(super) fn run_handoff(args: Vec<String>, ctx: &Ctx) -> i32 {
             "--name" => name = it.next(),
             "--note" => note = it.next(),
             "--keep" => keep = true,
+            "--trust" => trust = true,
             "--help" | "-h" => {
                 println!(
-                    "handoff PANE [--agent claude] [--name NEW] [--note TEXT] [--keep]\n  \
+                    "handoff PANE [--agent claude] [--name NEW] [--note TEXT] [--keep] [--trust]\n  \
                      spawn a same-cwd successor, re-send PANE's open task with a takeover\n  \
                      preamble, kill PANE (unless --keep). Prints the new slug + task id."
                 );
@@ -570,7 +589,7 @@ pub(super) fn run_handoff(args: Vec<String>, ctx: &Ctx) -> i32 {
     };
     let new = spawned["slug"].as_str().unwrap_or_default().to_string();
     let command = crate::agents::command_line(&profile);
-    if let Err(e) = wait_boot_ready(ctx, &new, &command, Duration::from_secs(180)) {
+    if let Err(e) = wait_boot_ready(ctx, &new, &command, Duration::from_secs(180), trust) {
         return ctx.fail(
             1,
             &format!("handoff: successor {e}; '{old}' left running"),
@@ -704,6 +723,7 @@ mod tests {
             "claude",
             "--ready-timeout",
             "60",
+            "--trust",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -712,6 +732,7 @@ mod tests {
         assert_eq!(x.task_file.as_deref(), Some("/t.md"));
         assert_eq!(x.ready_secs, 60);
         assert!(!x.task_stdin);
+        assert!(x.trust);
         assert_eq!(args, ["--name", "w", "--agent", "claude"]);
         assert!(parse_new(args).is_ok(), "leftovers parse as a plain new");
     }
