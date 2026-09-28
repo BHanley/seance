@@ -20,7 +20,7 @@ Tested against an isolated daemon (`XDG_RUNTIME_DIR` + `SEANCE_STATE_DIR` +
 `SEANCE_SOCKET` in a scratch dir, `target/debug/seance daemon`) with real
 Claude and Codex panes. The live daemon and its panes were not touched.
 
-## Batch 1 — 2026-09-27
+## Batch 1 — 2026-09-27 (commit 9f5f444, undeployed)
 
 | # | Request | Change | Side | Test |
 |---|---------|--------|------|------|
