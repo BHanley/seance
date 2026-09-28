@@ -3,6 +3,8 @@
 //! A thin, dependency-free command-line front end over the Unix-socket protocol
 //! defined in [`crate::control`]. See crate-level docs on the original module.
 
+mod agentops;
+mod deliver;
 mod identity;
 mod parse;
 mod phone;
@@ -16,6 +18,7 @@ use std::time::Duration;
 
 use crate::control::{socket_path, ControlRequest, ControlResponse};
 
+use agentops::{parse_roster_filter, run_roster};
 use parse::*;
 use phone::*;
 use print::*;
@@ -59,27 +62,41 @@ Do not guess or override `SEANCE_SESSION` to bypass the check.
 
 ### Hot path — orchestrator (you drive siblings)
 
-Prefer structure over screens. **Never** poll `read` in a sleep loop.
+Prefer structure over screens. **Never** poll `read` in a sleep loop, and never
+screen-scrape busy/idle: `roster --json` / `status --json` carry `activity`.
 
 ```bash
 seance ctl doctor
-seance ctl roster                              # slug, status, task, pad@rev
-seance ctl new --name w --cwd "$PWD" --agent claude --wait-ready
-# NOTE: created slug may be w-2 if w exists — use the id `created` prints
-# FOOTGUN: shell expands $VARS in bare send — always --file for tasks:
-seance ctl send w-2 --file /tmp/task.md        # returns task=task-N status=working
-seance ctl wait w-2 --status done --timeout 600 --cat   # evidence-bound + harvest
-# fan-in harvest:
-seance ctl wait w-claude-4 w-grok-4 w-codex-4 --status done --cat
+seance ctl roster                              # slug, activity, status, task, pad@rev
+# spawn + boot + first task, one JSON line: {slug, name, workspace, cwd, task_id, delivery}
+seance ctl new --name w --cwd "$PWD" --agent claude --task-file /tmp/task.md --json
+# (name taken → slug is w-2; always use the returned slug)
+seance ctl send w-2 --file /tmp/next.md        # new task; confirms delivery (exit 3 if not)
+seance ctl note-agent w-2 "also cover X"       # into the CURRENT task: no new task, no cancel
+seance ctl wait w-2 --task task-N --artifact /abs/result.md --either --fresh --timeout 21600
+seance ctl handoff w-2 --agent claude --note "codex hit its limit"   # same cwd, task re-sent
 ```
 
-- `wait --status done` requires **pad growth since inject** (not badge-only).
-  Use `--badge-only` only if you intentionally skip evidence.
-- `--cat` / `--harvest` prints each pad body after success (one round-trip fan-in).
-- `send` returns `task_id`; roster shows `task=task-N`.
+**Robust completion = a result file.** Tell the worker to write its report to an
+absolute path (`.tmp` then `mv`), then
+`wait PANE --task ID --artifact PATH --either --fresh`: returns when the file
+lands *or* the task is finished, and fails fast (exit 1) if the pane dies or
+the task is superseded. `--fresh` ignores a stale file from an earlier run.
+
+- `activity` (daemon, per pane): `busy` · `idle` · `awaiting-input` (a modal
+  wants an answer) · `limited` (hit a usage wall → `handoff`) · `exited` ·
+  `unknown` (shells). `quota` shows what the TUI prints (Claude statusline
+  `5h/7d used %`, Codex `weekly % left`).
+- `send` confirms the paste landed (agent went busy / text echoed / Enter
+  re-pressed if it sat in the composer), re-pastes once (`--retry N`), else
+  exits **3** naming the open task. `--no-confirm` skips. Refuses to paste into
+  a modal.
 - Each `send` cancels the pane's previous open task, even if the worker is still
-  running it. A wait for the old task to become done will time out. For a mid-run
-  note, use a shared file or `send-raw` (no new task); otherwise track the new id.
+  running it. Mid-task notes go through `note-agent`, never a second `send`.
+- `wait --status done` requires **pad growth since inject** (not badge-only).
+  `--cat` / `--harvest` prints each pad body after success.
+- Panes you spawn from inside a pane record you as `parent`;
+  `roster --parent SLUG` lists your helpers, `roster --top` hides everyone's.
 
 ### File / markdown panes (show a document live — NOT a shell)
 
@@ -112,7 +129,7 @@ viewer vs process. Roster `kind` is `file` vs `terminal`.
 
 - `new --agent claude|grok|codex|shell`  (+ `--wait-ready`)
 - `new --file PATH` — **file pane** (live markdown/text viewer; no shell)
-- `send --file|--stdin` · `send-raw` · `read` (debug)
+- `send --file|--stdin` · `note-agent` · `handoff` · `send-raw` · `read` (debug)
 - `pad [PANE] --cat` · `note` · `finish` · `status-set` · `task`/`inbox`
 - `roster`/`stage` · `brief` · `human` · `wait` · `watch` · `doctor`
 - `propose` (ghost cmd) · `ask` · `seize`/`release`/`drive`
@@ -120,7 +137,7 @@ viewer vs process. Roster `kind` is `file` vs `terminal`.
 - `phone` / `telegram-topic` — open vita telegram topic + seed stage card (no participant claim)
 - `prompts [q]` — precanned prompt library
 
-Exit: 0 ok · 1 failed · 2 not reachable. Scope: `$SEANCE_WORKSPACE`; `--all` only if asked.
+Exit: 0 ok · 1 failed · 2 not reachable · 3 sent but delivery unconfirmed. Scope: `$SEANCE_WORKSPACE`; `--all` only if asked.
 Circles are addressable by slug or by label; `ctl whoami` is the authority on
 which one you are in.
 
@@ -218,6 +235,11 @@ fn run_local(args: Vec<String>) -> i32 {
         sub_args.retain(|a| a != "--cat");
     }
 
+    let ctx = agentops::Ctx {
+        scope: scope.clone(),
+        from: from.clone(),
+        json: json_out,
+    };
     // Build the request (or handle help / a parse error).
     let request = match sub.as_str() {
         "help" | "-h" | "--help" => {
@@ -232,8 +254,10 @@ fn run_local(args: Vec<String>) -> i32 {
             scope: None,
             from: None,
         }),
-        "new" => parse_new(sub_args),
-        "send" => parse_send(sub_args),
+        "new" => return agentops::run_new(sub_args, wait_ready, &ctx),
+        "send" => return agentops::run_send(sub_args, &ctx),
+        "note-agent" | "nudge" => return agentops::run_note_agent(sub_args, &ctx),
+        "handoff" => return agentops::run_handoff(sub_args, &ctx),
         "send-raw" | "raw" => parse_send_raw(sub_args),
         "read" => parse_read(sub_args),
         "status" => parse_status(sub_args),
@@ -365,10 +389,10 @@ fn run_local(args: Vec<String>) -> i32 {
             scope: None,
             from: None,
         }),
-        "roster" | "stage" => Ok(ControlRequest::Roster {
-            scope: None,
-            from: None,
-        }),
+        "roster" | "stage" => match parse_roster_filter(&sub_args) {
+            Ok(filter) => return run_roster(filter, &ctx),
+            Err(e) => Err(e),
+        },
         "task" | "inbox" => parse_task(sub_args),
         "note" => parse_note(sub_args),
         "finish" => parse_finish(sub_args),
@@ -579,47 +603,6 @@ fn run_local(args: Vec<String>) -> i32 {
             }
         } else if !json_out {
             print_ok_human(&sub, &response);
-        }
-        // A+ orchestrator: block until agent TUI is ready for inject.
-        if sub == "new" && wait_ready {
-            let slug = response
-                .data
-                .as_ref()
-                .and_then(|d| {
-                    d.get("slug")
-                        .and_then(|v| v.as_str())
-                        .or_else(|| d.get("name").and_then(|v| v.as_str()))
-                        .map(|s| s.to_string())
-                        .or_else(|| d.as_str().map(|s| s.to_string()))
-                })
-                .unwrap_or_default();
-            let command = response
-                .data
-                .as_ref()
-                .and_then(|d| d.get("command").and_then(|v| v.as_str()))
-                .unwrap_or("")
-                .to_string();
-            if !slug.is_empty() {
-                if !json_out {
-                    eprintln!("waiting until '{slug}' is boot-ready…");
-                }
-                let code = run_wait(
-                    vec![
-                        slug.clone(),
-                        "--ready".into(),
-                        "--timeout".into(),
-                        "120".into(),
-                    ],
-                    scope.clone(),
-                    from.clone(),
-                    json_out,
-                );
-                if code != 0 {
-                    return code;
-                }
-                // Profile boot-clear (trust dialog / update skip).
-                boot_clear_pane(&slug, &command, scope.clone(), from.clone(), json_out);
-            }
         }
         0
     } else {

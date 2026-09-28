@@ -21,8 +21,33 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 - Phone web views show one pane at a time, with tabs across the top to switch
   panes. The active terminal fills the screen above the keyboard.
-- `seance --help`, `seance -h`, and `seance help` show the control-plane CLI
-  help without opening a desktop window or connecting to a daemon.
+- `--help` / `-h` anywhere on the `seance` command line prints top-level
+  usage and exits. `seance upgrade --help` no longer upgrades the daemon, and
+  `restart-gui --help` no longer restarts the GUI.
+- **Orchestrator ergonomics** (docs/ORCHESTRATOR-ERGONOMICS.md):
+  - `roster` / `brief` / `status` report each pane's `activity` (`busy`,
+    `idle`, `awaiting-input`, `limited`, `exited`, `unknown`), read by the
+    daemon from the live screen and title. They also carry `quota` (Claude
+    statusline 5h/7d used %, Codex weekly % left) whenever the agent's TUI
+    shows those numbers.
+  - `ctl send` confirms the paste landed (the agent went busy, the text
+    echoed, or Enter is re-pressed when the paste sits unsent). If nothing
+    lands it re-pastes once (`--retry N`), then exits 3 naming the open task.
+    It refuses to paste into a modal. `--no-confirm` skips all of this.
+  - `ctl note-agent PANE TEXT` delivers a note into the running task, with no
+    new task and no cancel.
+  - `ctl handoff PANE --agent claude [--note T]` moves the open task to a fresh
+    agent in the same cwd and circle, then kills the original.
+  - `ctl new --json` works with `--wait-ready`. `--task-file` sends a first
+    task. The reply is one JSON line: `{slug, name, requested_name,
+    workspace, cwd, command, parent, ready, task_id, delivery}`.
+  - `status` returns the full roster row (adds `cwd`, `activity`, `task_id`,
+    `parent`).
+  - Panes spawned from inside a pane record their `parent`. Filter with
+    `roster --parent SLUG` or `roster --top`.
+  - `wait --artifact PATH --either --fresh` returns when a result file lands
+    *or* the task is finished. `wait` now fails fast when the pane is gone or
+    exited, or when `--task` was superseded, instead of timing out.
 - Drag the desktop sidebar's right edge to resize it; its width persists.
 - Right-click a prefix group → **rename group** to replace the prefix on all
   matching workspace labels, across pinned and unpinned sections. Suffixes,
@@ -30,6 +55,9 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Fixed
 
+- `new --wait-ready` boot-clear answers dialogs from the screen. The old Codex
+  sequence (`2\r`) would have picked "No, quit" on Codex's trust dialog.
+  It never actually fired, because `new` didn't return the command.
 - Codex panes use `--no-daemon` when supported; `ctl` rejects shared-server
   or mismatched pane identity instead of finishing another pane's task.
   `finish --task` rejects foreign, unknown, or superseded tasks before writing.

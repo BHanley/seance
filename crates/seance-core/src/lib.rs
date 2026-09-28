@@ -13,6 +13,7 @@
 //! and native with zero features.** If a change needs `libc`, files, or a
 //! clock, it belongs in the consuming crate, not here.
 
+pub mod agent_state;
 pub mod auth;
 pub mod control;
 pub mod grouping;

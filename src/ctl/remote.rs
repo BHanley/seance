@@ -82,7 +82,7 @@ fn with_scope(args: &[String], scope: Option<&str>) -> Vec<String> {
 
 fn prepare_args(args: &[String]) -> Result<(Vec<String>, Option<String>, bool)> {
     let sub = subcommand(args);
-    let body_command = matches!(sub, "send" | "note" | "finish");
+    let body_command = matches!(sub, "send" | "note" | "finish" | "note-agent" | "nudge");
     let mut forwarded = Vec::new();
     let mut body_file = None;
     let mut stdin = false;
@@ -91,17 +91,23 @@ fn prepare_args(args: &[String]) -> Result<(Vec<String>, Option<String>, bool)> 
         if body_command && arg == "--file" {
             body_file = Some(it.next().context("--file needs PATH")?.clone());
             forwarded.push("--stdin".into());
+        } else if sub == "new" && arg == "--task-file" {
+            // `new --file` is a host viewer path; only the task body is local.
+            body_file = Some(it.next().context("--task-file needs PATH")?.clone());
+            forwarded.push("--task-stdin".into());
         } else {
             forwarded.push(arg.clone());
             // Values can themselves look like flags; preserve the ctl parser's boundaries.
             if arg == "--scope"
                 || (matches!(sub, "note" | "finish") && arg == "--pane")
                 || (sub == "finish" && matches!(arg.as_str(), "--note" | "--status" | "--task"))
+                || (sub == "handoff" && matches!(arg.as_str(), "--note" | "--name" | "--agent"))
             {
                 if let Some(value) = it.next() {
                     forwarded.push(value.clone());
                 }
-            } else if body_command && arg == "--stdin" {
+            } else if (body_command && arg == "--stdin") || (sub == "new" && arg == "--task-stdin")
+            {
                 stdin = true;
             }
         }
@@ -166,6 +172,21 @@ mod tests {
                 args(&["--scope", "circle", sub, "pane", "--stdin", "--json"])
             );
         }
+        let (forwarded, file, _) = prepare_args(&args(&[
+            "new",
+            "--name",
+            "w",
+            "--task-file",
+            "/Users/me/t.md",
+            "--file",
+            "/host/v.md",
+        ]))
+        .unwrap();
+        assert_eq!(file.as_deref(), Some("/Users/me/t.md"));
+        assert_eq!(
+            forwarded,
+            args(&["new", "--name", "w", "--task-stdin", "--file", "/host/v.md"])
+        );
         for original in [
             args(&["new", "--name", "notes", "--file", "/host/notes.md"]),
             args(&["wait", "pane", "--artifact", "/host/result.md"]),

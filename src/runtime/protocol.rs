@@ -89,6 +89,9 @@ pub struct HandoffBundle {
     /// workspace → last human input (unix ms).
     #[serde(default)]
     pub workspace_touch_ms: Vec<(String, u64)>,
+    /// pane slug → spawning pane slug (`ctl new` from inside a pane).
+    #[serde(default)]
+    pub pane_parents: Vec<(String, String)>,
     /// workspace → scraped PR links (0.13 — survive upgrade).
     #[serde(default)]
     pub pr_links: Vec<(String, Vec<crate::runtime::protocol::PrLink>)>,

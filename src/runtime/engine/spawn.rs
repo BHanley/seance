@@ -372,6 +372,7 @@ impl Engine {
             self.cmd_log.remove_pane(slug);
             self.statuses.remove(slug);
             self.pane_busy.remove(slug);
+            self.pane_parents.remove(slug);
             // Slugs get reused. A window still holding this pane's frame as a
             // damage base would otherwise apply the next pane's rows onto it.
             self.invalidate_bases(slug);

@@ -135,14 +135,24 @@ impl Engine {
                     file,
                 }) {
                     Ok(slug) => {
-                        let (ws, scratch, pname) = {
+                        let (ws, scratch, pname, pcmd, pcwd) = {
                             let pane = self.panes.iter().find(|p| p.slug == slug).unwrap();
                             (
                                 pane.workspace.clone(),
                                 pane.scratch_path.to_string_lossy().to_string(),
                                 pane.name.clone(),
+                                pane.command.clone(),
+                                pane.cwd.clone(),
                             )
                         };
+                        // A pane spawned from inside a pane is its child:
+                        // roster groups helpers under their orchestrator.
+                        let parent = from
+                            .clone()
+                            .filter(|f| *f != slug && self.panes.iter().any(|p| p.slug == *f));
+                        if let Some(parent) = &parent {
+                            self.pane_parents.insert(slug.clone(), parent.clone());
+                        }
                         events::log(
                             &actor(&from),
                             Some(&ws),
@@ -168,8 +178,12 @@ impl Engine {
                         self.push_state_to_all();
                         ok(json!({
                             "slug": slug,
+                            "name": pname,
                             "workspace": ws,
                             "scratchpad": scratch,
+                            "command": pcmd,
+                            "cwd": pcwd,
+                            "parent": parent,
                         }))
                     }
                     Err(e) => err(e.to_string()),
@@ -358,20 +372,10 @@ impl Engine {
                 }
                 Err(e) => err(e),
             },
+            // The roster row for one pane: everything `brief` knows (cwd,
+            // activity, quota, task) so a respawn never needs a second call.
             Status { pane, scope, .. } => match find(self, &pane, &scope) {
-                Ok(idx) => {
-                    let p = &self.panes[idx];
-                    ok(json!({
-                        "kind": p.kind,
-                        "name": p.name,
-                        "slug": p.slug,
-                        "workspace": p.workspace,
-                        "command": p.command,
-                        "running": p.session.as_ref().map(|s| s.is_running()).unwrap_or(true),
-                        "title": p.session.as_ref().and_then(|s| s.title()),
-                        "tiled": p.tiled,
-                    }))
-                }
+                Ok(idx) => ok(self.pane_summary_json(&self.panes[idx])),
                 Err(e) => err(e),
             },
             Kill { pane, scope, from } => match find(self, &pane, &scope) {

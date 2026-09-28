@@ -259,21 +259,28 @@ fn isolate_codex_with(command: &str, supports: impl FnOnce(&str) -> bool) -> Str
     }
 }
 
-/// Boot-dialog clear sequences after `--wait-ready` (raw PTY bytes).
+/// The keystrokes that dismiss a first-run modal on `screen`, or `None`
+/// when nothing on screen is a boot dialog we answer.
 ///
-/// Agents often present a first-run trust/update modal. Masters should not have
-/// to remember `send-raw $'\r'`. Each entry is raw bytes to inject with a short
-/// settle delay between them.
-pub fn boot_clear_sequence(profile_name: &str) -> Vec<Vec<u8>> {
-    match profile_name.to_ascii_lowercase().as_str() {
-        // Claude Code: "trust this folder?" → Enter accepts.
-        "claude" => vec![b"\r".to_vec()],
-        // Codex: update menu — option 2 is typically Skip.
-        "codex" => vec![b"2\r".to_vec()],
-        // Grok: usually no modal; trailing Enter can help multi-line inject later.
-        "grok" => vec![],
-        _ => vec![],
+/// Read from the screen, never a per-profile script: Codex shows *either*
+/// an update menu (option 2 = Skip) *or* a trust dialog (option 2 = "No,
+/// quit"), and a blind `2\r` quits it. Permission prompts are never
+/// answered here — those are the human's (or the orchestrator's) call.
+pub fn boot_dialog_answer(screen: &str) -> Option<&'static [u8]> {
+    let trust = [
+        "trust this folder",
+        "Do you trust the contents",
+        "Do you trust the files",
+        "Yes, I trust",
+    ];
+    if trust.iter().any(|m| screen.contains(m)) {
+        // Option 1 (highlighted by default) is "Yes" on Claude and Codex.
+        return Some(b"\r");
     }
+    if screen.contains("Update available") && screen.contains("2. Skip") {
+        return Some(b"2\r");
+    }
+    None
 }
 
 /// Guess profile name from a command line (for post-spawn boot clear).
@@ -349,6 +356,20 @@ pub struct DoctorRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn boot_dialogs_answered_from_the_screen() {
+        let codex_trust = "> You are in /tmp\n  Do you trust the contents of this directory?\n\
+                           › 1. Yes, continue\n  2. No, quit\n  Press enter to continue";
+        assert_eq!(boot_dialog_answer(codex_trust), Some(&b"\r"[..]));
+        let claude_trust =
+            " Do you trust the files in this folder?\n ❯ 1. Yes, I trust this folder";
+        assert_eq!(boot_dialog_answer(claude_trust), Some(&b"\r"[..]));
+        let update = "✨ Update available! 0.157 -> 0.158\n› 1. Update now\n  2. Skip\n  3. Skip until next version";
+        assert_eq!(boot_dialog_answer(update), Some(&b"2\r"[..]));
+        let permission = " Do you want to proceed?\n ❯ 1. Yes\n   2. No";
+        assert_eq!(boot_dialog_answer(permission), None);
+    }
 
     #[test]
     fn codex_launch_isolated_only_when_supported() {

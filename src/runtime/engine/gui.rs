@@ -860,14 +860,30 @@ impl Engine {
         let task_status = task_id
             .as_ref()
             .and_then(|id| self.tasks.get(id).map(|t| t.status.clone()));
+        let agent = p
+            .session
+            .as_ref()
+            .filter(|_| running && !p.asleep)
+            .map(|s| {
+                seance_core::agent_state::classify(&s.live_screen_text(), s.title().as_deref())
+            });
+        let activity = match &agent {
+            Some(a) => a.activity.as_str(),
+            None if p.kind == "file" || p.asleep => "unknown",
+            None => "exited",
+        };
         json!({
             "kind": p.kind,
             "name": p.name,
             "slug": p.slug,
             "workspace": p.workspace,
             "workspace_name": self.workspace_label(&p.workspace),
+            "activity": activity,
+            "activity_evidence": agent.as_ref().and_then(|a| a.evidence.clone()),
+            "quota": agent.as_ref().and_then(|a| a.quota.clone()),
             "command": p.command,
             "cwd": p.cwd,
+            "parent": self.pane_parents.get(&p.slug),
             "tiled": p.tiled,
             "running": running,
             "asleep": p.asleep,

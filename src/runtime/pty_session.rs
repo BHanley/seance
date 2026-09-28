@@ -558,11 +558,26 @@ impl PtySession {
     }
 
     pub fn screen_text(&self, lines: Option<usize>) -> String {
+        self.render_text(lines, true)
+    }
+
+    /// The live bottom of the screen, ignoring any scrollback a viewer has
+    /// scrolled to — what the agent is showing *now* (activity classifier).
+    pub fn live_screen_text(&self) -> String {
+        self.render_text(None, false)
+    }
+
+    fn render_text(&self, lines: Option<usize>, follow_scroll: bool) -> String {
         let term = self.term.lock();
         let grid = term.grid();
+        let offset = if follow_scroll {
+            grid.display_offset() as i32
+        } else {
+            0
+        };
         let mut out: Vec<String> = Vec::with_capacity(grid.screen_lines());
         for line_idx in 0..grid.screen_lines() as i32 {
-            let line = Line(line_idx - grid.display_offset() as i32);
+            let line = Line(line_idx - offset);
             let mut text = String::with_capacity(grid.columns());
             for col in 0..grid.columns() {
                 let cell = &grid[line][Column(col)];

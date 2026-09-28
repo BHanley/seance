@@ -76,11 +76,11 @@ success. Response payloads by op (best-effort shapes the app fills in):
 | op | `data` on success |
 |----|-------------------|
 | `list` | `{panes: [...], scope, event_seq, focused_pane, selected_workspace}` |
-| `new` | `{slug, workspace, scratchpad}` |
+| `new` | `{slug, name, workspace, scratchpad, command, cwd, parent}` |
 | `send` | `{slug, task_id, inject_pad_rev, inject_pad_bytes, status}` |
 | `send_raw` | `null` |
 | `read` | `{screen: "..."}` |
-| `status` | `{slug, name, kind, workspace?, command, running, title?}` |
+| `status` | the pane's roster row: `{slug, name, kind, workspace, cwd, command, parent, running, activity, activity_evidence, quota, title, status, task_id, …}` |
 | `kill` | omitted / `null` |
 | `scratchpad` | `{path: "..."}` |
 
@@ -224,13 +224,16 @@ seance ctl <command> [args] [--json]
 
 `--json` (accepted anywhere) prints the raw JSON response instead of the
 human-readable rendering. Exit codes: **0** ok · **1** request failed · **2**
-cannot connect (with an "is seance running?" hint).
+cannot connect (with an "is seance running?" hint) · **3** `send`/`note-agent`
+accepted but delivery not confirmed.
 
 | command | usage |
 |---------|-------|
 | `list` | `seance ctl list` |
-| `new` | `seance ctl new --name NAME [--cwd DIR] [--agent NAME\|--command CMD] [--workspace WS] [--wait-ready]` |
-| `send` | `seance ctl send PANE TEXT...` `[--file PATH\|--stdin] [--no-submit] [--force]` → `task_id` |
+| `new` | `seance ctl new --name NAME [--cwd DIR] [--agent NAME\|--command CMD] [--workspace WS] [--wait-ready] [--task-file PATH]` |
+| `send` | `seance ctl send PANE TEXT...` `[--file PATH\|--stdin] [--no-submit] [--force] [--retry N] [--no-confirm]` → `task_id` + `delivery` |
+| `note-agent` | `seance ctl note-agent PANE TEXT...` `[--file\|--stdin]` — into the current task, no new task |
+| `handoff` | `seance ctl handoff PANE [--agent claude] [--name N] [--note T] [--keep]` |
 | `send-raw` | `seance ctl send-raw PANE BYTES` |
 | `read` | `seance ctl read PANE [--lines N]` (debug) |
 | `status` / `kill` | `seance ctl status\|kill PANE` |
@@ -250,9 +253,25 @@ Notes:
 - **`send`**: shell expands `$VARS` — use `--file`/`--stdin`. Inject creates a
   **task envelope** (`task_id`), sets `status=working`, records pad baseline.
   It cancels the previous task even if the worker is still running. For
-  coordinator notes, use `send-raw` (no task creation) or a shared file;
-  otherwise track the new task id. Sidecars: `<scratch>.taskid` /
+  coordinator notes, use `note-agent` (no task creation); otherwise track the
+  new task id. Sidecars: `<scratch>.taskid` /
   `<scratch>.task.json`.
+- **Delivery (`send`, `note-agent`)**: after the write, ctl watches the pane
+  until the agent goes busy, the text echoes in the transcript, or the paste
+  sits unsent in the composer (then ctl presses Enter). If nothing happens
+  within `--confirm-secs` (15), it re-pastes as raw bytes, which opens no new
+  task, up to `--retry` (1) times. If delivery still isn't confirmed it
+  exits **3**, and `--json` carries the open `task_id`. A pane showing a modal
+  is refused rather than pasted into.
+- **`activity`** (roster/brief/status, daemon-side): `busy` · `idle` ·
+  `awaiting-input` · `limited` · `exited` · `unknown`, plus
+  `activity_evidence` (the deciding screen line) and `quota`. The classifier
+  lives in `seance-core/src/agent_state.rs` and is pinned by real frames.
+- **`wait --artifact PATH`**: the file exists with ≥ `--min-bytes`.
+  `--fresh` requires it to be written after the `--task` was sent (or after
+  the wait began). `--either` ORs it with the other conditions, which is the
+  robust completion pattern. `wait` exits 1 at once if the pane is gone or
+  exited, or if `--task` was superseded, unless the artifact is already there.
 - **`wait --status done`**: evidence-bound (pad must grow since inject) unless
   `--badge-only`. Prints `done …` (not `ready`) when waiting on done.
   `--task ID` waits for that exact task; a cancelled task times out even if

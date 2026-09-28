@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::control::{socket_path, ControlRequest, ControlResponse};
 
-use super::parse::{base64_encode, with_identity};
+use super::parse::with_identity;
 use super::send_request;
 
 pub(crate) fn run_wait(
@@ -31,6 +31,10 @@ pub(crate) fn run_wait(
     // After success, dump each satisfied pane's pad body (master harvest path).
     let mut cat_pads = false;
     let mut task_id: Option<String> = None;
+    // --either: the artifact OR the other conditions (the robust "result file
+    // or task done" completion). --fresh: the artifact must postdate the task.
+    let mut either = false;
+    let mut fresh = false;
     let mut it = args.into_iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -45,6 +49,8 @@ pub(crate) fn run_wait(
             "--badge-only" => evidence = false,
             "--cat" | "--harvest" => cat_pads = true,
             "--task" => task_id = it.next(),
+            "--either" | "--or" => either = true,
+            "--fresh" => fresh = true,
             "--min-bytes" => {
                 min_bytes = it.next().and_then(|v| v.parse().ok()).unwrap_or(1);
             }
@@ -63,7 +69,11 @@ pub(crate) fn run_wait(
                      --cat|--harvest print each pad body after success (fan-in harvest)\n  \
                      --task ID       wait until that task_id is done\n  \
                      --scratchpad [--since-inject|--any-pad] --min-bytes N\n  \
-                     --artifact PATH  --owner none  --ready  --any  --timeout S"
+                     --artifact PATH [--fresh] [--either]  file exists (non-empty); --fresh = written\n  \
+                     after the task was sent; --either = artifact OR the other conditions\n  \
+                     --owner none  --ready  --any  --timeout S\n  \
+                     Fails fast (exit 1) when the pane is gone/exited or --task was superseded,\n  \
+                     unless the artifact is already there."
                 );
                 return 0;
             }
@@ -86,6 +96,43 @@ pub(crate) fn run_wait(
     }
 
     let started = std::time::Instant::now();
+    let wait_started_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    // --fresh reference: when the task was sent (resumed waits still see a
+    // file written before the wait began), else when this wait started.
+    let fresh_since_ms = if fresh {
+        let created = task_id.as_ref().and_then(|tid| {
+            let req = with_identity(
+                ControlRequest::Task {
+                    pane: None,
+                    id: Some(tid.clone()),
+                    scope: None,
+                    from: None,
+                },
+                scope.clone(),
+                from.clone(),
+            );
+            send_request(&req).ok()?.data?.get("created_ms")?.as_u64()
+        });
+        Some(created.unwrap_or(wait_started_ms))
+    } else {
+        None
+    };
+    let artifact_ok = |path: &str| -> bool {
+        artifact_ready(
+            std::fs::metadata(path).ok().as_ref(),
+            min_bytes,
+            fresh_since_ms,
+        )
+    };
+    let has_other = owner.is_some()
+        || status.is_some()
+        || contains.is_some()
+        || scratchpad
+        || ready
+        || task_id.is_some();
     let mut last_screens: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     let mut stable_since: std::collections::HashMap<String, std::time::Instant> =
@@ -180,8 +227,16 @@ pub(crate) fn run_wait(
                 p.get("slug").and_then(|s| s.as_str()) == Some(pane.as_str())
                     || p.get("name").and_then(|s| s.as_str()) == Some(pane.as_str())
             });
+            let art = artifact.as_deref().is_some_and(artifact_ok);
             let Some(row) = row else {
-                continue;
+                if art {
+                    satisfied.push(pane.clone());
+                    continue;
+                }
+                return wait_fail(
+                    json_out,
+                    &format!("no pane '{pane}' (killed, or outside scope?)"),
+                );
             };
 
             let running = row
@@ -189,6 +244,7 @@ pub(crate) fn run_wait(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             let exited = row.get("exited").and_then(|v| v.as_bool()).unwrap_or(false);
+            let asleep = row.get("asleep").and_then(|v| v.as_bool()).unwrap_or(false);
             let o = row.get("owner").and_then(|v| v.as_str()).unwrap_or("none");
             let st = row.get("status").and_then(|v| v.as_str());
             let _pad = row.get("scratchpad").and_then(|v| v.as_str()).unwrap_or("");
@@ -280,10 +336,26 @@ pub(crate) fn run_wait(
                 }
                 want_default = false;
             }
-            if let Some(path) = &artifact {
-                let sz = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-                ok &= sz >= min_bytes;
+            if artifact.is_some() {
                 want_default = false;
+            }
+            // Fail fast instead of timing out on a wait that can't succeed.
+            if !art && (status.is_some() || task_id.is_some()) && (exited || (!running && !asleep))
+            {
+                return wait_fail(json_out, &format!("pane '{pane}' has exited"));
+            }
+            if let (Some(want), false) = (&task_id, art) {
+                let got = row.get("task_id").and_then(|v| v.as_str());
+                if got.is_some_and(|g| g != want) {
+                    return wait_fail(
+                        json_out,
+                        &format!(
+                            "task {want} on '{pane}' was superseded by {} (each send cancels the \
+                             previous task; use note-agent for mid-task notes)",
+                            got.unwrap_or("?")
+                        ),
+                    );
+                }
             }
 
             // Screen contains / ready dialog check — only when needed.
@@ -352,6 +424,13 @@ pub(crate) fn run_wait(
 
             if want_default {
                 ok = running && !exited && o == "none";
+            }
+            if artifact.is_some() {
+                ok = if either && has_other {
+                    ok || art
+                } else {
+                    ok && art
+                };
             }
 
             // Exited pane with status wait fails (unless waiting on exited intentionally)
@@ -656,47 +735,69 @@ pub(crate) fn watch_wake_loop(panes: Vec<String>, tx: std::sync::mpsc::Sender<()
     }
 }
 
-/// After `--wait-ready`, clear known agent boot dialogs.
-pub(crate) fn boot_clear_pane(
-    slug: &str,
-    command: &str,
-    scope: Option<String>,
-    from: Option<String>,
-    json_out: bool,
-) {
-    let profile = crate::agents::guess_profile_from_command(command)
-        .or_else(|| {
-            // also try agent field if new returns it
+/// `--artifact` satisfied: a file of at least `min_bytes`, modified at or
+/// after `since_ms` when given (with 2s slack for coarse mtimes).
+pub(crate) fn artifact_ready(
+    meta: Option<&std::fs::Metadata>,
+    min_bytes: u64,
+    since_ms: Option<u64>,
+) -> bool {
+    let Some(meta) = meta else {
+        return false;
+    };
+    if meta.len() < min_bytes {
+        return false;
+    }
+    let Some(since) = since_ms else {
+        return true;
+    };
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .is_some_and(|d| d.as_millis() as u64 + 2000 >= since)
+}
+
+fn wait_fail(json_out: bool, msg: &str) -> i32 {
+    if json_out {
+        println!("{}", serde_json::json!({"ok": false, "error": msg}));
+    } else {
+        eprintln!("seance ctl wait: {msg}");
+    }
+    1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn artifact_ready_checks_size_and_freshness() {
+        let dir = std::env::temp_dir().join(format!("seance-art-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("r.md");
+        assert!(!artifact_ready(
+            std::fs::metadata(&f).ok().as_ref(),
+            1,
             None
-        })
-        .unwrap_or("");
-    if profile.is_empty() {
-        return;
-    }
-    let seq = crate::agents::boot_clear_sequence(profile);
-    if seq.is_empty() {
-        return;
-    }
-    if !json_out {
-        eprintln!("boot-clear '{slug}' ({profile})…");
-    }
-    for bytes in seq {
-        // settle so the TUI paints the dialog before we answer
-        std::thread::sleep(Duration::from_millis(350));
-        let b64 = base64_encode(&bytes);
-        let req = with_identity(
-            ControlRequest::SendRaw {
-                pane: slug.to_string(),
-                bytes_b64: b64,
-                force: true,
-                scope: None,
-                from: None,
-            },
-            scope.clone(),
-            from.clone(),
+        ));
+        std::fs::write(&f, "").unwrap();
+        let m = std::fs::metadata(&f).unwrap();
+        assert!(
+            !artifact_ready(Some(&m), 1, None),
+            "empty file is not a result"
         );
-        let _ = send_request(&req);
+        std::fs::write(&f, "done").unwrap();
+        let m = std::fs::metadata(&f).unwrap();
+        assert!(artifact_ready(Some(&m), 1, None));
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        assert!(artifact_ready(Some(&m), 1, Some(now - 60_000)));
+        assert!(
+            !artifact_ready(Some(&m), 1, Some(now + 3_600_000)),
+            "a file older than the task is stale"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
-    // re-check ready briefly after clear
-    std::thread::sleep(Duration::from_millis(400));
 }

@@ -140,6 +140,10 @@ pub struct Engine {
     /// workspace → last human input (unix ms). Same durability story; drives
     /// the sidebar's recency sort. Agent/ctl sends deliberately do NOT bump.
     pub workspace_touch_ms: HashMap<String, u64>,
+    /// pane slug → the pane that spawned it via `ctl new` (its
+    /// `$SEANCE_SESSION`). Lets `roster --children`/`--parent` group helper
+    /// panes under their orchestrator. Dropped when the child is killed.
+    pub pane_parents: HashMap<String, String>,
     /// workspace → PR links scraped from pane output (most recent LAST).
     /// Statuses are merged in from the external watcher; see `pr_links.rs`.
     pub pr_links: HashMap<String, Vec<PrLink>>,
@@ -195,6 +199,7 @@ impl Engine {
             frozen_grids: HashMap::new(),
             workspace_output: HashMap::new(),
             workspace_touch_ms: HashMap::new(),
+            pane_parents: HashMap::new(),
             pr_links: HashMap::new(),
             pr_dismissed: HashMap::new(),
             record_tap_log: Vec::new(),
@@ -264,6 +269,7 @@ impl Engine {
             frozen_grids: HashMap::new(),
             workspace_output: HashMap::new(),
             workspace_touch_ms: HashMap::new(),
+            pane_parents: HashMap::new(),
             pr_links: HashMap::new(),
             pr_dismissed: HashMap::new(),
             #[cfg(test)]
@@ -272,6 +278,7 @@ impl Engine {
 
         eng.workspace_output = state.workspace_output.iter().cloned().collect();
         eng.workspace_touch_ms = state.workspace_touch_ms.iter().cloned().collect();
+        eng.pane_parents = state.pane_parents.iter().cloned().collect();
         eng.pr_links = state.pr_links.iter().cloned().collect();
         eng.pr_dismissed = state.pr_dismissed.iter().cloned().collect();
 
@@ -404,6 +411,7 @@ impl Engine {
             // every circle's "time since update" to unknown.
             workspace_output: bundle.workspace_output.into_iter().collect(),
             workspace_touch_ms: bundle.workspace_touch_ms.into_iter().collect(),
+            pane_parents: bundle.pane_parents.into_iter().collect(),
             pr_links: bundle.pr_links.into_iter().collect(),
             pr_dismissed: bundle.pr_dismissed.into_iter().collect(),
             #[cfg(test)]
@@ -583,6 +591,11 @@ impl Engine {
                 .iter()
                 .map(|(k, v)| (k.clone(), *v))
                 .collect(),
+            pane_parents: self
+                .pane_parents
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
             workspace_touch_ms: self
                 .workspace_touch_ms
                 .iter()
@@ -714,6 +727,11 @@ impl Engine {
                 .workspace_output
                 .iter()
                 .map(|(k, v)| (k.clone(), *v))
+                .collect(),
+            pane_parents: self
+                .pane_parents
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
             workspace_touch_ms: self
                 .workspace_touch_ms

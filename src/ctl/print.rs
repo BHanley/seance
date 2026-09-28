@@ -76,6 +76,9 @@ pub(crate) fn print_ok_human(sub: &str, response: &ControlResponse) {
                 if let Some(b) = obj.get("scratchpad_bytes").and_then(|v| v.as_u64()) {
                     parts.push(format!("pad={b}B"));
                 }
+                if let Some(d) = obj.get("delivery").filter(|d| d["confirmed"] == true) {
+                    parts.push(format!("delivered={}", d["via"].as_str().unwrap_or("?")));
+                }
                 if parts.is_empty() {
                     println!("ok");
                 } else {
@@ -201,6 +204,9 @@ pub(crate) fn print_session_rows(arr: &[serde_json::Value]) {
             format!("{ws_label} ({ws_slug})")
         };
         let mut line = format!("{label:<22} {state:<10} owner={owner:<18}");
+        if let Some(act) = str_field(s, "activity").filter(|a| a != "unknown") {
+            line.push_str(&format!(" {act}"));
+        }
         if !status.is_empty() {
             line.push_str(&format!(" status={status}"));
         }
@@ -232,7 +238,19 @@ pub(crate) fn print_session_rows(arr: &[serde_json::Value]) {
 
 /// Render `status` as aligned key/value lines.
 pub(crate) fn print_status(data: &serde_json::Value) {
-    for key in ["name", "workspace", "command", "running", "title"] {
+    for key in [
+        "name",
+        "slug",
+        "workspace",
+        "cwd",
+        "command",
+        "running",
+        "activity",
+        "status",
+        "task_id",
+        "parent",
+        "title",
+    ] {
         if let Some(v) = data.get(key) {
             let rendered = match v {
                 serde_json::Value::String(s) => s.clone(),
@@ -338,9 +356,14 @@ COMMANDS:
          --cwd DIR  --agent NAME  --command CMD  --workspace WS
          --file PATH              file pane (live md/text viewer; no PTY)
          --wait-ready             block until agent TUI accepts inject
-    send PANE TEXT...             paste + submit
+         --task-file PATH         then send a first task (implies --wait-ready)
+         --json                   one line: slug name workspace cwd task_id delivery
+    send PANE TEXT...             new task: paste + submit + confirm delivery
          --file PATH | --stdin    verbatim body (avoids shell $ expansion)
-         --no-submit  --force
+         --no-submit  --force  --retry N  --no-confirm  --confirm-secs S
+    note-agent PANE TEXT...       paste into the CURRENT task (no new task/cancel)
+    handoff PANE [--agent A]      successor in same cwd gets PANE's open task
+         --name NEW  --note TEXT  --keep (don't kill PANE)
     send-raw PANE BYTES           raw PTY bytes (Ctrl-C = $'\\x03')
     read PANE [--lines N]         rendered screen (debug)
     status / kill / scratchpad|pad PANE
@@ -354,7 +377,8 @@ COMMANDS:
     status-set STATE [NOTE]       agent badge
     ask \"Q\" [--choices a,b]       blocking human question
     propose PANE CMD --reason R   ghost command (Enter/Esc)
-    human / brief / roster|stage  focus + dense workspace snapshot
+    human / brief / roster|stage  focus + dense workspace snapshot (activity, quota)
+         roster --parent PANE | --top   helpers spawned by PANE / hide helpers
     commands PANE / last-command PANE [--failed]
     watch [opts]                  stream events
          --kinds a,b  --pane P  --actor A  --since-seq N  --no-catch-up
@@ -368,7 +392,8 @@ COMMANDS:
     wait PANE [opts]              block until condition
          --status done [--cat|--harvest]  --badge-only  --task ID
          --scratchpad [--since-inject|--any-pad] --min-bytes N
-         --artifact PATH  --owner none  --ready  --any  --timeout S
+         --artifact PATH [--fresh] [--either]   result file (OR other conds)
+         --owner none  --ready  --any  --timeout S
     task|inbox [--id ID] [PANE]   durable inject body (default: self)
     doctor                        agent profiles + binary health
     phone [PANE]                  open telegram topic + seed roster/ctl how-to
@@ -382,7 +407,9 @@ FILES: send/note/finish --file is local; new --cwd/--file and wait --artifact ar
 
 EXAMPLES:
     seance ctl new --name w --agent claude --wait-ready
-    seance ctl send w --file /tmp/task.md          # → task=task-N
+    seance ctl new --name w --agent claude --task-file /tmp/t.md --json
+    seance ctl send w --file /tmp/task.md          # → task=task-N delivered=busy
+    seance ctl wait w --task task-N --artifact /abs/r.md --either --fresh
     seance ctl wait w --status done --timeout 600 --cat
     seance ctl wait a b c --status done --cat      # fan-in harvest
     seance ctl task                                # re-read my inject

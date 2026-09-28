@@ -917,6 +917,7 @@ fn dismissals_survive_persist_reload_and_handoff() {
             cmd_log: Default::default(),
             workspace_output: vec![],
             workspace_touch_ms: vec![],
+            pane_parents: vec![],
             pr_links: vec![],
             pr_dismissed: vec![("lab".to_string(), vec![url.to_string()])],
         };
@@ -924,6 +925,66 @@ fn dismissals_survive_persist_reload_and_handoff() {
         let back: crate::runtime::protocol::HandoffBundle = serde_json::from_str(&json).unwrap();
         assert_eq!(back.pr_dismissed, bundle.pr_dismissed);
 
+        let _ = std::fs::remove_dir_all(&scratch);
+    });
+}
+
+#[test]
+fn new_from_a_pane_records_parent_and_status_carries_the_row() {
+    with_test_state_dir("pane-parent", || {
+        let scratch = temp_scratch("pane-parent");
+        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
+        let orch = eng.push_stub_pane("orch", "lab");
+        let doc = scratch.join("notes.md");
+        std::fs::write(&doc, "# notes\n").unwrap();
+        let resp = eng.handle_control(ControlRequest::New {
+            name: "orch".into(), // collides: slug gets suffixed, name kept
+            cwd: None,
+            command: None,
+            workspace: Some("lab".into()),
+            file: Some(doc.to_string_lossy().into()),
+            scope: None,
+            from: Some(orch.clone()),
+        });
+        assert!(resp.ok, "{:?}", resp.error);
+        let data = resp.data.unwrap();
+        let child = data["slug"].as_str().unwrap().to_string();
+        assert_ne!(child, orch);
+        assert_eq!(data["name"], "orch");
+        assert_eq!(data["parent"], orch.as_str());
+        assert!(data.get("cwd").is_some() && data.get("command").is_some());
+
+        // `status` is the full roster row: cwd, parent, activity.
+        let st = eng
+            .handle_control(ControlRequest::Status {
+                pane: child.clone(),
+                scope: None,
+                from: None,
+            })
+            .data
+            .unwrap();
+        assert_eq!(st["parent"], orch.as_str());
+        assert!(st["cwd"].is_string());
+        assert_eq!(st["activity"], "unknown");
+
+        // Survives persist/reload; forgotten when the child dies.
+        eng.persist();
+        let state = crate::state::AppState::load();
+        assert_eq!(state.pane_parents, vec![(child.clone(), orch.clone())]);
+        eng.kill_pane(&child);
+        assert!(eng.pane_parents.is_empty());
+
+        // Outside a pane (or naming no pane) there is no parent.
+        let resp = eng.handle_control(ControlRequest::New {
+            name: "loose".into(),
+            cwd: None,
+            command: None,
+            workspace: Some("lab".into()),
+            file: Some(doc.to_string_lossy().into()),
+            scope: None,
+            from: Some("ghost".into()),
+        });
+        assert!(resp.data.unwrap()["parent"].is_null());
         let _ = std::fs::remove_dir_all(&scratch);
     });
 }

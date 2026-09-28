@@ -48,11 +48,9 @@ fn main() {
 
     let args: Vec<String> = std::env::args().collect();
 
-    if matches!(
-        args.get(1).map(String::as_str),
-        Some("--help") | Some("-h") | Some("help")
-    ) {
-        std::process::exit(ctl::run_ctl(vec!["--help".into()]));
+    if wants_top_help(&args) {
+        print_top_help();
+        return;
     }
 
     // `seance --version` / `-V` / `version` — never open the GUI.
@@ -554,5 +552,72 @@ fn chrono_lite_stamp() -> String {
             tm.tm_min,
             tm.tm_sec
         )
+    }
+}
+
+/// `--help`/`-h` anywhere must print usage and exit — never fall through to
+/// a verb. `seance upgrade --help` used to upgrade the daemon, `restart-gui
+/// --help` killed the GUI, and `seance --help` from an agent's shell opened
+/// the app and hung its caller. `ctl`, `web` and `replay` own their help.
+fn wants_top_help(args: &[String]) -> bool {
+    let first = args.get(1).map(String::as_str);
+    if matches!(first, Some("--help" | "-h" | "help")) {
+        return true;
+    }
+    !matches!(first, Some("ctl" | "web" | "replay"))
+        && args[1..].iter().any(|a| a == "--help" || a == "-h")
+}
+
+fn print_top_help() {
+    println!(
+        "seance {} — human + agent co-working terminals
+
+USAGE:
+    seance                      open the app (local daemon, or the saved remote host)
+    seance --local | --remote HOST
+    seance ctl <command> …      control plane (`seance ctl help`, `seance ctl skill`)
+    seance web [--help]         websocket bridge + web client
+    seance replay [--help]      export / list / edit session recordings
+    seance upgrade              hot-swap the daemon binary; sessions survive
+    seance restart-gui          restart only the GUI; daemon + sessions stay up
+    seance daemon               run the session daemon in the foreground
+    seance --version",
+        env!("CARGO_PKG_VERSION")
+    );
+}
+
+#[cfg(test)]
+mod top_help_tests {
+    use super::wants_top_help;
+
+    fn argv(v: &[&str]) -> Vec<String> {
+        std::iter::once("seance")
+            .chain(v.iter().copied())
+            .map(String::from)
+            .collect()
+    }
+
+    #[test]
+    fn help_anywhere_never_reaches_a_verb() {
+        for a in [
+            &["--help"][..],
+            &["-h"],
+            &["help"],
+            &["upgrade", "--help"],
+            &["restart-gui", "-h"],
+            &["daemon", "--help"],
+            &["--remote", "host", "--help"],
+        ] {
+            assert!(wants_top_help(&argv(a)), "{a:?}");
+        }
+        for a in [
+            &[][..],
+            &["ctl", "send", "--help"],
+            &["web", "--help"],
+            &["replay", "-h"],
+            &["upgrade"],
+        ] {
+            assert!(!wants_top_help(&argv(a)), "{a:?}");
+        }
     }
 }
