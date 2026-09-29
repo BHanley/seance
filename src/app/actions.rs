@@ -71,38 +71,18 @@ pub struct ActUnpinWorkspace(pub String);
 pub struct ActRenamePane(pub String);
 
 /// Prompt injected by the one-click "arm" action — orients an agent in a
-/// seance pane so it uses the control plane instead of flying blind.
+/// seance pane so it uses the control plane instead of flying blind. A thin
+/// pointer to `seance ctl skill` on purpose: the contract lives in one place.
+/// Panes that load the skill at session start (docs/CONTROL.md, "Agent
+/// skill") never need arming.
 pub(crate) const SEANCE_ARM_PROMPT: &str = "\
 You are inside **seance** — a shared live workspace where humans and agents \
 work in the open. Every pane is on my screen; visibility is the point.
 
-Your environment already has:
-- `$SEANCE_SESSION` — this pane's id
-- `$SEANCE_WORKSPACE` — circle **slug** (`seance ctl` is scoped to it). Stable: \
-  renaming a circle changes its label, not this. `ctl whoami` is the authority.
-- `$SEANCE_SCRATCHPAD` — notes we share (I flip this pane to read them)
-- `$SEANCE_SOCKET` — control socket
-
-Please:
-1. Run `seance ctl skill` and internalize the engagement protocol
-2. Use `seance ctl` to discover/spawn/drive sibling panes in this workspace
-3. Prefer `propose` (ghost text I approve) and `ask` (blocking choices) over silent risk
-4. Report status (`status-set working|blocked|needs-human|done`) so I can triage
-5. Write durable notes to `$SEANCE_SCRATCHPAD` — screens scroll away
-
-**File / markdown panes (critical):**
-To put a document on my screen as a live viewer, spawn a **file pane**, not a \
-shell with bat/less/watch:
-
-  seance ctl new --name notes --file /absolute/or/relative/path.md
-
-- `.md` renders as markdown and auto-refreshes on mtime (history ◀/▶ built-in).
-- Do **NOT** use `new --command 'bat …'` or `watch` loops for docs — those are \
-  terminal panes; I want the native file viewer.
-- Then **edit the file on disk** (Write/Edit tools). Do not `ctl send` into a \
-  file pane (no PTY). Re-`read` the path yourself; the human sees the pane update.
-- Wrong: `new --name x --command \"bash -c 'while true; do clear; bat f; sleep 1; done'\"`
-- Right:  `new --name x --file \"$PWD/path/to/f.md\"`
+Run `seance ctl whoami` (your pane and circle) and `seance ctl skill` (the \
+engagement protocol: driving sibling panes, talking to other circles, status, \
+scratchpads, file panes), and follow that protocol from now on. The skill ships \
+with seance, so it is always current; re-run it after a context reset.
 
 Confirm you're oriented and ready, then wait for the next instruction.";
 

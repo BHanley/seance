@@ -48,6 +48,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   - `wait --artifact PATH --either --fresh` returns when a result file lands
     *or* the task is finished. `wait` now fails fast when the pane is gone or
     exited, or when `--task` was superseded, instead of timing out.
+- `ctl skill` gains "Talking to another circle": circle labels vs slugs, the
+  lead pane, `note-agent` for questions, and replying to your pane
+  (`$SEANCE_SESSION`), never your circle slug (a misrouted reply on 09-29
+  came from exactly that). The ⚡ arm prompt is now a pointer to `ctl skill`;
+  docs/CONTROL.md shows how to load the skill at session start instead.
 - **Send queue** (`ctl send --queue`): a busy pane gets the task as `queued`,
   and the daemon delivers it once the pane is idle, with the same delivery
   confirmation. Without `--queue`, `send` to a busy pane is refused up front

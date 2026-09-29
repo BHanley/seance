@@ -343,6 +343,16 @@ Three ways to arm an agent (any CLI with shell access — not vendor-specific):
 1. Tell it: *run `seance ctl skill` and follow those instructions*
 2. Inject: `seance ctl send PANE "$(seance ctl skill)"` (or the ⚡ arm control)
 3. Paste the output into whatever system/context file that agent reads
+4. **Never arm by hand** — load it at session start, gated on `$SEANCE_SESSION`
+   so sessions outside seance are untouched:
+   - Claude Code: a `SessionStart` hook (matcher `startup|resume|clear|compact`,
+     so it survives `/clear` and compaction) in `~/.claude/settings.json` that
+     prints `seance ctl whoami` + `seance ctl skill` when `$SEANCE_SESSION` is
+     set. Hook stdout becomes session context.
+   - Codex: a gated paragraph in `~/.codex/AGENTS.md` telling it to run
+     `seance ctl whoami` and `seance ctl skill` first when `SEANCE_SESSION` is
+     set (Codex has no session-start hook).
+   zack's setup: `vita/scripts/seance_session_context.sh`.
 
 Default `new` pane command is a **shell** (human can always take the keyboard).
 Pass `--command claude` / `codex` / `grok` / … for an agent worker.

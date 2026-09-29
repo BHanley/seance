@@ -125,6 +125,25 @@ oldest first) · `task_id` / `task_status` (current, else latest task) ·
 open · done · cancelled · failed. `task --id T --json` adds `supersedes`,
 `delivery`, `note`.
 
+### Talking to another circle (another session)
+
+The human names circles by their **label** (what the sidebar shows, e.g.
+"paceline-arch-impl"). A circle's first pane is its lead — the session you
+talk to. Circle slugs and pane slugs look alike (`claude-27`) but are
+**different namespaces**: `ctl send` takes a PANE.
+
+```bash
+seance ctl list --all --json    # workspace_name = label, workspace = circle slug, slug = pane
+```
+
+- Resolve the label to its circle, then send to that circle's lead **pane** slug.
+- Use `note-agent` (not `send`) for questions and FYIs to a session that has
+  its own work: `send` opens a task and cancels the one it is running.
+- Your reply address is your **pane**, `$SEANCE_SESSION` — never
+  `$SEANCE_WORKSPACE` (that is your circle slug; as a pane id it can name
+  someone else's pane). Say it in full: "reply with
+  `seance ctl note-agent --all <your pane> …`".
+
 ### File / markdown panes (show a document live — NOT a shell)
 
 When the human should **see a file render on the stage** (meeting notes, design
@@ -171,7 +190,7 @@ which one you are in.
 ### Co-presence
 
 Human keys always steal. Inject denied 3s after human input unless `release`/`--force`.
-Exit → tombstone + status idle until `kill`.
+A pane whose process exits is closed automatically.
 
 ### Rules
 
