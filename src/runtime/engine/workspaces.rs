@@ -122,12 +122,17 @@ impl Engine {
     /// Returns the resolved slug, or `None` when `key` names nothing.
     pub fn rename_workspace(&mut self, key: &str, new_label: &str) -> Option<String> {
         let slug = self.resolve_workspace(key)?;
+        let old = self.workspace_label(&slug);
         let label = new_label.trim();
         if label.is_empty() || label == slug {
             self.workspace_names.remove(&slug);
         } else {
             self.workspace_names.insert(slug.clone(), label.to_string());
         }
+        // Not a migration: identity stays on the slug. The old label keeps
+        // resolving as an alias, and whoever talks to this circle is told.
+        let new = self.workspace_label(&slug);
+        self.on_circle_renamed(&slug, &old, &new);
         Some(slug)
     }
 

@@ -365,6 +365,11 @@ COMMANDS:
          --queue                  busy pane? queue it; daemon delivers when idle
     note-agent PANE TEXT...       paste into the CURRENT task (no new task/cancel)
          --interrupt              queued behind a turn? interrupt the turn to deliver
+    ask --to CIRCLE TEXT...       ask another session; prints its answer (exit 5 = none yet)
+         --file|--stdin  --no-wait  --timeout S   (CIRCLE: label, slug, @name, pane:slug)
+    tell CIRCLE TEXT...           one-way note to another session (not a task)
+    reply ID TEXT...|<<EOF        answer a question you received (routes back by id)
+    await ID  ·  messages [--circle C|--pane P]  ·  lead [CIRCLE] [--set PANE]  ·  contacts
     handoff PANE [--agent A]      successor in same cwd gets PANE's open task
          --name NEW  --note TEXT  --keep (don't kill PANE)
     send-raw PANE BYTES           raw PTY bytes (Ctrl-C = $'\\x03')

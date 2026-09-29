@@ -2,7 +2,7 @@
 
 use super::helpers::now_ms;
 use super::*;
-use crate::control::ControlRequest;
+use crate::control::{ControlRequest, ControlResponse};
 use std::path::PathBuf;
 
 pub(super) fn with_test_state_dir<T>(tag: &str, f: impl FnOnce() -> T) -> T {
@@ -918,6 +918,7 @@ fn dismissals_survive_persist_reload_and_handoff() {
             workspace_output: vec![],
             workspace_touch_ms: vec![],
             pane_parents: vec![],
+            comms: Default::default(),
             pr_links: vec![],
             pr_dismissed: vec![("lab".to_string(), vec![url.to_string()])],
         };
@@ -1048,6 +1049,247 @@ fn queued_send_leaves_the_running_task_alone_and_fail_rolls_back() {
         eng.kill_pane(&w);
         assert!(eng.pump_send_queue(now_ms()));
         assert_eq!(eng.tasks[&q2].status, "cancelled");
+        let _ = std::fs::remove_dir_all(&scratch);
+    });
+}
+
+/// Two circles the way the 2026-09-29 misroute had them: circle `claude-27`
+/// ("paceline-desk", lead `claude-21`) and a pane that happens to be called
+/// `claude-27` in another circle ("cadence-slack").
+fn comms_fixture(tag: &str) -> (Engine, PathBuf) {
+    let scratch = temp_scratch(tag);
+    let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
+    for (pane, ws) in [
+        ("claude-21", "claude-27"),
+        ("helper", "claude-27"),
+        ("claude-38", "claude-47"),
+        ("claude-27", "claude-3"),
+    ] {
+        eng.push_stub_pane(pane, ws);
+        eng.note_born(pane);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    eng.rename_workspace("claude-27", "paceline-desk");
+    eng.rename_workspace("claude-47", "paceline-arch-impl");
+    eng.rename_workspace("claude-3", "cadence-slack");
+    eng.comms.messages.clear();
+    (eng, scratch)
+}
+
+fn msg(eng: &mut Engine, from: &str, to: &str, kind: &str, text: &str) -> ControlResponse {
+    eng.handle_control(ControlRequest::MsgSend {
+        to: to.into(),
+        text: text.into(),
+        kind: kind.into(),
+        scope: None,
+        from: Some(from.into()),
+    })
+}
+
+#[test]
+fn circles_resolve_by_label_to_their_first_pane_and_collisions_are_refused() {
+    with_test_state_dir("comms-resolve", || {
+        let (mut eng, scratch) = comms_fixture("comms-resolve");
+        assert_eq!(
+            eng.effective_lead("claude-27").as_deref(),
+            Some("claude-21")
+        );
+        let t = eng.resolve_target("paceline-arch-impl").unwrap();
+        assert_eq!(
+            (t.pane.as_str(), t.circle.as_deref()),
+            ("claude-38", Some("claude-47"))
+        );
+        assert_eq!(
+            eng.resolve_target("@paceline-desk").unwrap().pane,
+            "claude-21"
+        );
+        // The misroute: `claude-27` is a circle slug AND another circle's pane.
+        let e = eng.resolve_target("claude-27").unwrap_err();
+        assert!(e.contains("ambiguous") && e.contains("@claude-27"), "{e}");
+        assert_eq!(eng.resolve_target("@claude-27").unwrap().pane, "claude-21");
+        assert_eq!(
+            eng.resolve_target("pane:claude-27").unwrap().pane,
+            "claude-27"
+        );
+        // ...and the same guard on plain pane ops (send/read/status, unscoped).
+        let st = eng.handle_control(ControlRequest::Status {
+            pane: "claude-27".into(),
+            scope: None,
+            from: None,
+        });
+        assert!(st.error.unwrap_or_default().contains("ambiguous"));
+        let st = eng.handle_control(ControlRequest::Status {
+            pane: "@paceline-desk".into(),
+            scope: None,
+            from: None,
+        });
+        assert_eq!(st.data.unwrap()["slug"], "claude-21");
+        // Explicit lead overrides first-pane.
+        let r = eng.handle_control(ControlRequest::Lead {
+            workspace: Some("paceline-desk".into()),
+            pane: Some("helper".into()),
+            scope: None,
+            from: None,
+        });
+        assert_eq!(r.data.unwrap()["lead"], "helper");
+        assert_eq!(eng.resolve_target("paceline-desk").unwrap().pane, "helper");
+        let _ = std::fs::remove_dir_all(&scratch);
+    });
+}
+
+#[test]
+fn ask_is_not_a_task_and_reply_routes_back_by_id() {
+    with_test_state_dir("comms-ask", || {
+        let (mut eng, scratch) = comms_fixture("comms-ask");
+        let running = eng.begin_task("claude-38", "long job");
+        let r = msg(
+            &mut eng,
+            "claude-21",
+            "paceline-arch-impl",
+            "ask",
+            "which option?",
+        );
+        let d = r.data.unwrap_or_else(|| panic!("{:?}", r.error));
+        let id = d["id"].as_str().unwrap().to_string();
+        assert_eq!(d["to_pane"], "claude-38");
+        // Not a task: the recipient's running task is untouched.
+        assert_eq!(eng.tasks[&running].status, "open");
+        assert_eq!(eng.message(&id).unwrap().status, "pending");
+        assert_eq!(eng.pending_message_for("claude-38"), Some(id.clone()));
+        let pasted = eng.message_paste_text(eng.message(&id).unwrap());
+        assert!(
+            pasted.contains(&format!("seance ctl reply {id}")) && pasted.contains("paceline-desk")
+        );
+
+        // Asker not waiting: the reply is queued for the ASKER's pane — the
+        // id carries the return address; nobody typed one.
+        let r = eng.handle_control(ControlRequest::MsgReply {
+            id: id.clone(),
+            text: "pick (a)".into(),
+            scope: None,
+            from: Some("claude-38".into()),
+        });
+        assert!(r.ok, "{:?}", r.error);
+        let m = eng.message(&id).unwrap();
+        assert_eq!(
+            (m.status.as_str(), m.answer.as_deref()),
+            ("answered", Some("pick (a)"))
+        );
+        assert_eq!(
+            eng.pending_message_for("claude-21")
+                .map(|r| eng.message(&r).unwrap().kind.clone()),
+            Some("reply".into())
+        );
+        assert!(
+            eng.pending_message_for("claude-27").is_none(),
+            "cadence-slack gets nothing"
+        );
+        // Answering twice is refused.
+        assert!(eng
+            .reply_to_message(&id, "again", Some("claude-38"))
+            .is_err());
+
+        // A caller blocked on the answer gets it on stdout; nothing is pasted.
+        let r = msg(
+            &mut eng,
+            "claude-21",
+            "paceline-arch-impl",
+            "ask",
+            "second?",
+        );
+        let id2 = r.data.unwrap()["id"].as_str().unwrap().to_string();
+        eng.handle_control(ControlRequest::MsgGet {
+            id: id2.clone(),
+            waiting: true,
+            scope: None,
+            from: None,
+        });
+        let v = eng
+            .reply_to_message(&id2, "yes", Some("claude-38"))
+            .unwrap();
+        assert_eq!(v["to_waiting_caller"], true);
+        assert!(v["pasted"].is_null());
+        // tell can't be replied to; your own pane is refused.
+        let t = msg(&mut eng, "claude-21", "paceline-arch-impl", "tell", "fyi");
+        let tid = t.data.unwrap()["id"].as_str().unwrap().to_string();
+        assert!(eng.reply_to_message(&tid, "x", None).is_err());
+        assert!(msg(&mut eng, "claude-21", "pane:claude-21", "tell", "me")
+            .error
+            .is_some());
+        let _ = std::fs::remove_dir_all(&scratch);
+    });
+}
+
+#[test]
+fn contacts_hear_about_renames_and_lead_changes_and_old_labels_still_work() {
+    with_test_state_dir("comms-contacts", || {
+        let (mut eng, scratch) = comms_fixture("comms-contacts");
+        msg(&mut eng, "claude-21", "paceline-arch-impl", "tell", "hello");
+        eng.comms.messages.clear();
+
+        eng.rename_workspace("paceline-arch-impl", "v2-realtime");
+        let notices: Vec<_> = eng
+            .comms
+            .messages
+            .iter()
+            .filter(|m| m.kind == "notice")
+            .collect();
+        assert_eq!(
+            notices.len(),
+            1,
+            "only the contact, not the circle's own panes"
+        );
+        assert_eq!(notices[0].to_pane, "claude-21");
+        assert!(notices[0].text.contains(
+            "\"paceline-arch-impl\" (one you have talked to) is now called \"v2-realtime\""
+        ));
+        // The old label still resolves, and says so.
+        let t = eng.resolve_target("paceline-arch-impl").unwrap();
+        assert_eq!(t.pane, "claude-38");
+        assert!(t.note.unwrap().contains("renamed to 'v2-realtime'"));
+        // A second rename replaces the undelivered notice rather than stacking.
+        eng.rename_workspace("v2-realtime", "v2");
+        assert_eq!(
+            eng.comms
+                .messages
+                .iter()
+                .filter(|m| m.kind == "notice")
+                .count(),
+            1
+        );
+
+        // Lead closes: contacts are told, circle-addressed mail re-routes.
+        eng.comms.messages.clear();
+        eng.push_stub_pane("second", "claude-47");
+        eng.note_born("second");
+        let pending = msg(&mut eng, "claude-21", "v2", "ask", "still there?");
+        let pid = pending.data.unwrap()["id"].as_str().unwrap().to_string();
+        // Delivered but unanswered when the lead closes: re-asked of the new lead.
+        let asked = msg(&mut eng, "claude-21", "v2", "ask", "answered yet?");
+        let aid = asked.data.unwrap()["id"].as_str().unwrap().to_string();
+        eng.message_mut(&aid).unwrap().status = "delivered".into();
+        eng.kill_pane("claude-38");
+        assert_eq!(eng.message(&pid).unwrap().to_pane, "second");
+        let a = eng.message(&aid).unwrap();
+        assert_eq!(
+            (a.to_pane.as_str(), a.status.as_str()),
+            ("second", "pending")
+        );
+        assert!(eng.comms.messages.iter().any(|m| m.kind == "notice"
+            && m.to_pane == "claude-21"
+            && m.text.contains("pane second leads it now")));
+        // A pane addressed directly (not via its circle) fails instead.
+        let direct = msg(&mut eng, "claude-21", "pane:second", "tell", "x");
+        let did = direct.data.unwrap()["id"].as_str().unwrap().to_string();
+        eng.kill_pane("second");
+        assert_eq!(eng.message(&did).unwrap().status, "failed");
+        // The sender closing drops it from every contact list.
+        eng.kill_pane("claude-21");
+        assert!(eng
+            .comms
+            .contacts
+            .values()
+            .all(|s| !s.contains("claude-21")));
         let _ = std::fs::remove_dir_all(&scratch);
     });
 }

@@ -86,7 +86,15 @@ pub(super) fn claude_session_arg(command: &str, cwd_raw: &str, session: &str) ->
 }
 
 impl Engine {
+    /// Spawn a pane (terminal or file). Records its birth, which decides
+    /// who leads a circle (comms.rs).
     pub fn spawn(&mut self, spec: SpawnSpec) -> Result<String> {
+        let slug = self.spawn_pane(spec)?;
+        self.note_born(&slug);
+        Ok(slug)
+    }
+
+    fn spawn_pane(&mut self, spec: SpawnSpec) -> Result<String> {
         let name = if spec.name.trim().is_empty() {
             "session".into()
         } else {
@@ -364,6 +372,8 @@ impl Engine {
 
     pub fn kill_pane(&mut self, slug: &str) {
         if let Some(idx) = self.panes.iter().position(|p| p.slug == slug) {
+            let circle = self.panes[idx].workspace.clone();
+            let was_lead = self.effective_lead(&circle).as_deref() == Some(slug);
             let mut pane = self.panes.remove(idx);
             let workspace = pane.workspace.clone();
             if let Some(s) = pane.session.take() {
@@ -382,6 +392,8 @@ impl Engine {
             // Last pane gone and nobody created this circle on purpose → drop
             // the row (order/clocks/pr_links/subscriptions) instead of leaving
             // an empty one in both sidebars.
+            // Before the prune: notices name the circle by its label.
+            self.on_pane_closed(slug, &circle, was_lead);
             self.prune_workspace_if_empty(&workspace);
             events::log("daemon", None, Some(slug), "pane_killed", "killed".into());
         }

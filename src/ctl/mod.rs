@@ -4,6 +4,7 @@
 //! defined in [`crate::control`]. See crate-level docs on the original module.
 
 mod agentops;
+mod comms;
 mod deliver;
 mod identity;
 mod parse;
@@ -127,22 +128,30 @@ open · done · cancelled · failed. `task --id T --json` adds `supersedes`,
 
 ### Talking to another circle (another session)
 
-The human names circles by their **label** (what the sidebar shows, e.g.
-"paceline-arch-impl"). A circle's first pane is its lead — the session you
-talk to. Circle slugs and pane slugs look alike (`claude-27`) but are
-**different namespaces**: `ctl send` takes a PANE.
+Circles are addressed by the **label** the human uses (what the sidebar
+shows, e.g. "paceline-arch-impl"); a circle's **lead** (its first pane, or
+`ctl lead CIRCLE --set PANE`) receives. Messages are **not tasks**: they never
+open or cancel the recipient's work, and a busy agent gets them behind its turn.
 
 ```bash
-seance ctl list --all --json    # workspace_name = label, workspace = circle slug, slug = pane
+seance ctl ask --to paceline-arch-impl "does v2 touch group_commands.rb?"
+#   blocks and prints their answer. Long wait? run it in the background (you
+#   are woken when it exits), or add --no-wait: the answer is then pasted into
+#   your pane when it comes (`seance ctl await m-N` also fetches it).
+seance ctl tell paceline-desk "FYI: #23997 now carries the guard"   # no reply expected
+seance ctl reply m-42 --stdin < answer.md    # answer a question you received
+seance ctl messages     # your recent traffic; also `lead CIRCLE`, `contacts`
 ```
 
-- Resolve the label to its circle, then send to that circle's lead **pane** slug.
-- Use `note-agent` (not `send`) for questions and FYIs to a session that has
-  its own work: `send` opens a task and cancels the one it is running.
-- Your reply address is your **pane**, `$SEANCE_SESSION` — never
-  `$SEANCE_WORKSPACE` (that is your circle slug; as a pane id it can name
-  someone else's pane). Say it in full: "reply with
-  `seance ctl note-agent --all <your pane> …`".
+- A question reaches you as `📨 seance m-42 — question from …`. **Answer with
+  `seance ctl reply m-42`**: it routes back by id. Never hand-address a reply
+  and never `send` one (that opens a task in the asker's pane and cancels theirs).
+- Addresses: label, slug or `@name` = a circle (goes to its lead); `pane:slug`
+  = one pane. A bare name that is both a pane and another circle is refused;
+  say which. An old label still works after a rename, with a warning.
+- You are told (`📇 seance notice`) when a circle you talk to is renamed or its
+  lead closes.
+- Your own circle's workers: `send` tasks / `note-agent`, as above.
 
 ### File / markdown panes (show a document live — NOT a shell)
 
@@ -176,6 +185,7 @@ viewer vs process. Roster `kind` is `file` vs `terminal`.
 - `new --agent claude|grok|codex|shell`  (+ `--wait-ready`)
 - `new --file PATH` — **file pane** (live markdown/text viewer; no shell)
 - `send --file|--stdin` · `note-agent` · `handoff` · `send-raw` · `read` (debug)
+- `ask --to CIRCLE` · `tell` · `reply ID` · `await ID` · `messages` · `lead` · `contacts`
 - `pad [PANE] --cat` · `note` · `finish` · `status-set` · `task`/`inbox`
 - `roster`/`stage` · `brief` · `human` · `wait` · `watch` · `doctor`
 - `propose` (ghost cmd) · `ask` · `seize`/`release`/`drive`
@@ -312,7 +322,15 @@ fn run_local(args: Vec<String>) -> i32 {
         "scratchpad" | "pad" => parse_scratchpad(sub_args),
         "timeline" | "tl" => parse_timeline(sub_args),
         "status-set" => parse_status_set(sub_args),
+        // `ask --to X` asks another session; plain `ask "Q"` asks the human.
+        "ask" if sub_args.iter().any(|a| a == "--to") => return comms::run_ask_to(sub_args, &ctx),
         "ask" => parse_ask(sub_args),
+        "tell" => return comms::run_tell(sub_args, &ctx),
+        "reply" => return comms::run_reply(sub_args, &ctx),
+        "await" => return comms::run_await(sub_args, &ctx),
+        "messages" | "msgs" => return comms::run_messages(sub_args, &ctx),
+        "lead" => return comms::run_lead(sub_args, &ctx),
+        "contacts" => return comms::run_contacts(sub_args, &ctx),
         "propose" => parse_propose(sub_args),
         "propose-result" => match sub_args.first() {
             Some(id) => Ok(ControlRequest::ProposeResult {

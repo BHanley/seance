@@ -234,6 +234,9 @@ accepted but delivery not confirmed.
 | `send` | `seance ctl send PANE TEXT...` `[--file PATH\|--stdin] [--no-submit] [--force] [--retry N] [--no-confirm]` → `task_id` + `delivery` |
 | `note-agent` | `seance ctl note-agent PANE TEXT...` `[--file\|--stdin]` — into the current task, no new task |
 | `handoff` | `seance ctl handoff PANE [--agent claude] [--name N] [--note T] [--keep]` |
+| `ask --to` | `seance ctl ask --to CIRCLE TEXT` `[--file\|--stdin] [--no-wait] [--timeout S]` → answer on stdout (docs/COMMS.md) |
+| `tell` / `reply` / `await` | `tell CIRCLE TEXT` · `reply ID TEXT` · `await ID` |
+| `messages` / `lead` / `contacts` | `messages [--circle C\|--pane P]` · `lead [CIRCLE] [--set PANE]` · `contacts [PANE]` |
 | `send-raw` | `seance ctl send-raw PANE BYTES` |
 | `read` | `seance ctl read PANE [--lines N]` (debug) |
 | `status` / `kill` | `seance ctl status\|kill PANE` |

@@ -55,6 +55,24 @@ impl Ctx {
         }
     }
 
+    pub(super) fn call_public(&self, req: ControlRequest) -> Result<Value, i32> {
+        self.call(req)
+    }
+
+    pub(super) fn fail_public(&self, code: i32, msg: &str) -> i32 {
+        self.fail(code, msg, None)
+    }
+
+    /// Success: `data` as one JSON line under `--json`, else `human()`.
+    pub(super) fn done_public(&self, human: impl FnOnce(), data: Value) -> i32 {
+        if self.json {
+            println!("{}", json!({"ok": true, "data": data}));
+        } else {
+            human();
+        }
+        0
+    }
+
     /// Round-trip without reporting errors (best-effort follow-ups).
     fn call_quiet(&self, req: ControlRequest) -> Option<Value> {
         let req = with_identity(req, self.scope.clone(), self.from.clone());

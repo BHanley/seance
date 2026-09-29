@@ -92,6 +92,8 @@ pub struct HandoffBundle {
     /// pane slug → spawning pane slug (`ctl new` from inside a pane).
     #[serde(default)]
     pub pane_parents: Vec<(String, String)>,
+    #[serde(default)]
+    pub comms: CommsState,
     /// workspace → scraped PR links (0.13 — survive upgrade).
     #[serde(default)]
     pub pr_links: Vec<(String, Vec<crate::runtime::protocol::PrLink>)>,
@@ -100,4 +102,70 @@ pub struct HandoffBundle {
     /// dismissal that dies with the process un-dismisses itself in seconds.
     #[serde(default)]
     pub pr_dismissed: Vec<(String, Vec<String>)>,
+}
+
+/// Cross-session communication state (docs/COMMS.md): who leads each circle,
+/// what circles used to be called, who talks to whom, and the messages
+/// themselves. Daemon-owned and persisted (state.json + upgrade handoff).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct CommsState {
+    /// circle slug → pane slug set by `ctl lead` (else the first pane leads).
+    #[serde(default)]
+    pub leads: std::collections::BTreeMap<String, String>,
+    /// circle slug → labels it had before, oldest first (rename aliases).
+    #[serde(default)]
+    pub former_labels: std::collections::BTreeMap<String, Vec<String>>,
+    /// circle slug → panes (outside it) that have talked to it; they get a
+    /// notice when it is renamed or its lead closes.
+    #[serde(default)]
+    pub contacts: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+    /// pane slug → spawn time (ms); the earliest pane of a circle leads it.
+    #[serde(default)]
+    pub born: std::collections::BTreeMap<String, u64>,
+    #[serde(default)]
+    pub messages: Vec<MessageRecord>,
+    #[serde(default)]
+    pub counter: u64,
+}
+
+/// One message between sessions (`ctl ask --to` / `tell` / `reply`, and
+/// daemon notices). Never a task: delivering it opens and cancels nothing.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct MessageRecord {
+    pub id: String,
+    /// ask | tell | reply | notice
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_pane: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_circle: Option<String>,
+    pub to_pane: String,
+    /// Set when addressed to a circle (delivered to its lead; re-routed to the
+    /// new lead if that pane closes first).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_circle: Option<String>,
+    pub text: String,
+    pub created_ms: u64,
+    /// pending | delivered | answered | failed
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<String>,
+    /// reply: the ask it answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answered_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answered_ms: Option<u64>,
+    /// Last time a `ctl ask`/`await` was blocked on this ask (ms). A reply
+    /// while someone is waiting goes to their stdout, not into their pane.
+    #[serde(default)]
+    pub waiter_seen_ms: u64,
+    /// notice: the circle it is about (newer notices replace older ones).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub about: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }

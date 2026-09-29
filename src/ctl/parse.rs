@@ -195,6 +195,46 @@ pub(crate) fn with_identity(
             scope,
             from,
         },
+        MsgSend { to, text, kind, .. } => MsgSend {
+            to,
+            text,
+            kind,
+            scope,
+            from,
+        },
+        MsgReply { id, text, .. } => MsgReply {
+            id,
+            text,
+            scope,
+            from,
+        },
+        MsgGet { id, waiting, .. } => MsgGet {
+            id,
+            waiting,
+            scope,
+            from,
+        },
+        MsgList {
+            pane,
+            circle,
+            limit,
+            ..
+        } => MsgList {
+            pane,
+            circle,
+            limit,
+            scope,
+            from,
+        },
+        Lead {
+            workspace, pane, ..
+        } => Lead {
+            workspace,
+            pane,
+            scope,
+            from,
+        },
+        Contacts { pane, .. } => Contacts { pane, scope, from },
         SendRaw {
             pane,
             bytes_b64,

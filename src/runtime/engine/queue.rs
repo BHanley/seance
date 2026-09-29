@@ -31,9 +31,17 @@ pub const IDLE_SETTLE_MS: u64 = 1500;
 const CONFIRM_WINDOW_MS: u64 = 15_000;
 const STUCK_ENTER_MS: u64 = 1200;
 
+/// What is being delivered: a queued task, or a message (comms.rs).
+enum Payload {
+    Task(String),
+    Message(String),
+}
+
 /// A delivery waiting for confirmation.
 pub struct Inflight {
-    task: String,
+    what: Payload,
+    /// The pasted text (what the judge looks for on screen).
+    text: String,
     before: Look,
     started_ms: u64,
     stuck_since: Option<u64>,
@@ -174,6 +182,7 @@ impl Engine {
                 .map(|t| t.pane.clone())
                 .collect();
             v.extend(self.send_queue.inflight.keys().cloned());
+            v.extend(self.panes_with_pending_messages());
             v.sort();
             v.dedup();
             v
@@ -202,8 +211,10 @@ impl Engine {
             };
             if self.send_queue.inflight.contains_key(&slug) {
                 changed |= self.advance_inflight(idx, &slug, look, now);
-            } else {
+            } else if !self.queued_for(&slug).is_empty() {
                 changed |= self.maybe_deliver(idx, &slug, look, now);
+            } else {
+                changed |= self.maybe_deliver_message(idx, &slug, look, now);
             }
         }
         changed
@@ -239,11 +250,12 @@ impl Engine {
             return false;
         }
         self.send_queue.idle_since.remove(slug);
-        self.inject_task(idx, body, true, &act, Some(tid.clone()));
+        self.inject_task(idx, body.clone(), true, &act, Some(tid.clone()));
         self.send_queue.inflight.insert(
             slug.to_string(),
             Inflight {
-                task: tid,
+                what: Payload::Task(tid),
+                text: body,
                 before: look,
                 started_ms: now,
                 stuck_since: None,
@@ -254,15 +266,100 @@ impl Engine {
         true
     }
 
+    /// Paste the pane's oldest pending message (ask / tell / reply /
+    /// notice). Unlike a queued task it does not wait for idle: a busy agent
+    /// takes it behind its running turn. Never opens or cancels a task.
+    fn maybe_deliver_message(&mut self, idx: usize, slug: &str, look: Look, now: u64) -> bool {
+        let Some(mid) = self.pending_message_for(slug) else {
+            return false;
+        };
+        match self.message_can_land(idx, look.activity) {
+            Some(true) => {}
+            Some(false) => return false,
+            None => {
+                if let Some(m) = self.message_mut(&mid) {
+                    m.status = "failed".into();
+                    m.note = Some(format!(
+                        "pane {slug} is not an agent session (nothing there to read it)"
+                    ));
+                }
+                return true;
+            }
+        }
+        let Some(m) = self.message(&mid).cloned() else {
+            return false;
+        };
+        let act = m
+            .from_pane
+            .as_ref()
+            .map(|p| format!("agent:{p}"))
+            .unwrap_or_else(|| "cli".into());
+        if self.panes[idx].agency.may_inject(&act, false).is_err() {
+            return false;
+        }
+        let text = self.message_paste_text(&m);
+        if let Some(session) = self.panes[idx].session.as_ref() {
+            session.set_input_origin(&act);
+            session.scroll_to_bottom();
+            session.inject(text.clone(), true);
+        }
+        events::log(
+            &act,
+            Some(&self.panes[idx].workspace.clone()),
+            Some(slug),
+            "msg_paste",
+            mid.clone(),
+        );
+        self.send_queue.inflight.insert(
+            slug.to_string(),
+            Inflight {
+                what: Payload::Message(mid),
+                text,
+                before: look,
+                started_ms: now,
+                stuck_since: None,
+                resubmits: 0,
+                attempts: 1,
+            },
+        );
+        true
+    }
+
+    fn finish_delivery(&mut self, slug: &str, via: &str) {
+        let Some(f) = self.send_queue.inflight.remove(slug) else {
+            return;
+        };
+        let id = match f.what {
+            Payload::Task(tid) => {
+                if let Some(t) = self.tasks.get_mut(&tid) {
+                    t.delivery = Some(via.to_string());
+                }
+                tid
+            }
+            Payload::Message(mid) => {
+                if let Some(m) = self.message_mut(&mid) {
+                    if m.status == "pending" {
+                        m.status = "delivered".into();
+                    }
+                    m.delivery = Some(via.to_string());
+                }
+                mid
+            }
+        };
+        events::log(
+            "daemon",
+            None,
+            Some(slug),
+            "delivered",
+            format!("{id} via {via}"),
+        );
+    }
+
     fn advance_inflight(&mut self, idx: usize, slug: &str, now_look: Look, now: u64) -> bool {
         let Some(f) = self.send_queue.inflight.get_mut(slug) else {
             return false;
         };
-        let body = self
-            .tasks
-            .get(&f.task)
-            .map(|t| t.body.clone())
-            .unwrap_or_default();
+        let body = f.text.clone();
         let verdict = match judge(&f.before, &now_look, &body) {
             Judgement::Pending if f.resubmits > 0 => Judgement::Delivered("resubmit"),
             v => v,
@@ -270,18 +367,7 @@ impl Engine {
         let session = self.panes[idx].session.as_ref();
         match verdict {
             Judgement::Delivered(via) => {
-                let tid = f.task.clone();
-                self.send_queue.inflight.remove(slug);
-                if let Some(t) = self.tasks.get_mut(&tid) {
-                    t.delivery = Some(via.to_string());
-                }
-                events::log(
-                    "daemon",
-                    None,
-                    Some(slug),
-                    "task_delivered",
-                    format!("{tid} via {via}"),
-                );
+                self.finish_delivery(slug, via);
                 return true;
             }
             Judgement::Stuck => {
@@ -300,6 +386,14 @@ impl Engine {
         if now.saturating_sub(f.started_ms) < CONFIRM_WINDOW_MS {
             return false;
         }
+        // A busy agent takes pasted text mid-turn without echoing it;
+        // re-pasting there only stacks copies (v2-simp-ios, 2026-09-28).
+        if f.before.activity == Activity::Busy
+            && !seance_core::agent_state::composer_holds(&now_look.screen, &body)
+        {
+            self.finish_delivery(slug, "mid-turn");
+            return true;
+        }
         if f.attempts < 2 {
             f.attempts += 1;
             f.started_ms = now;
@@ -308,15 +402,23 @@ impl Engine {
             }
             return false;
         }
-        let tid = f.task.clone();
-        let _ = self.fail_task(&tid, "queued delivery not confirmed after 2 attempts");
-        events::log(
-            "daemon",
-            None,
-            Some(slug),
-            "task_failed",
-            format!("{tid}: undelivered"),
-        );
+        let Some(f) = self.send_queue.inflight.remove(slug) else {
+            return true;
+        };
+        let id = match f.what {
+            Payload::Task(tid) => {
+                let _ = self.fail_task(&tid, "queued delivery not confirmed after 2 attempts");
+                tid
+            }
+            Payload::Message(mid) => {
+                if let Some(m) = self.message_mut(&mid) {
+                    m.status = "failed".into();
+                    m.note = Some("delivery not confirmed after 2 attempts".into());
+                }
+                mid
+            }
+        };
+        events::log("daemon", None, Some(slug), "undelivered", id);
         true
     }
 }

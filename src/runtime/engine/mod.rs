@@ -1,5 +1,6 @@
 //! Session engine: panes, control plane, layout state. gpui-free.
 
+mod comms;
 mod control;
 mod gui;
 pub(crate) mod helpers;
@@ -145,6 +146,8 @@ pub struct Engine {
     /// `$SEANCE_SESSION`). Lets `roster --children`/`--parent` group helper
     /// panes under their orchestrator. Dropped when the child is killed.
     pub pane_parents: HashMap<String, String>,
+    /// Cross-session comms (comms.rs): leads, aliases, contacts, messages.
+    pub comms: CommsState,
     /// workspace → PR links scraped from pane output (most recent LAST).
     /// Statuses are merged in from the external watcher; see `pr_links.rs`.
     pub pr_links: HashMap<String, Vec<PrLink>>,
@@ -203,6 +206,7 @@ impl Engine {
             workspace_output: HashMap::new(),
             workspace_touch_ms: HashMap::new(),
             pane_parents: HashMap::new(),
+            comms: CommsState::default(),
             pr_links: HashMap::new(),
             pr_dismissed: HashMap::new(),
             send_queue: Default::default(),
@@ -274,6 +278,7 @@ impl Engine {
             workspace_output: HashMap::new(),
             workspace_touch_ms: HashMap::new(),
             pane_parents: HashMap::new(),
+            comms: CommsState::default(),
             pr_links: HashMap::new(),
             pr_dismissed: HashMap::new(),
             send_queue: Default::default(),
@@ -284,6 +289,7 @@ impl Engine {
         eng.workspace_output = state.workspace_output.iter().cloned().collect();
         eng.workspace_touch_ms = state.workspace_touch_ms.iter().cloned().collect();
         eng.pane_parents = state.pane_parents.iter().cloned().collect();
+        eng.comms = state.comms.clone();
         eng.pr_links = state.pr_links.iter().cloned().collect();
         eng.pr_dismissed = state.pr_dismissed.iter().cloned().collect();
 
@@ -417,6 +423,7 @@ impl Engine {
             workspace_output: bundle.workspace_output.into_iter().collect(),
             workspace_touch_ms: bundle.workspace_touch_ms.into_iter().collect(),
             pane_parents: bundle.pane_parents.into_iter().collect(),
+            comms: bundle.comms,
             pr_links: bundle.pr_links.into_iter().collect(),
             pr_dismissed: bundle.pr_dismissed.into_iter().collect(),
             send_queue: Default::default(),
@@ -602,6 +609,7 @@ impl Engine {
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
+            comms: self.comms.clone(),
             workspace_touch_ms: self
                 .workspace_touch_ms
                 .iter()
@@ -739,6 +747,7 @@ impl Engine {
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
+            comms: self.comms.clone(),
             workspace_touch_ms: self
                 .workspace_touch_ms
                 .iter()

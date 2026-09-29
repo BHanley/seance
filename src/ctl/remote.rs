@@ -82,7 +82,10 @@ fn with_scope(args: &[String], scope: Option<&str>) -> Vec<String> {
 
 fn prepare_args(args: &[String]) -> Result<(Vec<String>, Option<String>, bool)> {
     let sub = subcommand(args);
-    let body_command = matches!(sub, "send" | "note" | "finish" | "note-agent" | "nudge");
+    let body_command = matches!(
+        sub,
+        "send" | "note" | "finish" | "note-agent" | "nudge" | "ask" | "tell" | "reply"
+    );
     let mut forwarded = Vec::new();
     let mut body_file = None;
     let mut stdin = false;

@@ -90,6 +90,82 @@ pub enum ControlRequest {
         from: Option<String>,
     },
 
+    /// Message another session (docs/COMMS.md). `to` is a circle (label,
+    /// slug, former label, or `@name`) — delivered to its lead — or a pane
+    /// (`pane:slug`, or a bare slug when unambiguous). `kind` is `ask` (a
+    /// reply is expected; `reply` routes it back) or `tell` (FYI). Never
+    /// opens or cancels a task; a busy agent gets it behind its turn.
+    MsgSend {
+        to: String,
+        text: String,
+        #[serde(default = "default_ask")]
+        kind: String,
+        #[serde(default)]
+        scope: Option<String>,
+        #[serde(default)]
+        from: Option<String>,
+    },
+
+    /// Answer the question `id`; routed back to whoever asked.
+    MsgReply {
+        id: String,
+        text: String,
+        #[serde(default)]
+        scope: Option<String>,
+        #[serde(default)]
+        from: Option<String>,
+    },
+
+    /// One message (with its answer once there is one). `waiting` marks a
+    /// caller blocked on the answer, so the reply comes back to it instead of
+    /// being pasted into the asker's pane.
+    MsgGet {
+        id: String,
+        #[serde(default)]
+        waiting: bool,
+        #[serde(default)]
+        scope: Option<String>,
+        #[serde(default)]
+        from: Option<String>,
+    },
+
+    /// Recent messages to/from a pane or circle (default: the caller's pane).
+    MsgList {
+        #[serde(default)]
+        pane: Option<String>,
+        #[serde(default)]
+        circle: Option<String>,
+        #[serde(default)]
+        limit: Option<usize>,
+        #[serde(default)]
+        scope: Option<String>,
+        #[serde(default)]
+        from: Option<String>,
+    },
+
+    /// Get (no `pane`) or set a circle's lead — the pane messages to the
+    /// circle reach. Default lead: the circle's first pane.
+    Lead {
+        #[serde(default)]
+        workspace: Option<String>,
+        #[serde(default)]
+        pane: Option<String>,
+        #[serde(default)]
+        scope: Option<String>,
+        #[serde(default)]
+        from: Option<String>,
+    },
+
+    /// Circles a pane talks to (it gets rename / lead-closed notices).
+    Contacts {
+        #[serde(default)]
+        pane: Option<String>,
+        #[serde(default)]
+        scope: Option<String>,
+        #[serde(default)]
+        from: Option<String>,
+    },
+
     /// Mark a task failed (e.g. its paste never landed). If injecting it had
     /// cancelled the pane's previous open task, that task is reopened.
     TaskFail {
@@ -575,6 +651,10 @@ pub enum ControlRequest {
     },
 }
 
+fn default_ask() -> String {
+    "ask".into()
+}
+
 fn default_done() -> String {
     "done".into()
 }
@@ -602,6 +682,12 @@ impl ControlRequest {
             | Self::New { from, .. }
             | Self::Send { from, .. }
             | Self::TaskFail { from, .. }
+            | Self::MsgSend { from, .. }
+            | Self::MsgReply { from, .. }
+            | Self::MsgGet { from, .. }
+            | Self::MsgList { from, .. }
+            | Self::Lead { from, .. }
+            | Self::Contacts { from, .. }
             | Self::SendRaw { from, .. }
             | Self::Read { from, .. }
             | Self::Status { from, .. }
@@ -675,10 +761,18 @@ impl ControlRequest {
             }
             | Self::RenameCircle {
                 workspace, scope, ..
+            }
+            | Self::Lead {
+                workspace, scope, ..
             } => workspace.as_deref().or(scope.as_deref()),
             Self::List { scope, .. }
             | Self::Send { scope, .. }
             | Self::TaskFail { scope, .. }
+            | Self::MsgSend { scope, .. }
+            | Self::MsgReply { scope, .. }
+            | Self::MsgGet { scope, .. }
+            | Self::MsgList { scope, .. }
+            | Self::Contacts { scope, .. }
             | Self::SendRaw { scope, .. }
             | Self::Read { scope, .. }
             | Self::Status { scope, .. }

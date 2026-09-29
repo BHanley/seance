@@ -33,6 +33,50 @@ impl Engine {
         let ok = |data: serde_json::Value| ControlResponse::ok(data);
         let err = |m: String| ControlResponse::err(m);
         let find = |eng: &Engine, key: &str, scope: &Option<String>| -> Result<usize, String> {
+            // `@circle` → the circle's lead pane; `pane:slug` forces a pane.
+            let in_scope_ws = |ws: &str| scope.as_ref().is_none_or(|s| s == ws);
+            if let Some(name) = key.strip_prefix('@') {
+                let (circle, _) = eng
+                    .resolve_circle(name)
+                    .ok_or_else(|| format!("no circle '{name}'"))?;
+                let lead = eng
+                    .effective_lead(&circle)
+                    .ok_or_else(|| format!("circle '{name}' has no panes"))?;
+                if !in_scope_ws(&circle) {
+                    return Err(format!(
+                        "circle '{name}' is outside your workspace (use --all to cross)"
+                    ));
+                }
+                return eng
+                    .panes
+                    .iter()
+                    .position(|p| p.slug == lead)
+                    .ok_or_else(|| format!("no pane '{lead}'"));
+            }
+            let (key, forced_pane) = match key.strip_prefix("pane:") {
+                Some(k) => (k, true),
+                None => (key, false),
+            };
+            // Unscoped, a bare name that is a pane here AND another circle's
+            // slug/label is refused: that collision (circle `claude-27` vs
+            // cadence-slack's pane `claude-27`) misrouted a reply 2026-09-29.
+            if scope.is_none() && !forced_pane {
+                if let (Some(p), Some((circle, _))) = (
+                    eng.panes.iter().find(|p| p.slug == key),
+                    eng.resolve_circle(key),
+                ) {
+                    let lead = eng.effective_lead(&circle);
+                    if p.workspace != circle && lead.as_deref() != Some(key) {
+                        return Err(format!(
+                            "'{key}' is ambiguous: pane {key} (circle '{}') and circle '{}' \
+                             (lead {}). Say pane:{key} or @{key}",
+                            eng.workspace_label(&p.workspace),
+                            eng.workspace_label(&circle),
+                            lead.as_deref().unwrap_or("-")
+                        ));
+                    }
+                }
+            }
             // Slug is the unique id; a display name is not. Resolving both in a
             // single pass let an EARLIER pane's name shadow a LATER pane's slug —
             // two panes named "term-2" (one of them slug `term-2-2`) meant
@@ -47,7 +91,9 @@ impl Engine {
                 }
             };
             let in_scope = |p: &EnginePane| scope.as_ref().is_none_or(|ws| p.workspace == *ws);
-            for by_slug in [true, false] {
+            // `pane:slug` matches slugs only; otherwise slug first, then name.
+            let passes: &[bool] = if forced_pane { &[true] } else { &[true, false] };
+            for &by_slug in passes {
                 if let Some(i) = eng
                     .panes
                     .iter()
@@ -241,6 +287,7 @@ impl Engine {
                     if self.panes[idx].session.is_none() {
                         return err("not a terminal pane".into());
                     }
+                    self.record_contact(from.as_deref(), &ws);
                     let task_id = self.inject_task(idx, text, submit, &act, None);
                     let (pad_rev, pad_bytes) =
                         self.inject_baselines.get(&slug).copied().unwrap_or((0, 0));
@@ -254,6 +301,180 @@ impl Engine {
                 }
                 Err(e) => err(e),
             },
+            MsgSend {
+                to,
+                text,
+                kind,
+                from,
+                ..
+            } => {
+                if !matches!(kind.as_str(), "ask" | "tell") {
+                    return err(format!("message kind '{kind}': expected ask or tell"));
+                }
+                if text.trim().is_empty() {
+                    return err("message text is empty".into());
+                }
+                let t = match self.resolve_target(&to) {
+                    Ok(t) => t,
+                    Err(e) => return err(e),
+                };
+                if from.as_deref() == Some(t.pane.as_str()) {
+                    return err(format!("'{to}' resolves to your own pane ({})", t.pane));
+                }
+                let target_circle = t.circle.clone().or_else(|| self.circle_of(&t.pane));
+                if let Some(c) = &target_circle {
+                    self.record_contact(from.as_deref(), c);
+                }
+                let id = self.post_message(MessageRecord {
+                    kind: kind.clone(),
+                    from_pane: from.clone(),
+                    from_circle: from.as_deref().and_then(|p| self.circle_of(p)),
+                    to_pane: t.pane.clone(),
+                    to_circle: t.circle.clone(),
+                    text,
+                    ..Default::default()
+                });
+                self.persist();
+                ok(json!({
+                    "id": id,
+                    "kind": kind,
+                    "to_pane": t.pane,
+                    "to_circle": target_circle,
+                    "to_circle_label": target_circle.as_deref().map(|c| self.workspace_label(c)),
+                    "note": t.note,
+                    "status": "pending",
+                }))
+            }
+            MsgReply { id, text, from, .. } => {
+                if text.trim().is_empty() {
+                    return err("reply text is empty".into());
+                }
+                match self.reply_to_message(&id, &text, from.as_deref()) {
+                    Ok(v) => {
+                        self.persist();
+                        ok(v)
+                    }
+                    Err(e) => err(e),
+                }
+            }
+            MsgGet { id, waiting, .. } => {
+                if waiting {
+                    if let Some(m) = self.message_mut(&id) {
+                        m.waiter_seen_ms = super::helpers::now_ms();
+                    }
+                }
+                match self.message(&id) {
+                    Some(m) => ok(self.message_json(m)),
+                    None => err(format!("no message '{id}'")),
+                }
+            }
+            MsgList {
+                pane,
+                circle,
+                limit,
+                from,
+                ..
+            } => {
+                let circle = match circle {
+                    Some(c) => match self.resolve_circle(&c) {
+                        Some((slug, _)) => Some(slug),
+                        None => return err(format!("no circle '{c}'")),
+                    },
+                    None => None,
+                };
+                let pane = pane.or(if circle.is_none() { from } else { None });
+                let hit = |m: &MessageRecord| match (&pane, &circle) {
+                    (Some(p), _) => &m.to_pane == p || m.from_pane.as_ref() == Some(p),
+                    (None, Some(c)) => {
+                        m.to_circle.as_ref() == Some(c)
+                            || m.from_circle.as_ref() == Some(c)
+                            || self.circle_of(&m.to_pane).as_ref() == Some(c)
+                    }
+                    (None, None) => true,
+                };
+                let mut rows: Vec<serde_json::Value> = self
+                    .comms
+                    .messages
+                    .iter()
+                    .rev()
+                    .filter(|m| hit(m))
+                    .take(limit.unwrap_or(20))
+                    .map(|m| self.message_json(m))
+                    .collect();
+                rows.reverse();
+                ok(json!({"messages": rows}))
+            }
+            Lead {
+                workspace,
+                pane,
+                scope,
+                from,
+            } => {
+                let circle = workspace
+                    .or(scope)
+                    .or_else(|| from.as_deref().and_then(|p| self.circle_of(p)));
+                let Some(circle) = circle else {
+                    return err("lead: which circle? (name it, or run inside a pane)".into());
+                };
+                let Some((circle, _)) = self.resolve_circle(&circle) else {
+                    return err(format!("no circle '{circle}'"));
+                };
+                if let Some(p) = pane {
+                    let p = p.strip_prefix("pane:").unwrap_or(&p).to_string();
+                    if !self
+                        .panes
+                        .iter()
+                        .any(|x| x.slug == p && x.workspace == circle)
+                    {
+                        return err(format!(
+                            "pane '{p}' is not in circle '{}'",
+                            self.workspace_label(&circle)
+                        ));
+                    }
+                    self.comms.leads.insert(circle.clone(), p.clone());
+                    events::log(
+                        &actor(&from),
+                        Some(&circle),
+                        Some(&p),
+                        "lead_set",
+                        p.clone(),
+                    );
+                    self.persist();
+                }
+                let members: Vec<String> = self
+                    .panes
+                    .iter()
+                    .filter(|p| p.workspace == circle)
+                    .map(|p| p.slug.clone())
+                    .collect();
+                ok(json!({
+                    "workspace": circle,
+                    "workspace_name": self.workspace_label(&circle),
+                    "lead": self.effective_lead(&circle),
+                    "explicit": self.comms.leads.contains_key(&circle),
+                    "former_labels": self.comms.former_labels.get(&circle),
+                    "panes": members,
+                }))
+            }
+            Contacts { pane, from, .. } => {
+                let Some(p) = pane.or(from) else {
+                    return err("contacts: which pane? (name it, or run inside a pane)".into());
+                };
+                let rows: Vec<serde_json::Value> = self
+                    .comms
+                    .contacts
+                    .iter()
+                    .filter(|(_, set)| set.contains(&p))
+                    .map(|(c, _)| {
+                        json!({
+                            "workspace": c,
+                            "workspace_name": self.workspace_label(c),
+                            "lead": self.effective_lead(c),
+                        })
+                    })
+                    .collect();
+                ok(json!({"pane": p, "contacts": rows}))
+            }
             TaskFail {
                 id,
                 reason,
@@ -302,6 +523,7 @@ impl Engine {
                             return err("not a terminal pane".into());
                         }
                         self.panes[idx].agency.agent_claim(&act);
+                        self.record_contact(from.as_deref(), &ws);
                         events::log_ex(
                             &act,
                             Some(&ws),

@@ -150,6 +150,9 @@ pub struct AppState {
     /// pane slug → spawning pane slug (`ctl new` from inside a pane).
     #[serde(default)]
     pub pane_parents: Vec<(String, String)>,
+    /// Cross-session comms: leads, former labels, contacts, messages.
+    #[serde(default)]
+    pub comms: crate::runtime::protocol::CommsState,
     /// workspace → scraped PR links (0.13 — survive upgrade).
     #[serde(default)]
     pub pr_links: Vec<(String, Vec<crate::runtime::protocol::PrLink>)>,
@@ -467,6 +470,7 @@ mod tests {
             workspace_output: vec![("main".to_string(), 1_700_000_000_000)],
             workspace_touch_ms: vec![("main".to_string(), 1_700_000_000_500)],
             pane_parents: vec![],
+            comms: Default::default(),
             pr_links: vec![(
                 "main".to_string(),
                 vec![crate::runtime::protocol::PrLink {

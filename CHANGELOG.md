@@ -48,6 +48,16 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   - `wait --artifact PATH --either --fresh` returns when a result file lands
     *or* the task is finished. `wait` now fails fast when the pane is gone or
     exited, or when `--task` was superseded, instead of timing out.
+- **Sessions talk to each other by name** (docs/COMMS.md). `ctl ask --to
+  CIRCLE` asks another session and prints its answer. `tell` sends a one-way
+  note, and `reply m-N` answers a question, routed back by id so nobody
+  types a return address. Circles are addressed by label, slug or a former
+  label, and a circle is answered by its lead (first pane, or `ctl lead
+  --set`). Messages are not tasks: they never open or cancel one, and a busy
+  agent gets them behind its turn. Panes that talk to a circle are notified
+  when it is renamed or its lead closes. A question left unanswered by a
+  closing lead is re-asked of the new lead. A bare name that is both a pane
+  and another circle is refused on every pane verb; use `@name` or `pane:name`.
 - `ctl skill` gains "Talking to another circle": circle labels vs slugs, the
   lead pane, `note-agent` for questions, and replying to your pane
   (`$SEANCE_SESSION`), never your circle slug (a misrouted reply on 09-29
