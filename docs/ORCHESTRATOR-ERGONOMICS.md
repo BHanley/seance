@@ -47,6 +47,32 @@ update menu gets Skip). Permission prompts are never auto-answered.
 |---|---------|--------|------|------|
 | 11 | untrusted cwd: ready took ~2 min, then the first send's Enter answered Claude's trust prompt and Claude exited (v2-go-touchup, events 58148-58156) | The real Claude 2.1.280 dialog opens with the cursor on **"❯ No, exit"**, so any Enter quits. `--wait-ready` now detects a trust dialog and **fails at once** (0.3s), naming it and leaving the pane at the prompt. `--trust` (on `new` and `handoff`) accepts it one checked step at a time: an arrow toward the "Yes" line, re-read the screen, and Enter only when the cursor is on "Yes". Codex update menus are skipped. `send` / `note-agent` refuse to paste into any modal (from batch 1). This also corrects batch 1, which answered trust with a bare Enter: fine on Codex, fatal on Claude. | ctl | `agents::trust_is_navigated_to_yes_never_blind_enter` + a classifier frame test, both from the live dialog; live: no-trust → exit 1 in 0.3s, send refused, `--trust` → idle in 3.6s |
 
+## Batch 4 — 2026-09-29: sessions talk by name (commits 6547ca2, 49f2119)
+
+Trigger: paceline-desk asked paceline-arch-impl a question and named
+`claude-27` as the reply address. That was its own **circle** slug, but also
+the **pane** slug of cadence-slack, so the answer went to cadence-slack. Full
+design: docs/COMMS.md.
+
+- `ask --to CIRCLE` / `tell` / `reply m-N` / `await` / `messages`: messages,
+  not tasks. Delivered by the queue pump behind a busy turn, and replies are
+  routed back by id.
+- Circles are addressed by label, slug or former label, and answered by
+  their **lead** (first pane; `ctl lead --set` overrides).
+- **Contacts** get notices on rename and when a lead closes; old labels keep
+  resolving; unanswered asks are re-asked of the new lead.
+- A bare name that is both a pane and another circle is refused on every
+  pane verb; `@name` / `pane:name` say which.
+- No arming: a SessionStart hook (vita `scripts/seance_session_context.sh`)
+  loads `seance ctl skill` into every Claude session in a pane, and
+  `~/.codex/AGENTS.md` does the same for Codex. The skill's "Talking to
+  another circle" section teaches all of the above.
+
+Verified with two real Claude sessions on an isolated daemon. Told only "ask
+the v2-impl session what 17×23 is", one ran `ask --to v2-impl`, the other
+answered with `reply m-3`, and the answer came back on stdout. No tasks were
+touched.
+
 ## Batch 3 — 2026-09-28 (commit 6ea2193, undeployed)
 
 Batches 1–2 were deployed at ~6:55am 9-28 (`seance upgrade` from d06e5d7).
