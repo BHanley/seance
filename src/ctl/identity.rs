@@ -16,6 +16,14 @@ fn validate_ancestry(
     mut read_session: impl FnMut(u32) -> io::Result<Option<String>>,
 ) -> Result<(), String> {
     let mut child = pid;
+    // Topmost ancestor whose environment carries SEANCE_SESSION: the pane's
+    // root process. After a daemon upgrade the pane processes are reparented
+    // to a subreaper (`systemd --user` here) whose environ can't be read —
+    // 2026-09-29, every pre-upgrade pane's ctl failed with EACCES — so the
+    // identity comes from the pane root, not from whatever sits above it.
+    // Environments are only read once the whole chain has been checked for a
+    // shared Codex server — nothing below it is trusted before that.
+    let mut chain: Vec<u32> = Vec::new();
     for _ in 0..128 {
         if pid <= 1 {
             break;
@@ -39,9 +47,16 @@ fn validate_ancestry(
         {
             return match_session(from, read_session(child));
         }
-        // PTY children survive upgrades, reparented to init after the old daemon exits.
+        chain.push(pid);
+        // PTY children survive upgrades, reparented to init (or a subreaper)
+        // after the old daemon exits.
         if parent <= 1 {
-            return match_session(from, read_session(pid));
+            let pane_root = chain
+                .iter()
+                .rev()
+                .copied()
+                .find(|p| matches!(read_session(*p), Ok(Some(_))));
+            return match_session(from, read_session(pane_root.unwrap_or(pid)));
         }
         if parent == pid {
             break;
@@ -203,6 +218,37 @@ mod tests {
             },
         )
         .is_ok());
+    }
+
+    #[test]
+    fn subreaper_above_the_pane_after_upgrade_is_skipped() {
+        // ctl(5) <- claude(4, the pane root) <- systemd --user(3, unreadable) <- init
+        let tree = |pid: u32| -> io::Result<(u32, Vec<String>)> {
+            Ok(match pid {
+                5 => (4, vec!["seance".into(), "ctl".into()]),
+                4 => (3, vec!["claude".into()]),
+                3 => (1, vec!["/usr/lib/systemd/systemd".into(), "--user".into()]),
+                _ => unreachable!(),
+            })
+        };
+        let env = |pid: u32| -> io::Result<Option<String>> {
+            match pid {
+                3 => Err(io::Error::from(io::ErrorKind::PermissionDenied)),
+                _ => Ok(Some("worker".into())),
+            }
+        };
+        assert!(validate_ancestry("worker", 5, tree, env).is_ok());
+        // Still checked: the pane root says who the pane is.
+        assert!(validate_ancestry("other", 5, tree, env).is_err());
+        // No readable identity anywhere still fails closed.
+        let none = |pid: u32| -> io::Result<Option<String>> {
+            if pid == 3 {
+                Err(io::Error::from(io::ErrorKind::PermissionDenied))
+            } else {
+                Ok(None)
+            }
+        };
+        assert!(validate_ancestry("worker", 5, tree, none).is_err());
     }
 
     #[test]
