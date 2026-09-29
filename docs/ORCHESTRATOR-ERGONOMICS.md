@@ -73,6 +73,16 @@ the v2-impl session what 17×23 is", one ran `ask --to v2-impl`, the other
 answered with `reply m-3`, and the answer came back on stdout. No tasks were
 touched.
 
+**Deployed 2026-09-29 ~09:12** (`seance upgrade` of `49f2119`, built from a
+clean worktree so the uncommitted web/remote_term work stayed out). 63 panes
+before and after. **Incident:** after the upgrade, `ctl` from every
+pre-upgrade pane failed with "cannot verify original pane identity:
+Permission denied". Pane processes had been reparented to `systemd --user`
+(a subreaper) and the 31d49de identity walk read its environ. Fixed in
+`1e46c46` (ctl-only, live once the binary was rebuilt, ~10 minutes of
+outage). No dispatcher was running at the time. Not yet done:
+`seance restart-gui`, which only picks up the thinner ⚡ arm prompt.
+
 ## Batch 3 — 2026-09-28 (commit 6ea2193, undeployed)
 
 Batches 1–2 were deployed at ~6:55am 9-28 (`seance upgrade` from d06e5d7).
