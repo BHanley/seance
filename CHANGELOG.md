@@ -86,6 +86,14 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Fixed
 
+- Two windows showing the same circle no longer bounce a pane's size back and
+  forth at frame rate. A window now only re-asserts a size it asked for itself,
+  never one it saw in another client's frame.
+- Web: a browser restart lands back on the circle it had selected, instead of
+  whichever circle the desktop last looked at. On phones, tapping a quicklaunch
+  chip closes the nav drawer.
+- Web: tapping a wrapped link opens the whole URL, including links that Claude
+  wraps itself (short of the edge, with an indent).
 - A folder-trust dialog can no longer be answered by accident. Claude's
   dialog opens on **"No, exit"**, so the first `send`'s Enter quit Claude.
   `new --wait-ready` now stops at once and names a trust dialog.

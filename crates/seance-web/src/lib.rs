@@ -131,7 +131,14 @@ pub struct App {
     scroll_back: RefCell<HashMap<String, i32>>,
     /// Last `m-scrolled` body class we painted (the phone's jump button).
     scroll_chip_on: Cell<bool>,
+    /// Mirror of `localStorage[SELECTED_KEY]`, so the per-frame check only
+    /// writes on change.
+    selection_saved: RefCell<Option<String>>,
 }
+
+/// Last circle this browser had selected; asked for on attach so a browser
+/// restart lands back on it instead of the daemon's global selection.
+const SELECTED_KEY: &str = "seance_selected";
 
 /// localStorage-backed [`subs::SubStore`].
 struct LocalStore;
@@ -181,6 +188,7 @@ impl App {
             rail_pending: Rc::new(Cell::new(0)),
             scroll_back: RefCell::new(HashMap::new()),
             scroll_chip_on: Cell::new(false),
+            selection_saved: RefCell::new(None),
         })
     }
 
@@ -628,6 +636,7 @@ impl App {
         if self.phone_layout.replace(phone_layout) != phone_layout {
             self.need_rebuild.set(true);
         }
+        self.remember_selection();
         {
             // Finish detection re-sorts the sidebar; cheap, once per frame.
             let mut st = self.state.borrow_mut();
@@ -1402,6 +1411,18 @@ impl App {
         self.need_rebuild.set(true);
     }
 
+    /// A `None` selection (empty rail, mid-reconnect) keeps the last one.
+    fn remember_selection(&self) {
+        let cur = self.state.borrow().selected_workspace.clone();
+        if cur.is_none() || *self.selection_saved.borrow() == cur {
+            return;
+        }
+        if let Some(ws) = cur.as_deref() {
+            let _ = storage_set(SELECTED_KEY, ws);
+        }
+        *self.selection_saved.borrow_mut() = cur;
+    }
+
     fn toggle_probe(self: &Rc<Self>) {
         self.probe.borrow_mut().toggle();
     }
@@ -1417,6 +1438,7 @@ impl App {
         let url = format!("{proto}://{host}/ws?token={token}");
         let app_ev = Rc::clone(self);
         let app_st = Rc::clone(self);
+        let app_sel = Rc::clone(self);
         let conn = conn::connect(
             url,
             Box::new(move |ev| app_ev.handle_event(ev)),
@@ -1445,6 +1467,14 @@ impl App {
                         }));
                     }
                 }
+            }),
+            Box::new(move || {
+                app_sel
+                    .state
+                    .borrow()
+                    .selected_workspace
+                    .clone()
+                    .or_else(|| storage_get(SELECTED_KEY))
             }),
         );
         *self.conn.borrow_mut() = Some(conn);

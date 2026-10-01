@@ -208,8 +208,9 @@
           var t = e.target;
           if (!t || !t.closest) return;
           if (t.closest('.ws-banish')) return; // destructive — don't also dismiss
-          if (t.closest('.ws-row')) setNav(false);
-        });
+          if (t.closest('input, textarea')) return; // inline rename
+          if (t.closest('.ws-row, .ql-chip, .foot-summon')) setNav(false);
+        }, true); // capture: ql-chip's wasm handler stops propagation
 
         // ── circle menu ───────────────────────────────────────────────────
         // The topbar packs title + PR chips + connection + probe into 390px,

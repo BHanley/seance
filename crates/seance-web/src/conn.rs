@@ -47,6 +47,9 @@ pub enum ConnStatus {
 struct Handlers {
     on_event: Box<dyn FnMut(GuiEvent)>,
     on_status: Box<dyn FnMut(ConnStatus)>,
+    /// Circle to ask for on (re)attach. Without one the daemon falls back to
+    /// its engine-global selection — whatever the desktop last looked at.
+    attach_selection: Box<dyn Fn() -> Option<String>>,
 }
 
 /// Per-socket DOM callbacks. Held alive here; dropped with the socket.
@@ -89,6 +92,7 @@ pub fn connect(
     url: String,
     on_event: Box<dyn FnMut(GuiEvent)>,
     on_status: Box<dyn FnMut(ConnStatus)>,
+    attach_selection: Box<dyn Fn() -> Option<String>>,
 ) -> Rc<Conn> {
     let conn = Rc::new(Conn {
         inner: RefCell::new(Inner {
@@ -109,6 +113,7 @@ pub fn connect(
         handlers: RefCell::new(Handlers {
             on_event,
             on_status,
+            attach_selection,
         }),
     });
     conn.start_ping_timer();
@@ -287,8 +292,9 @@ impl Conn {
                 return;
             }
         }
+        let selected_workspace = (self.handlers.borrow().attach_selection)();
         self.send(&GuiRequest::Attach {
-            selected_workspace: None,
+            selected_workspace,
             focused_pane: None,
             // None = every circle. The browser client has no blank-window
             // mode, so it always wants the lot.
