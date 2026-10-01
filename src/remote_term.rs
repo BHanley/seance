@@ -13,12 +13,62 @@ use crate::term_shared::{Ghost, TerminalEvent};
 
 /// Debounce PTY resizes so 1px layout jitter can't thrash the daemon.
 struct ResizeGate {
-    /// Last size we actually sent to the daemon.
+    /// Last size we asked the daemon for. Only our own requests write it.
     sent: (u16, u16),
     /// Last size measured in layout.
     seen: (u16, u16),
     /// Consecutive frames the measurement has been stable.
     stable: u8,
+    /// Live PTY dims off the last snapshot. Input only — never a stand-in for
+    /// `sent`. Adopting another client's dims here made two windows on one
+    /// circle bounce a pane at framerate: each took the other's size as its
+    /// own, re-measured, re-asserted. Geometry ownership is by activation
+    /// (`forget_sent_size`), not by whose frame landed last.
+    pty: (u16, u16),
+}
+
+impl ResizeGate {
+    /// Whether a freshly measured grid size has to go to the daemon.
+    ///
+    /// Large reflows (pane kill auto-close, sash, window resize — more than 1
+    /// col/row) go on the first measure; waiting for a second stable frame
+    /// left siblings stuck for seconds when nothing else was painting. ±1 cell
+    /// still needs two matching frames so float cell-width noise can't thrash
+    /// 120↔121 forever.
+    fn measure(&mut self, want: (u16, u16)) -> bool {
+        if self.sent == want {
+            self.seen = want;
+            self.stable = 2;
+            return false;
+        }
+        // Nothing asserted yet (fresh pane, post-activation, post-resync) and
+        // the PTY already is this size. A redundant Resize costs every client
+        // a full grid — the engine drops the damage base on any resize.
+        if self.sent == (0, 0) && self.pty == want {
+            self.sent = want;
+            self.seen = want;
+            self.stable = 2;
+            return false;
+        }
+        if self.seen != want {
+            self.seen = want;
+            let big = want.0.abs_diff(self.sent.0) > 1 || want.1.abs_diff(self.sent.1) > 1;
+            if big || self.sent == (0, 0) {
+                // Real reflow or first layout — don't wait for another paint.
+                self.sent = want;
+                self.stable = 2;
+                return true;
+            }
+            self.stable = 1;
+            return false;
+        }
+        self.stable = self.stable.saturating_add(1);
+        if self.stable >= 2 {
+            self.sent = want;
+            return true;
+        }
+        false
+    }
 }
 
 pub struct RemoteTerminal {
@@ -46,6 +96,7 @@ impl RemoteTerminal {
                 sent: (0, 0),
                 seen: (0, 0),
                 stable: 0,
+                pty: (0, 0),
             }),
         }
     }
@@ -74,10 +125,12 @@ impl RemoteTerminal {
         {
             let mut g = self.resize.lock().unwrap();
             // Force the next layout pass to re-send size (hysteresis was
-            // "stable" on the old geometry).
+            // "stable" on the old geometry, and a size mismatch is one of the
+            // ways a decode fails — our idea of the PTY dims may be wrong).
             g.sent = (0, 0);
             g.seen = (0, 0);
             g.stable = 0;
+            g.pty = (0, 0);
         }
         cx.notify();
     }
@@ -102,14 +155,9 @@ impl RemoteTerminal {
         } else {
             self.ghost = None;
         }
-        // Keep resize gate aligned with the live PTY size so we don't
-        // re-request a size we already have.
-        {
-            let mut g = self.resize.lock().unwrap();
-            g.sent = (snap.cols, snap.rows);
-            g.seen = (snap.cols, snap.rows);
-            g.stable = 2;
-        }
+        // Live dims only — see ResizeGate::pty for why this may not touch
+        // `sent`.
+        self.resize.lock().unwrap().pty = (snap.cols, snap.rows);
         if let Some(t0) = crate::latency_probe::transfer("g_key", "g_paint", &self.slug) {
             crate::latency_probe::record("gui key→grid-apply", t0.elapsed().as_micros() as u64);
         }
@@ -207,14 +255,6 @@ impl RemoteTerminal {
         let _ = self.client.inject(&self.slug, &text, submit);
     }
 
-    /// Request a PTY resize.
-    ///
-    /// - **Large reflows** (pane kill auto-close, sash, window resize — any
-    ///   change of more than 1 col/row): send immediately on first measure.
-    ///   Waiting for a second stable frame used to leave siblings stuck for
-    ///   seconds when nothing else was painting (idle shells after a kill).
-    /// - **±1 cell jitter**: still needs 2 consecutive matching frames so
-    ///   float cell-width noise can't thrash 120↔121 forever.
     /// Forget the size we last told the daemon, so the next layout pass
     /// re-states it even though our own geometry never changed.
     ///
@@ -234,38 +274,10 @@ impl RemoteTerminal {
     }
 
     pub fn resize_cells(&self, cols: u16, rows: u16) {
-        let cols = cols.max(2);
-        let rows = rows.max(2);
-        let should_send = {
-            let mut g = self.resize.lock().unwrap();
-            if g.sent == (cols, rows) {
-                g.seen = (cols, rows);
-                g.stable = 2;
-                false
-            } else if g.seen != (cols, rows) {
-                g.seen = (cols, rows);
-                let big = cols.abs_diff(g.sent.0) > 1 || rows.abs_diff(g.sent.1) > 1;
-                if big || g.sent == (0, 0) {
-                    // Real reflow or first layout — don't wait for another paint.
-                    g.sent = (cols, rows);
-                    g.stable = 2;
-                    true
-                } else {
-                    g.stable = 1;
-                    false
-                }
-            } else {
-                g.stable = g.stable.saturating_add(1);
-                if g.stable >= 2 {
-                    g.sent = (cols, rows);
-                    true
-                } else {
-                    false
-                }
-            }
-        };
+        let want = (cols.max(2), rows.max(2));
+        let should_send = self.resize.lock().unwrap().measure(want);
         if should_send {
-            let _ = self.client.resize(&self.slug, cols, rows);
+            let _ = self.client.resize(&self.slug, want.0, want.1);
         }
     }
 
@@ -287,3 +299,108 @@ impl RemoteTerminal {
 }
 
 impl EventEmitter<TerminalEvent> for RemoteTerminal {}
+
+#[cfg(test)]
+mod tests {
+    use super::ResizeGate;
+
+    fn gate(sent: (u16, u16), pty: (u16, u16)) -> ResizeGate {
+        ResizeGate {
+            sent,
+            seen: sent,
+            stable: 2,
+            pty,
+        }
+    }
+
+    /// THE two-client bug: a window whose own geometry never moved must stay
+    /// quiet no matter what dims the daemon broadcasts. The gate used to adopt
+    /// the incoming size as `sent`, so the next paint re-asserted — forever.
+    #[test]
+    fn foreign_dims_never_provoke_a_reassert() {
+        let mut g = gate((120, 40), (80, 24));
+        for _ in 0..10 {
+            assert!(!g.measure((120, 40)));
+        }
+    }
+
+    /// Two windows on one circle, neither activated: the pane settles where
+    /// the last activation left it and nobody sends anything.
+    #[test]
+    fn two_windows_settle_without_a_single_resize() {
+        let (a_dims, b_dims) = ((120, 40), (80, 24));
+        let mut pty = a_dims;
+        let mut a = gate(a_dims, pty);
+        let mut b = gate(b_dims, pty);
+        let mut sends = 0;
+        for _ in 0..10 {
+            a.pty = pty;
+            if a.measure(a_dims) {
+                pty = a_dims;
+                sends += 1;
+            }
+            b.pty = pty;
+            if b.measure(b_dims) {
+                pty = b_dims;
+                sends += 1;
+            }
+        }
+        assert_eq!(sends, 0);
+        assert_eq!(pty, a_dims);
+    }
+
+    /// A window that never asserted takes the dims once, then both settle.
+    #[test]
+    fn fresh_window_asserts_once() {
+        let (a_dims, b_dims) = ((120, 40), (80, 24));
+        let mut pty = a_dims;
+        let mut a = gate(a_dims, pty);
+        let mut b = gate((0, 0), pty);
+        b.seen = (0, 0);
+        let mut sends = 0;
+        for _ in 0..10 {
+            a.pty = pty;
+            if a.measure(a_dims) {
+                pty = a_dims;
+                sends += 1;
+            }
+            b.pty = pty;
+            if b.measure(b_dims) {
+                pty = b_dims;
+                sends += 1;
+            }
+        }
+        assert_eq!(sends, 1);
+        assert_eq!(pty, b_dims);
+    }
+
+    #[test]
+    fn activation_retakes_the_dims() {
+        let mut g = gate((0, 0), (80, 24));
+        g.seen = (0, 0);
+        assert!(g.measure((120, 40)));
+        assert_eq!(g.sent, (120, 40));
+    }
+
+    /// Activation on a pane the PTY already fits: latch, no round trip.
+    #[test]
+    fn nothing_to_say_when_the_pty_already_fits() {
+        let mut g = gate((0, 0), (120, 40));
+        g.seen = (0, 0);
+        assert!(!g.measure((120, 40)));
+        assert_eq!(g.sent, (120, 40));
+    }
+
+    #[test]
+    fn big_reflow_goes_on_the_first_measure() {
+        let mut g = gate((120, 40), (120, 40));
+        assert!(g.measure((80, 24)));
+    }
+
+    #[test]
+    fn one_cell_jitter_waits_for_a_second_frame() {
+        let mut g = gate((120, 40), (120, 40));
+        assert!(!g.measure((121, 40)));
+        assert!(g.measure((121, 40)));
+    }
+}
