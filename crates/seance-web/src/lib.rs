@@ -131,6 +131,8 @@ pub struct App {
     scroll_back: RefCell<HashMap<String, i32>>,
     /// Last `m-scrolled` body class we painted (the phone's jump button).
     scroll_chip_on: Cell<bool>,
+    /// When a touch/keypress last re-asserted our grid (ms), to throttle.
+    last_touch_reassert: Cell<f64>,
     /// Mirror of `localStorage[SELECTED_KEY]`, so the per-frame check only
     /// writes on change.
     selection_saved: RefCell<Option<String>>,
@@ -139,6 +141,9 @@ pub struct App {
 /// Last circle this browser had selected; asked for on attach so a browser
 /// restart lands back on it instead of the daemon's global selection.
 const SELECTED_KEY: &str = "seance_selected";
+
+/// Minimum gap between touch/keypress-driven grid re-asserts.
+const TOUCH_REASSERT_MS: f64 = 2_000.0;
 
 /// localStorage-backed [`subs::SubStore`].
 struct LocalStore;
@@ -188,6 +193,7 @@ impl App {
             rail_pending: Rc::new(Cell::new(0)),
             scroll_back: RefCell::new(HashMap::new()),
             scroll_chip_on: Cell::new(false),
+            last_touch_reassert: Cell::new(0.0),
             selection_saved: RefCell::new(None),
         })
     }
@@ -1845,6 +1851,22 @@ pub fn start() -> Result<(), JsValue> {
         let a = Rc::clone(&app);
         let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| a.reassert_grid());
         window().add_event_listener_with_callback("focus", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    // Touching or typing here is the human using THIS client: take the dims
+    // back even if no focus/visibility event fired (the phone screen stayed
+    // on while the desktop re-took the pane). Throttled — every keystroke
+    // must not cost every client a full-grid resend.
+    for event in ["pointerdown", "keydown"] {
+        let a = Rc::clone(&app);
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
+            let t = now_ms();
+            if t - a.last_touch_reassert.get() > TOUCH_REASSERT_MS {
+                a.last_touch_reassert.set(t);
+                a.reassert_grid();
+            }
+        });
+        doc.add_event_listener_with_callback_and_bool(event, cb.as_ref().unchecked_ref(), true)?;
         cb.forget();
     }
     // iOS Safari reflows the viewport after the orientation event, not with

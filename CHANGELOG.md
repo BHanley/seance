@@ -86,6 +86,10 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Fixed
 
+- Web: touching or typing in the phone view takes the pane's size over from
+  the desktop (at most every 2s), so a circle sized for the desktop becomes
+  phone-sized as soon as you use it there. Focus, tab switch and rotation
+  already did.
 - Two windows showing the same circle no longer bounce a pane's size back and
   forth at frame rate. A window now only re-asserts a size it asked for itself,
   never one it saw in another client's frame.
