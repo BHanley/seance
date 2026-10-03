@@ -101,6 +101,8 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   chip closes the nav drawer.
 - Web: tapping a wrapped link opens the whole URL, including links that Claude
   wraps itself (short of the edge, with an indent).
+  A list of links one per line no longer glues the next item's bullet onto
+  the URL (`…?item=289-`).
 - A folder-trust dialog can no longer be answered by accident. Claude's
   dialog opens on **"No, exit"**, so the first `send`'s Enter quit Claude.
   `new --wait-ready` now stops at once and names a trust dialog.
