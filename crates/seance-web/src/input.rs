@@ -354,6 +354,32 @@ mod tests {
         );
     }
 
+    /// A finger drag in a mouse-reporting TUI reports the cell it is told
+    /// (where the drag began). Grok scrolls the region under the pointer;
+    /// the touch path used to always say (0,0) — its header — so Grok never
+    /// scrolled while Claude (position-blind) did.
+    #[test]
+    fn touch_scroll_reports_the_touched_cell_to_mouse_apps() {
+        let mut snap = GridSnapshot::empty("t");
+        snap.cols = 100;
+        snap.rows = 40;
+        snap.alt_screen = true;
+        snap.mouse_mode = true;
+        snap.sgr_mouse = true;
+        let WheelAction::Bytes(b) = scroll_action(-1, &snap, 30, 20, true) else {
+            panic!("expected SGR wheel bytes");
+        };
+        // SGR is 1-based: cell (30, 20) → ;31;21.
+        assert_eq!(String::from_utf8(b).unwrap(), "\x1b[<64;31;21M");
+        // Touch never takes the alternate-scroll arrow arm.
+        snap.mouse_mode = false;
+        snap.alternate_scroll = true;
+        assert!(matches!(
+            scroll_action(-1, &snap, 30, 20, true),
+            WheelAction::Scroll(1)
+        ));
+    }
+
     #[test]
     fn paste_is_bracketed() {
         assert_eq!(paste_bytes("hi"), b"\x1b[200~hi\x1b[201~");

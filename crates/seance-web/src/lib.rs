@@ -1601,8 +1601,13 @@ pub fn seance_mobile_key(key: &str, ctrl: bool, alt: bool, shift: bool) -> bool 
 /// Claude through prompt history instead of scrolling. Sub-row remainders
 /// accumulate in the shared `wheel_accum`, so a slow drag still moves rather
 /// than rounding to zero.
+///
+/// `client_x`/`client_y` is where the drag started: mouse-reporting TUIs
+/// scroll whatever sits under the pointer, and reporting the top-left corner
+/// (the old behaviour) scrolled Grok's header — i.e. nothing. Off-canvas or
+/// missing coordinates fall back to the middle of the screen.
 #[wasm_bindgen]
-pub fn seance_mobile_scroll(pane: &str, dy_px: f64) -> bool {
+pub fn seance_mobile_scroll(pane: &str, dy_px: f64, client_x: f64, client_y: f64) -> bool {
     with_mobile_app(|app| {
         let st = app.state.borrow();
         let Some(snap) = st.grids.get(pane).cloned() else {
@@ -1622,7 +1627,9 @@ pub fn seance_mobile_scroll(pane: &str, dy_px: f64) -> bool {
             // negate so the drag carries the content with it.
             input::wheel_rows(-dy_px, web_sys::WheelEvent::DOM_DELTA_PIXEL, cell_h, acc)
         };
-        match input::scroll_action(rows, &snap, 0, 0, true) {
+        let (col, row) =
+            cell_at_client(app, pane, client_x, client_y).unwrap_or((snap.cols / 2, snap.rows / 2));
+        match input::scroll_action(rows, &snap, col, row, true) {
             input::WheelAction::Scroll(r) => {
                 app.note_scroll(pane, r);
                 app.send(&GuiRequest::Scroll {
@@ -1650,27 +1657,39 @@ pub fn seance_mobile_scroll(pane: &str, dy_px: f64) -> bool {
 #[wasm_bindgen]
 pub fn seance_mobile_url_at(pane: &str, client_x: f64, client_y: f64) -> Option<String> {
     with_mobile_app(|app| {
-        let canvas = document().get_element_by_id(&format!("canvas-{pane}"))?;
-        let rect = canvas.get_bounding_client_rect();
-        let (x, y) = (client_x - rect.left(), client_y - rect.top());
-        if x < 0.0 || y < 0.0 || x >= rect.width() || y >= rect.height() {
-            return None;
-        }
-        let (cw, ch) = app
-            .views
-            .borrow()
-            .get(pane)
-            .map(|v| v.renderer.cell_size_css())?;
-        if cw <= 0.0 || ch <= 0.0 {
-            return None;
-        }
+        let (col, row) = cell_at_client(app, pane, client_x, client_y)?;
         let st = app.state.borrow();
-        let snap = st.grids.get(pane)?;
-        let col = ((x / cw as f64) as i32).clamp(0, snap.cols as i32 - 1) as u16;
-        let row = ((y / ch as f64) as i32).clamp(0, snap.rows as i32 - 1) as u16;
-        seance_core::links::url_at_cell(snap, row, col)
+        seance_core::links::url_at_cell(st.grids.get(pane)?, row, col)
     })
     .flatten()
+}
+
+/// The grid cell under a viewport point in `pane`'s canvas. Client
+/// coordinates, not offsets: a touch carries no `offsetX`. `None` when the
+/// point is off the canvas (or not a number — an old caller passing nothing).
+fn cell_at_client(app: &App, pane: &str, client_x: f64, client_y: f64) -> Option<(u16, u16)> {
+    if !client_x.is_finite() || !client_y.is_finite() {
+        return None;
+    }
+    let canvas = document().get_element_by_id(&format!("canvas-{pane}"))?;
+    let rect = canvas.get_bounding_client_rect();
+    let (x, y) = (client_x - rect.left(), client_y - rect.top());
+    if x < 0.0 || y < 0.0 || x >= rect.width() || y >= rect.height() {
+        return None;
+    }
+    let (cw, ch) = app
+        .views
+        .borrow()
+        .get(pane)
+        .map(|v| v.renderer.cell_size_css())?;
+    if cw <= 0.0 || ch <= 0.0 {
+        return None;
+    }
+    let st = app.state.borrow();
+    let snap = st.grids.get(pane)?;
+    let col = ((x / cw as f64) as i32).clamp(0, snap.cols as i32 - 1) as u16;
+    let row = ((y / ch as f64) as i32).clamp(0, snap.rows as i32 - 1) as u16;
+    Some((col, row))
 }
 
 /// Jump the focused pane back to the live tail. The phone's button for it is

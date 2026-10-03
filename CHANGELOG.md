@@ -86,6 +86,9 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Fixed
 
+- Web: scrolling with a finger works in Grok (and any TUI that scrolls the
+  region under the pointer). The touch scroll now reports where the drag
+  began instead of the top-left corner, which was Grok's header.
 - Web: touching or typing in the phone view takes the pane's size over from
   the desktop (at most every 2s), so a circle sized for the desktop becomes
   phone-sized as soon as you use it there. Focus, tab switch and rotation

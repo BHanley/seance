@@ -1183,7 +1183,9 @@
             if (!g.slug || !window.seanceMobile || !window.seanceMobile.scroll) return;
             // Browser scrolling must not move the page alongside terminal scrollback.
             if (e.cancelable) e.preventDefault();
-            window.seanceMobile.scroll(g.slug, step);
+            // Where the drag began: mouse-reporting TUIs (Grok) scroll the
+            // region under the pointer, not wherever it happens to be.
+            window.seanceMobile.scroll(g.slug, step, g.x0, g.y0);
           },
           { passive: false }
         );
