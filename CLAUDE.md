@@ -123,6 +123,8 @@ src/runtime/outqueue.rs per-connection send queue; grid frames COALESCE (one
                        Encoding happens at drain, not at push
 src/daemon/fsbridge.rs daemon side of the fs bridge + host widget poller
 src/daemon/prwatch.rs  external PR-poller ingest (`pr_watch.json`, mtime-polled)
+src/daemon/modewatch.rs host circle-mode poller (host.json `circle_modes[].state_cmd`;
+                       the host, e.g. vita's AFK, owns who is in the mode)
 src/remote_term*.rs    daemon-backed terminal model + GPUI view
 src/term_shared.rs     TerminalEvent/Ghost/keystroke_bytes shared by remote path
 ```

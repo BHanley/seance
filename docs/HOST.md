@@ -168,6 +168,26 @@ pins included.
 ]
 ```
 
+### Host-owned state (`state_cmd`)
+
+When the host can enter or leave the mode on its own (vita's AFK is
+entered from the phone, ends on a 4h TTL or with "release" in telegram), the
+prompt seance sent says nothing about the current state. Give the mode a
+`state_cmd` and the daemon polls it (`src/daemon/modewatch.rs`, every
+`poll_secs`, default 30) and shows exactly what it reports:
+
+```json
+"state_cmd": "cd /home/zack/work/vita && ./run onthego list",
+"state_field": "afk", "poll_secs": 15
+```
+
+Its stdout is a JSON array: circle slugs, or objects with `circle` and/or
+`pane` plus the boolean `state_field` (default `on`). A circle is in the mode
+when it is named or holds a named pane. A menu toggle holds the badge until a
+poll agrees, polling every 10s meanwhile, for 5 minutes at most. After that
+the host wins. If the command fails or prints junk, the last state stays
+put.
+
 An entry missing any string field is dropped. With no `circle_modes`, there's
 no menu entry and no badge. What the mode *means* is entirely the prompt's
 business — seance only flips the bit and delivers the words.

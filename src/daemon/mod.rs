@@ -12,6 +12,7 @@ use std::time::Duration;
 use anyhow::{bail, Context as _, Result};
 
 pub mod fsbridge;
+pub mod modewatch;
 pub mod prwatch;
 pub mod sleepsweep;
 
@@ -121,6 +122,8 @@ fn run_daemon_inner(args: Vec<String>) -> Result<()> {
 
     // External PR-watcher ingest (pr_watch.json → PrLink.status).
     prwatch::start_pr_watch_poller(Arc::clone(&engine));
+    // Host circle modes (AFK) the host owns: poll its state_cmd.
+    modewatch::start_mode_poller(Arc::clone(&engine));
     // Idle circles stop holding RAM (12h; restorable circles only).
     sleepsweep::start_sleep_sweeper(Arc::clone(&engine));
     // `send --queue`: deliver queued tasks when their pane goes idle.

@@ -1308,6 +1308,7 @@ fn circle_mode_prompts_the_first_pane_once_per_change() {
             on_prompt: "im going afk - activate that mode".into(),
             off_prompt: "im back - turn off afk mode".into(),
             top: true,
+            ..Default::default()
         }];
         eng.comms.leads.insert("claude-27".into(), "helper".into());
         assert_eq!(eng.first_pane("claude-27").as_deref(), Some("claude-21"));
@@ -1349,6 +1350,63 @@ fn circle_mode_prompts_the_first_pane_once_per_change() {
         assert!(eng
             .set_circle_mode_with(&defs, "nowhere", "afk", true)
             .is_err());
+        let _ = std::fs::remove_dir_all(&scratch);
+    });
+}
+
+/// A host-polled mode (`state_cmd`): the poll is the truth — it can put a
+/// circle in the mode seance never prompted, and take it out again. A menu
+/// toggle holds until the poll agrees or the hold expires.
+#[test]
+fn polled_circle_mode_follows_the_host_and_holds_pending_toggles() {
+    with_test_state_dir("circle-mode-poll", || {
+        let (mut eng, scratch) = comms_fixture("circle-mode-poll");
+        let set = |items: &[&str]| -> std::collections::BTreeSet<String> {
+            items.iter().map(|s| s.to_string()).collect()
+        };
+        let none = set(&[]);
+        // Entered without seance: by pane (vita's rows carry the pane).
+        assert!(eng.ingest_mode_state("afk", &none, &set(&["claude-38"]), 1_000));
+        assert!(eng.comms.modes["claude-47"].contains("afk"));
+        // Unchanged poll → nothing to push.
+        assert!(!eng.ingest_mode_state("afk", &none, &set(&["claude-38"]), 2_000));
+        // Left without seance (TTL / release).
+        assert!(eng.ingest_mode_state("afk", &none, &none, 3_000));
+        assert!(eng.comms.modes.is_empty());
+
+        // Menu toggle on a polled mode: pending, so a stale poll keeps it on…
+        let defs = vec![crate::host::HostCircleMode {
+            id: "afk".into(),
+            label: "AFK".into(),
+            on_label: "go afk".into(),
+            off_label: "back".into(),
+            on_prompt: "going".into(),
+            off_prompt: "back".into(),
+            state_cmd: Some("true".into()),
+            ..Default::default()
+        }];
+        eng.set_circle_mode_with(&defs, "claude-27", "afk", true)
+            .unwrap()
+            .unwrap();
+        assert!(eng.mode_pending("afk"));
+        let t = crate::runtime::engine::helpers::now_ms();
+        assert!(!eng.ingest_mode_state("afk", &none, &none, t));
+        assert!(eng.comms.modes["claude-27"].contains("afk"));
+        // …until the host confirms (by circle slug), which clears the hold.
+        eng.ingest_mode_state("afk", &set(&["claude-27"]), &none, t);
+        assert!(!eng.mode_pending("afk"));
+        // A hold that never confirms expires and the host wins.
+        eng.set_circle_mode_with(&defs, "claude-27", "afk", false)
+            .unwrap()
+            .unwrap();
+        assert!(eng.ingest_mode_state(
+            "afk",
+            &set(&["claude-27"]),
+            &none,
+            t + crate::host::MODE_PENDING_MS + 1
+        ));
+        assert!(eng.comms.modes["claude-27"].contains("afk"));
+        assert!(!eng.mode_pending("afk"));
         let _ = std::fs::remove_dir_all(&scratch);
     });
 }

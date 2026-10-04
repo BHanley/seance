@@ -16,6 +16,8 @@
 //!   closes. Old labels keep resolving (with a warning) until another circle
 //!   takes them.
 
+use std::collections::BTreeSet;
+
 use serde_json::json;
 
 use super::helpers::now_ms;
@@ -540,6 +542,12 @@ impl Engine {
         if !changed {
             return Ok(None);
         }
+        if def.state_cmd.is_some() {
+            self.comms.mode_pending.insert(
+                (slug.clone(), mode.to_string()),
+                (on, now_ms() + crate::host::MODE_PENDING_MS),
+            );
+        }
         events::log(
             "human",
             Some(&slug),
@@ -555,6 +563,62 @@ impl Engine {
             ..Default::default()
         });
         Ok(Some(id))
+    }
+
+    /// Take a host `state_cmd` poll as the truth for `mode`: the circles it
+    /// names, plus the circles of the panes it names, are in the mode and no
+    /// others — except where a recent menu toggle is still pending and the
+    /// host hasn't caught up. Returns whether anything visible changed.
+    pub(crate) fn ingest_mode_state(
+        &mut self,
+        mode: &str,
+        circles: &BTreeSet<String>,
+        panes: &BTreeSet<String>,
+        now_ms: u64,
+    ) -> bool {
+        let mut on: BTreeSet<String> = circles
+            .iter()
+            .filter_map(|c| self.resolve_circle(c).map(|(slug, _)| slug))
+            .collect();
+        on.extend(
+            self.panes
+                .iter()
+                .filter(|p| panes.contains(&p.slug))
+                .map(|p| p.workspace.clone()),
+        );
+        // Pending toggles: drop once confirmed or expired, else they win.
+        self.comms
+            .mode_pending
+            .retain(|(circle, m), (want, until)| {
+                m != mode || (*until > now_ms && on.contains(circle) != *want)
+            });
+        for ((circle, m), (want, _)) in &self.comms.mode_pending {
+            if m == mode {
+                if *want {
+                    on.insert(circle.clone());
+                } else {
+                    on.remove(circle);
+                }
+            }
+        }
+        let before = self.comms.modes.clone();
+        for set in self.comms.modes.values_mut() {
+            set.remove(mode);
+        }
+        for circle in on {
+            self.comms
+                .modes
+                .entry(circle)
+                .or_default()
+                .insert(mode.to_string());
+        }
+        self.comms.modes.retain(|_, set| !set.is_empty());
+        self.comms.modes != before
+    }
+
+    /// Is a menu toggle of `mode` still waiting on the host's poll?
+    pub(crate) fn mode_pending(&self, mode: &str) -> bool {
+        self.comms.mode_pending.keys().any(|(_, m)| m == mode)
     }
 
     /// Message deliverability for a pane whose screen reads `activity`:

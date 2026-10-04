@@ -130,6 +130,11 @@ pub struct CommsState {
     /// `circle_modes`.
     #[serde(default)]
     pub modes: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+    /// (circle, mode) → (on, until ms): a menu toggle of a host-polled mode
+    /// (`state_cmd`) the host hasn't confirmed yet. Holds the badge until the
+    /// poll agrees or it expires. Not persisted — a restart just re-polls.
+    #[serde(skip)]
+    pub mode_pending: std::collections::BTreeMap<(String, String), (bool, u64)>,
 }
 
 /// One message between sessions (`ctl ask --to` / `tell` / `reply`, and

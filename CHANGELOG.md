@@ -24,6 +24,9 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   AFK. The circle's first pane gets the mode's prompt, and the rail badges the
   row, tints it violet and, for `top` modes, lifts it above the pins. Turning
   it off sends the off prompt. With no host config, none of this appears.
+  A mode can name a `state_cmd`. The daemon then polls it, and the host
+  decides who is in the mode (for AFK, vita's `onthego list`), so circles that
+  went AFK from the phone or timed out show correctly.
 - Phone web views show one pane at a time, with tabs across the top to switch
   panes. The active terminal fills the screen above the keyboard.
 - `--help` / `-h` anywhere on the `seance` command line prints top-level
