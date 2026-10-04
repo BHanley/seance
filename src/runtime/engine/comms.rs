@@ -524,6 +524,11 @@ impl Engine {
             .find(|m| m.id == mode)
             .cloned()
             .ok_or_else(|| format!("no circle mode '{mode}' in host.json"))?;
+        if !def.toggleable() {
+            return Err(format!(
+                "circle mode '{mode}' is display-only (host owns it)"
+            ));
+        }
         let (slug, _) = self
             .resolve_circle(circle)
             .ok_or_else(|| format!("no circle '{circle}'"))?;

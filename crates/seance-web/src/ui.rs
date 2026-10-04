@@ -863,7 +863,8 @@ impl Chrome {
                         MenuEntry::item("pin", move || a.pin_workspace(&w))
                     });
                 }
-                for d in &mode_defs {
+                // Display-only modes (no labels) get no entry.
+                for d in mode_defs.iter().filter(|d| !d.on_label.is_empty()) {
                     let on = modes_on.iter().any(|m| m.id == d.id);
                     let a = actions.clone();
                     let w = ws.clone();

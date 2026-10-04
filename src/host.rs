@@ -169,9 +169,16 @@ pub struct HostConfig {
 pub struct HostCircleMode {
     pub id: String,
     pub label: String,
+    /// The four toggle fields: all set = the rail menu offers on/off and
+    /// sends the prompts; all left out = display-only (needs `state_cmd`),
+    /// e.g. "on a slack thread", which only the host can start or end.
+    #[serde(default)]
     pub on_label: String,
+    #[serde(default)]
     pub off_label: String,
+    #[serde(default)]
     pub on_prompt: String,
+    #[serde(default)]
     pub off_prompt: String,
     #[serde(default)]
     pub top: bool,
@@ -227,13 +234,28 @@ pub fn run_state_cmd(cmd: &str) -> Result<String, String> {
 }
 
 impl HostCircleMode {
-    /// What clients see (labels, no prompts).
+    /// Whether the rail menu can turn this mode on and off.
+    pub fn toggleable(&self) -> bool {
+        ![
+            &self.on_label,
+            &self.off_label,
+            &self.on_prompt,
+            &self.off_prompt,
+        ]
+        .iter()
+        .any(|f| f.trim().is_empty())
+    }
+
+    /// What clients see (labels, no prompts). Empty menu labels mean
+    /// display-only: no menu entry.
     pub fn def(&self) -> seance_core::protocol::CircleModeDef {
+        let toggle = self.toggleable();
+        let menu = |s: &String| if toggle { s.clone() } else { String::new() };
         seance_core::protocol::CircleModeDef {
             id: self.id.clone(),
             label: self.label.clone(),
-            on_label: self.on_label.clone(),
-            off_label: self.off_label.clone(),
+            on_label: menu(&self.on_label),
+            off_label: menu(&self.off_label),
             top: self.top,
         }
     }
@@ -247,16 +269,9 @@ pub fn parse_circle_modes(raw: &str) -> Vec<HostCircleMode> {
         .unwrap_or_default()
         .into_iter()
         .filter(|m| {
-            ![
-                &m.id,
-                &m.label,
-                &m.on_label,
-                &m.off_label,
-                &m.on_prompt,
-                &m.off_prompt,
-            ]
-            .iter()
-            .any(|f| f.trim().is_empty())
+            !m.id.trim().is_empty()
+                && !m.label.trim().is_empty()
+                && (m.toggleable() || m.state_cmd.is_some())
         })
         .collect()
 }
@@ -570,6 +585,13 @@ mod tests {
         assert!(modes[0].top);
         assert_eq!(modes[0].def().off_label, "turn off afk mode");
         assert!(parse_circle_modes("{}").is_empty());
+        // Display-only: no toggle fields, but the host reports the state.
+        let ro = parse_circle_modes(
+            r#"{"circle_modes": [{"id": "slack", "label": "slack", "state_cmd": "x"}]}"#,
+        );
+        assert_eq!(ro.len(), 1);
+        assert!(!ro[0].toggleable());
+        assert!(ro[0].def().on_label.is_empty(), "no menu entry");
         assert!(parse_circle_modes("not json").is_empty());
         // Existing keys keep parsing alongside.
         assert!(parse_menus(raw).unwrap().is_empty());

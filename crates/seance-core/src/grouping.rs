@@ -25,9 +25,11 @@ use std::collections::BTreeSet;
 /// Which band a circle renders in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Section {
-    /// In a host circle mode marked `top` (e.g. AFK): above everything, so
-    /// "what did I leave running while away" is the first thing you see.
-    Top,
+    /// In a host circle mode marked `top` (AFK, on a slack thread): above
+    /// everything, one band per mode in host order, so "what did I leave
+    /// running while away" is the first thing you see. The index is the
+    /// mode's position among the top modes.
+    Top(u8),
     /// Explicitly pinned. Wins over every other state — a pin is a statement
     /// about where you want to *look*, not about what the circle is doing.
     Pinned,
@@ -37,13 +39,13 @@ pub enum Section {
 }
 
 impl Section {
-    /// Top-to-bottom rail order.
-    pub const ALL: [Section; 3] = [Section::Top, Section::Pinned, Section::Active];
-
     /// Stable key for persisting group-fold state.
     pub fn key(self) -> &'static str {
+        const TOP: [&str; 8] = [
+            "top", "top1", "top2", "top3", "top4", "top5", "top6", "top7",
+        ];
         match self {
-            Section::Top => "top",
+            Section::Top(i) => TOP[(i as usize).min(TOP.len() - 1)],
             Section::Pinned => "pinned",
             Section::Active => "active",
         }
@@ -62,35 +64,57 @@ pub enum SectionRow {
     },
 }
 
-/// Split circles into the bands, top to bottom: `top` (in a host mode such
-/// as AFK), pinned, everything else.
+/// Split circles into the bands, top to bottom: one per `top` host mode (AFK,
+/// slack thread — `top[i]` is the circles in the i-th), pinned, everything
+/// else.
 ///
 /// `ordered` carries the sidebar sort, and every band preserves it. A pinned
 /// circle that is asleep stays pinned — you asked for it to be at the top, and
 /// the daemon dozing it off is not a reason to move it. A circle in a top mode
-/// goes to the top band even when pinned, and returns to its pin after.
+/// goes to that mode's band even when pinned, and returns to its pin after; a
+/// circle in two top modes sits in the first.
 pub fn partition_sections(
     ordered: &[String],
     pinned: &BTreeSet<String>,
-    top: &BTreeSet<String>,
+    top: &[BTreeSet<String>],
 ) -> Vec<(Section, Vec<String>)> {
-    let mut up = Vec::new();
+    let mut ups: Vec<Vec<String>> = vec![Vec::new(); top.len()];
     let mut pin = Vec::new();
     let mut act = Vec::new();
     for ws in ordered {
-        if top.contains(ws) {
-            up.push(ws.clone());
+        if let Some(i) = top.iter().position(|set| set.contains(ws)) {
+            ups[i].push(ws.clone());
         } else if pinned.contains(ws) {
             pin.push(ws.clone());
         } else {
             act.push(ws.clone());
         }
     }
-    vec![
-        (Section::Top, up),
-        (Section::Pinned, pin),
-        (Section::Active, act),
-    ]
+    let mut out: Vec<(Section, Vec<String>)> = ups
+        .into_iter()
+        .enumerate()
+        .map(|(i, v)| (Section::Top(i as u8), v))
+        .collect();
+    out.push((Section::Pinned, pin));
+    out.push((Section::Active, act));
+    out
+}
+
+/// The `top` argument of [`partition_sections`]: for each top mode id, in host
+/// order, the circles currently in it. `modes` is circle → mode ids on.
+pub fn top_mode_bands<'a, I>(top_ids: &[&str], modes: I) -> Vec<BTreeSet<String>>
+where
+    I: IntoIterator<Item = (&'a String, &'a Vec<String>)>,
+{
+    let mut bands = vec![BTreeSet::new(); top_ids.len()];
+    for (ws, on) in modes {
+        for (i, id) in top_ids.iter().enumerate() {
+            if on.iter().any(|m| m == id) {
+                bands[i].insert(ws.clone());
+            }
+        }
+    }
+    bands
 }
 
 /// The grouping key of a label: the text before its first `-`, lowercased.
@@ -181,7 +205,7 @@ mod tests {
     #[test]
     fn pinned_splits_off_and_everything_else_keeps_its_place() {
         let ordered = v(&["a", "b", "c", "d", "e"]);
-        let bands = partition_sections(&ordered, &set(&["a"]), &set(&[]));
+        let bands = partition_sections(&ordered, &set(&["a"]), &[]);
         let by = |s: Section| bands.iter().find(|(k, _)| *k == s).unwrap().1.clone();
         assert_eq!(by(Section::Pinned), v(&["a"]));
         // Asleep or not, everything else stays in one band in sort order.
@@ -193,13 +217,35 @@ mod tests {
     #[test]
     fn top_mode_circles_lead_even_over_pins() {
         let ordered = v(&["a", "b", "c", "d"]);
-        let bands = partition_sections(&ordered, &set(&["b", "c"]), &set(&["c", "d"]));
+        let bands = partition_sections(&ordered, &set(&["b", "c"]), &[set(&["c", "d"])]);
         let by = |s: Section| bands.iter().find(|(k, _)| *k == s).unwrap().1.clone();
-        assert_eq!(by(Section::Top), v(&["c", "d"]));
+        assert_eq!(by(Section::Top(0)), v(&["c", "d"]));
         assert_eq!(by(Section::Pinned), v(&["b"]));
         assert_eq!(by(Section::Active), v(&["a"]));
-        let back = partition_sections(&ordered, &set(&["b", "c"]), &set(&[]));
-        assert_eq!(back[1].1, v(&["b", "c"]));
+        let back = partition_sections(&ordered, &set(&["b", "c"]), &[]);
+        assert_eq!(back[0].1, v(&["b", "c"]));
+    }
+
+    /// Each top mode is its own band, in host order; a circle in two sits
+    /// in the first.
+    #[test]
+    fn each_top_mode_gets_its_own_band() {
+        let ordered = v(&["a", "b", "c", "d"]);
+        let bands = partition_sections(&ordered, &set(&[]), &[set(&["b", "c"]), set(&["c", "a"])]);
+        let order: Vec<Section> = bands.iter().map(|(s, _)| *s).collect();
+        assert_eq!(
+            order,
+            vec![
+                Section::Top(0),
+                Section::Top(1),
+                Section::Pinned,
+                Section::Active
+            ]
+        );
+        assert_eq!(bands[0].1, v(&["b", "c"]));
+        assert_eq!(bands[1].1, v(&["a"]));
+        assert_eq!(bands[3].1, v(&["d"]));
+        assert_ne!(Section::Top(0).key(), Section::Top(1).key());
     }
 
     /// Band ORDER is a contract, not an implementation detail: "jump to the
@@ -207,9 +253,9 @@ mod tests {
     /// non-empty band, so pinned has to come back first.
     #[test]
     fn bands_come_back_in_rail_order() {
-        let bands = partition_sections(&v(&["a", "b", "c", "d"]), &set(&["c"]), &set(&[]));
+        let bands = partition_sections(&v(&["a", "b", "c", "d"]), &set(&["c"]), &[]);
         let order: Vec<Section> = bands.iter().map(|(s, _)| *s).collect();
-        assert_eq!(order, vec![Section::Top, Section::Pinned, Section::Active]);
+        assert_eq!(order, vec![Section::Pinned, Section::Active]);
         // Top of the rail with something pinned is that pinned circle, even
         // though `a` sorts first overall.
         let top = bands

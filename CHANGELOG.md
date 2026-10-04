@@ -27,6 +27,9 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   A mode can name a `state_cmd`. The daemon then polls it, and the host
   decides who is in the mode (for AFK, vita's `onthego list`), so circles that
   went AFK from the phone or timed out show correctly.
+  Each top mode gets its own band above the pins. A mode with no toggle
+  fields is display-only, e.g. vita's `slack` mode, which lists the circles
+  whose pane holds a cadence slack thread.
 - Phone web views show one pane at a time, with tabs across the top to switch
   panes. The active terminal fills the screen above the keyboard.
 - `--help` / `-h` anywhere on the `seance` command line prints top-level

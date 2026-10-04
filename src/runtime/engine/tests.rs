@@ -1407,6 +1407,18 @@ fn polled_circle_mode_follows_the_host_and_holds_pending_toggles() {
         ));
         assert!(eng.comms.modes["claude-27"].contains("afk"));
         assert!(!eng.mode_pending("afk"));
+        // Display-only (slack thread): the menu can't toggle what only the
+        // host can start or end.
+        let ro = vec![crate::host::HostCircleMode {
+            id: "slack".into(),
+            label: "slack".into(),
+            state_cmd: Some("true".into()),
+            ..Default::default()
+        }];
+        assert!(eng
+            .set_circle_mode_with(&ro, "claude-27", "slack", true)
+            .unwrap_err()
+            .contains("display-only"));
         let _ = std::fs::remove_dir_all(&scratch);
     });
 }

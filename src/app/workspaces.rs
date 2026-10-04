@@ -360,23 +360,20 @@ impl SeanceApp {
         seance_core::grouping::partition_sections(
             &self.workspaces(),
             &self.subs_pref.pinned,
-            &self.top_mode_circles(),
+            &self.top_mode_bands(),
         )
     }
 
-    /// Circles in a host mode marked `top` (AFK): they get the rail's first band.
-    pub(super) fn top_mode_circles(&self) -> std::collections::BTreeSet<String> {
+    /// Circles in each host mode marked `top` (AFK, slack thread), one set
+    /// per mode in host order: each gets its own band at the top of the rail.
+    pub(super) fn top_mode_bands(&self) -> Vec<std::collections::BTreeSet<String>> {
         let top: Vec<&str> = self
             .circle_mode_defs
             .iter()
             .filter(|d| d.top)
             .map(|d| d.id.as_str())
             .collect();
-        self.circle_modes
-            .iter()
-            .filter(|(_, m)| m.iter().any(|id| top.contains(&id.as_str())))
-            .map(|(ws, _)| ws.clone())
-            .collect()
+        seance_core::grouping::top_mode_bands(&top, &self.circle_modes)
     }
 
     /// The host modes on for `workspace`, as their definitions (badge labels).

@@ -755,15 +755,20 @@ impl SeanceApp {
                             menu.menu("pin to top", Box::new(ActPinWorkspace(ws_m.clone())))
                         };
                         // Host modes (AFK): one toggle each, worded for the
-                        // direction it goes.
-                        let m = mode_defs.iter().fold(m, |m, d| {
-                            let on = modes_on.iter().any(|x| x.id == d.id);
-                            let label = if on { &d.off_label } else { &d.on_label };
-                            m.menu(
-                                label.clone(),
-                                Box::new(ActCircleMode(ws_m.clone(), d.id.clone(), !on)),
-                            )
-                        });
+                        // direction it goes. Display-only modes (slack thread)
+                        // carry no labels and get no entry.
+                        let m =
+                            mode_defs
+                                .iter()
+                                .filter(|d| !d.on_label.is_empty())
+                                .fold(m, |m, d| {
+                                    let on = modes_on.iter().any(|x| x.id == d.id);
+                                    let label = if on { &d.off_label } else { &d.on_label };
+                                    m.menu(
+                                        label.clone(),
+                                        Box::new(ActCircleMode(ws_m.clone(), d.id.clone(), !on)),
+                                    )
+                                });
                         let m = m
                             .menu(
                                 "rename workspace",

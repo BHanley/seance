@@ -1767,6 +1767,7 @@ pub fn seance_mobile_circle_modes() -> String {
         let rows: Vec<serde_json::Value> = st
             .circle_mode_defs
             .iter()
+            .filter(|d| !d.on_label.is_empty())
             .map(|d| {
                 serde_json::json!({
                     "id": d.id,

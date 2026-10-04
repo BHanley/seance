@@ -188,7 +188,24 @@ poll agrees, polling every 10s meanwhile, for 5 minutes at most. After that
 the host wins. If the command fails or prints junk, the last state stays
 put.
 
-An entry missing any string field is dropped. With no `circle_modes`, there's
+A mode whose state only the host can change is **display-only**: leave out
+all four toggle fields (`on_label`, `off_label`, `on_prompt`, `off_prompt`)
+and give it a `state_cmd`. It gets a badge and its own band, but no menu
+entry. vita's slack one:
+
+```json
+{"id": "slack", "label": "slack", "top": true, "poll_secs": 20,
+ "state_cmd": "python3 /home/zack/work/vita/scripts/seance_host_slack.py list"}
+```
+
+That script pairs `cadence slack status` (active claims) with running
+`cadence slack await` processes, whose `$SEANCE_SESSION` names the pane.
+
+Each `top` mode gets its own band, in host.json order, above the pins. A
+circle in two top modes sits in the first one's band.
+
+An entry with no id or label is dropped, and so is one with only some of
+the toggle fields, unless it has a `state_cmd`. With no `circle_modes`, there's
 no menu entry and no badge. What the mode *means* is entirely the prompt's
 business — seance only flips the bit and delivers the words.
 

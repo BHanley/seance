@@ -420,19 +420,19 @@ impl ClientState {
             .filter(|w| self.subs.is_pinned(w))
             .cloned()
             .collect();
-        seance_core::grouping::partition_sections(&ordered, &pinned, &self.top_mode_circles())
+        seance_core::grouping::partition_sections(&ordered, &pinned, &self.top_mode_bands())
     }
 
-    /// Circles in a host mode marked `top` — they lead the rail.
-    pub fn top_mode_circles(&self) -> std::collections::BTreeSet<String> {
-        self.circle_modes
+    /// Circles in each host mode marked `top` (AFK, slack thread), one set
+    /// per mode in host order: each leads the rail in its own band.
+    pub fn top_mode_bands(&self) -> Vec<std::collections::BTreeSet<String>> {
+        let top: Vec<&str> = self
+            .circle_mode_defs
             .iter()
-            .filter(|(_, ids)| {
-                ids.iter()
-                    .any(|id| self.circle_mode_defs.iter().any(|d| d.top && &d.id == id))
-            })
-            .map(|(ws, _)| ws.clone())
-            .collect()
+            .filter(|d| d.top)
+            .map(|d| d.id.as_str())
+            .collect();
+        seance_core::grouping::top_mode_bands(&top, &self.circle_modes)
     }
 
     /// Optimistic flip of a circle mode, ahead of the daemon's State echo.
