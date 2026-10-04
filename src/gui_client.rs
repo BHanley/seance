@@ -293,6 +293,14 @@ impl GuiClient {
         })
     }
 
+    pub fn set_circle_mode(&self, workspace: &str, mode: &str, on: bool) -> Result<()> {
+        self.send(GuiRequest::SetCircleMode {
+            workspace: workspace.to_string(),
+            mode: mode.to_string(),
+            on,
+        })
+    }
+
     pub fn rename_workspace(&self, old: &str, new: &str) -> Result<()> {
         self.send(GuiRequest::RenameWorkspace {
             old: old.to_string(),

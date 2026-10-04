@@ -147,6 +147,31 @@ the prompt, the file pane the agent is told to open beside itself — is the
 host's, expressed through `seance ctl`. That is the seam: a host can add a
 workflow to seance without seance learning the workflow.
 
+## Circle modes (`circle_modes[]`)
+
+A circle mode is a named on/off state a circle can be put in from its rail
+row's right-click menu (desktop and web) or the phone circle sheet. Turning
+it on sends `on_prompt` to the circle's **first pane** (earliest-created
+terminal; a `ctl lead` override does not apply), turning it off sends
+`off_prompt`. Both go through the message queue, so they wait out a busy
+turn rather than interleaving with it. The daemon persists which circles are
+in which mode (`state.json`, survives upgrade); clients show a badge with
+`label`, a violet edge, and — for `top: true` — a band above everything else,
+pins included.
+
+```json
+"circle_modes": [
+  {"id": "afk", "label": "AFK", "on_label": "go afk",
+   "off_label": "turn off afk mode",
+   "on_prompt": "im going afk - activate that mode",
+   "off_prompt": "im back - turn off afk mode", "top": true}
+]
+```
+
+An entry missing any string field is dropped. With no `circle_modes`, there's
+no menu entry and no badge. What the mode *means* is entirely the prompt's
+business — seance only flips the bit and delivers the words.
+
 ## Adding another widget or menu
 
 1. Write a command that emits schema v1 JSON on stdout.

@@ -151,6 +151,80 @@ pub struct HostConfig {
     pub sidebar: Vec<HostSidebarConfig>,
     #[serde(default)]
     pub menus: Vec<HostMenuConfig>,
+    #[serde(default)]
+    pub circle_modes: Vec<HostCircleMode>,
+}
+
+/// A per-circle mode the host offers on the rail's right-click menu (zack's
+/// AFK). Turning it on/off sends `on_prompt` / `off_prompt` to the circle's
+/// first pane; circles in a `top` mode get their own band at the top.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct HostCircleMode {
+    pub id: String,
+    pub label: String,
+    pub on_label: String,
+    pub off_label: String,
+    pub on_prompt: String,
+    pub off_prompt: String,
+    #[serde(default)]
+    pub top: bool,
+}
+
+impl HostCircleMode {
+    /// What clients see (labels, no prompts).
+    pub fn def(&self) -> seance_core::protocol::CircleModeDef {
+        seance_core::protocol::CircleModeDef {
+            id: self.id.clone(),
+            label: self.label.clone(),
+            on_label: self.on_label.clone(),
+            off_label: self.off_label.clone(),
+            top: self.top,
+        }
+    }
+}
+
+/// Circle modes out of a host.json body; entries missing an id, label or
+/// prompt are dropped. Pure (tested); [`circle_modes`] is the cached reader.
+pub fn parse_circle_modes(raw: &str) -> Vec<HostCircleMode> {
+    serde_json::from_str::<HostConfig>(raw)
+        .map(|c| c.circle_modes)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| {
+            ![
+                &m.id,
+                &m.label,
+                &m.on_label,
+                &m.off_label,
+                &m.on_prompt,
+                &m.off_prompt,
+            ]
+            .iter()
+            .any(|f| f.trim().is_empty())
+        })
+        .collect()
+}
+
+/// The circle modes this machine's host.json defines (empty without one:
+/// fail closed, no toggles anywhere). Re-read only when the file's mtime
+/// changes, since the daemon asks on every state push.
+pub fn circle_modes() -> Vec<HostCircleMode> {
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<(Option<std::time::SystemTime>, Vec<HostCircleMode>)>> =
+        Mutex::new(None);
+    let path = host_config_path();
+    let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((seen, modes)) = cache.as_ref() {
+        if *seen == mtime {
+            return modes.clone();
+        }
+    }
+    let modes = std::fs::read_to_string(&path)
+        .map(|raw| parse_circle_modes(&raw))
+        .unwrap_or_default();
+    *cache = Some((mtime, modes.clone()));
+    modes
 }
 
 /// Menus out of a host.json body, dropping any entry missing a command.
@@ -424,6 +498,27 @@ fn poll_widget(cfg: &HostSidebarConfig) -> Result<HostWidgetSnap, String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn circle_modes_parse_and_drop_incomplete_entries() {
+        let raw = r#"{"circle_modes": [
+            {"id": "afk", "label": "AFK", "on_label": "go afk", "off_label": "turn off afk mode",
+             "on_prompt": "im going afk - activate that mode",
+             "off_prompt": "im back - turn off afk mode", "top": true},
+            {"id": "half", "label": "x", "on_label": "a", "off_label": "b", "on_prompt": "",
+             "off_prompt": "z"}
+        ]}"#;
+        let modes = parse_circle_modes(raw);
+        assert_eq!(modes.len(), 1, "an entry with an empty prompt is dropped");
+        assert_eq!(modes[0].id, "afk");
+        assert!(modes[0].top);
+        assert_eq!(modes[0].def().off_label, "turn off afk mode");
+        assert!(parse_circle_modes("{}").is_empty());
+        assert!(parse_circle_modes("not json").is_empty());
+        // Existing keys keep parsing alongside.
+        assert!(parse_menus(raw).unwrap().is_empty());
+    }
+
     use super::*;
 
     #[test]

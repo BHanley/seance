@@ -442,6 +442,19 @@ impl App {
         self.need_rebuild.set(true);
     }
 
+    /// Host circle mode toggle (AFK). The daemon owns the mode and sends the
+    /// prompt; flipping it locally too keeps the rail and the phone sheet
+    /// from showing the old state until the State echo lands.
+    pub fn set_circle_mode(&self, ws: &str, mode: &str, on: bool) {
+        self.send(&GuiRequest::SetCircleMode {
+            workspace: ws.to_string(),
+            mode: mode.to_string(),
+            on,
+        });
+        self.state.borrow_mut().set_circle_mode_local(ws, mode, on);
+        self.need_rebuild.set(true);
+    }
+
     /// Row menu / circle menu "unpin": back into the normal band.
     pub fn unpin_workspace(self: &Rc<Self>, ws: &str) {
         if !self.state.borrow_mut().subs.unpin(ws) {
@@ -1249,6 +1262,9 @@ impl Actions for AppActions {
     fn pin_workspace(&self, ws: &str) {
         self.0.pin_workspace(ws);
     }
+    fn set_circle_mode(&self, ws: &str, mode: &str, on: bool) {
+        self.0.set_circle_mode(ws, mode, on);
+    }
 
     fn unpin_workspace(&self, ws: &str) {
         self.0.unpin_workspace(ws);
@@ -1735,6 +1751,48 @@ pub fn seance_mobile_set_pinned(pinned: bool) -> Option<bool> {
         Some(app.state.borrow().subs.is_pinned(&ws))
     })
     .flatten()
+}
+
+/// The host circle modes (AFK) for the selected circle, as a JSON array of
+/// `{id, label, on_label, off_label, on}`. `"[]"` when the host defines none
+/// or nothing is selected — the phone sheet then shows no mode controls.
+#[wasm_bindgen]
+pub fn seance_mobile_circle_modes() -> String {
+    with_mobile_app(|app| {
+        let Some(ws) = app.selected_workspace() else {
+            return "[]".to_string();
+        };
+        let st = app.state.borrow();
+        let on: Vec<String> = st.circle_modes_of(&ws).into_iter().map(|d| d.id).collect();
+        let rows: Vec<serde_json::Value> = st
+            .circle_mode_defs
+            .iter()
+            .map(|d| {
+                serde_json::json!({
+                    "id": d.id,
+                    "label": d.label,
+                    "on_label": d.on_label,
+                    "off_label": d.off_label,
+                    "on": on.contains(&d.id),
+                })
+            })
+            .collect();
+        serde_json::Value::Array(rows).to_string()
+    })
+    .unwrap_or_else(|| "[]".to_string())
+}
+
+/// Turn a host circle mode on/off for the selected circle.
+#[wasm_bindgen]
+pub fn seance_mobile_set_circle_mode(mode: &str, on: bool) -> bool {
+    with_mobile_app(|app| {
+        let Some(ws) = app.selected_workspace() else {
+            return false;
+        };
+        app.set_circle_mode(&ws, mode, on);
+        true
+    })
+    .unwrap_or(false)
 }
 
 /// Banish the selected circle — kill every pane in it — and land on a

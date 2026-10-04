@@ -357,7 +357,39 @@ impl SeanceApp {
     /// The rail's two bands in display order, each carrying the single sort
     /// from [`Self::workspaces`]: pinned, then everything else.
     pub(super) fn workspace_sections(&self) -> Vec<(Section, Vec<String>)> {
-        seance_core::grouping::partition_sections(&self.workspaces(), &self.subs_pref.pinned)
+        seance_core::grouping::partition_sections(
+            &self.workspaces(),
+            &self.subs_pref.pinned,
+            &self.top_mode_circles(),
+        )
+    }
+
+    /// Circles in a host mode marked `top` (AFK): they get the rail's first band.
+    pub(super) fn top_mode_circles(&self) -> std::collections::BTreeSet<String> {
+        let top: Vec<&str> = self
+            .circle_mode_defs
+            .iter()
+            .filter(|d| d.top)
+            .map(|d| d.id.as_str())
+            .collect();
+        self.circle_modes
+            .iter()
+            .filter(|(_, m)| m.iter().any(|id| top.contains(&id.as_str())))
+            .map(|(ws, _)| ws.clone())
+            .collect()
+    }
+
+    /// The host modes on for `workspace`, as their definitions (badge labels).
+    pub(super) fn circle_modes_of(
+        &self,
+        workspace: &str,
+    ) -> Vec<seance_core::protocol::CircleModeDef> {
+        let on = self.circle_modes.get(workspace);
+        self.circle_mode_defs
+            .iter()
+            .filter(|d| on.is_some_and(|m| m.contains(&d.id)))
+            .cloned()
+            .collect()
     }
 
     /// One band's rows: loose circles and prefix clusters, in sort order.
@@ -398,15 +430,15 @@ impl SeanceApp {
     /// rows too.
     fn rail_row_index(&self, workspace: &str) -> Option<usize> {
         let mut i = 0usize;
-        let mut any_pinned = false;
+        let mut rows_above = false;
         for (section, circles) in self.workspace_sections() {
             if circles.is_empty() {
                 continue;
             }
-            any_pinned |= section == Section::Pinned;
-            if section == Section::Active && any_pinned {
-                i += 1; // the rule under the pinned band
+            if rows_above {
+                i += 1; // the rule between this band and the one above
             }
+            rows_above = true;
             for row in self.section_rows(&circles) {
                 match row {
                     SectionRow::Circle(ws) => {

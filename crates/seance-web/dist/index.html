@@ -54,6 +54,8 @@
         seance_mobile_set_pinned,
         seance_mobile_scroll_bottom,
         seance_mobile_banish_workspace,
+        seance_mobile_circle_modes,
+        seance_mobile_set_circle_mode,
       } from './seance_web.js';
       await init();
       // The phone chrome below is plain JS and can't reach the websocket —
@@ -69,6 +71,8 @@
         setPinned: seance_mobile_set_pinned,
         toBottom: seance_mobile_scroll_bottom,
         banish: seance_mobile_banish_workspace,
+        circleModes: seance_mobile_circle_modes,
+        setCircleMode: seance_mobile_set_circle_mode,
       };
       window.dispatchEvent(new Event('seance-ready'));
     </script>
@@ -248,6 +252,9 @@
         var menuRailHead = mk('div', null, 'm-menu-sec', 'rail');
         var pinBtn = mk('button', 'm-menu-pin', 'm-sheet-btn', 'pin to top');
         pinBtn.type = 'button';
+        // Host circle modes (AFK) — one toggle each, only when host.json
+        // defines any. The daemon prompts the circle's first pane.
+        var modeBtns = mk('div', 'm-menu-modes');
         var menuPrsHead = mk('div', null, 'm-menu-sec', 'pull requests');
         var menuPrs = mk('div', 'm-menu-prs');
         var menuConnHead = mk('div', null, 'm-menu-sec', 'connection');
@@ -266,6 +273,7 @@
           menuName,
           menuRailHead,
           pinBtn,
+          modeBtns,
           menuPrsHead,
           menuPrs,
           menuConnHead,
@@ -326,6 +334,29 @@
           menuRailHead.hidden = on === undefined;
           pinBtn.textContent = on ? 'unpin' : 'pin to top';
           pinBtn.classList.toggle('on', !!on);
+          paintModes();
+        }
+        function paintModes() {
+          modeBtns.textContent = '';
+          var modes = [];
+          try {
+            modes = window.seanceMobile ? JSON.parse(window.seanceMobile.circleModes()) : [];
+          } catch (_) {}
+          modes.forEach(function (m) {
+            var b = mk('button', null, 'm-sheet-btn m-menu-mode', m.on ? m.off_label : m.on_label);
+            b.type = 'button';
+            b.classList.toggle('on', !!m.on);
+            b.addEventListener('click', function (e) {
+              e.preventDefault();
+              if (!window.seanceMobile.setCircleMode(m.id, !m.on)) {
+                toast('no circle selected');
+                return;
+              }
+              paintModes();
+              toast(m.on ? m.label + ' off' : m.label + ' on');
+            });
+            modeBtns.appendChild(b);
+          });
         }
         pinBtn.addEventListener('click', function (e) {
           e.preventDefault();

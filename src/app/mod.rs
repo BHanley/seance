@@ -258,6 +258,10 @@ pub struct SeanceApp {
     /// until someone renames it. Nothing else in this struct is keyed by the
     /// label, so a rename disturbs none of it.
     workspace_names: std::collections::HashMap<String, String>,
+    /// Host circle modes (host.json `circle_modes`, e.g. AFK) and which
+    /// circles are in which. Empty unless this machine defines some.
+    circle_mode_defs: Vec<seance_core::protocol::CircleModeDef>,
+    circle_modes: std::collections::HashMap<String, Vec<String>>,
     /// Sticky attention on inactive circles until selected (done/needs).
     workspace_unread: std::collections::HashMap<String, WorkspaceAttention>,
     /// Full-window live overview (ctrl+shift+space).
@@ -481,6 +485,8 @@ impl SeanceApp {
             busy_panes: std::collections::HashSet::new(),
             workspace_was_working: std::collections::HashSet::new(),
             workspace_names: std::collections::HashMap::new(),
+            circle_mode_defs: Vec::new(),
+            circle_modes: std::collections::HashMap::new(),
             workspace_unread: std::collections::HashMap::new(),
             overview: false,
             empty_window: empty,
@@ -760,6 +766,7 @@ impl SeanceApp {
                 windows,
                 subscriptions,
                 workspace_meta,
+                circle_modes,
             } => {
                 // A State means the daemon attached us — whatever it refused
                 // us for last time no longer holds.
@@ -863,7 +870,11 @@ impl SeanceApp {
                 // Labels arrive for every known circle, so rebuild wholesale:
                 // a circle renamed back to its slug must lose its entry.
                 let mut names = std::collections::HashMap::new();
+                let mut modes = std::collections::HashMap::new();
                 for m in workspace_meta {
+                    if !m.modes.is_empty() {
+                        modes.insert(m.workspace.clone(), m.modes.clone());
+                    }
                     if let Some(n) = m.name.clone() {
                         names.insert(m.workspace.clone(), n);
                     }
@@ -890,6 +901,8 @@ impl SeanceApp {
                 }
                 self.pr_links = links;
                 self.workspace_names = names;
+                self.circle_modes = modes;
+                self.circle_mode_defs = circle_modes;
                 // active_slug from daemon; repair if missing / not in selected
                 // workspace. Keyboard recovery is render-side (ensure_keyboard_focus)
                 // so we don't steal focus from whisper / rename / palette here.
@@ -2791,6 +2804,20 @@ impl Render for SeanceApp {
             }))
             .on_action(cx.listener(|this, act: &ActWakeWorkspace, window, cx| {
                 this.wake_workspace_focused(&act.0.clone(), window, cx);
+            }))
+            .on_action(cx.listener(|this, act: &ActCircleMode, _, cx| {
+                let ActCircleMode(ws, mode, on) = act.clone();
+                let _ = this.client.set_circle_mode(&ws, &mode, on);
+                // Optimistic: move the row now; the daemon's state push agrees.
+                let modes = this.circle_modes.entry(ws.clone()).or_default();
+                modes.retain(|m| *m != mode);
+                if on {
+                    modes.push(mode);
+                }
+                if modes.is_empty() {
+                    this.circle_modes.remove(&ws);
+                }
+                cx.notify();
             }))
             .on_action(cx.listener(|this, act: &ActPinWorkspace, _, cx| {
                 this.pin_workspace(&act.0.clone());

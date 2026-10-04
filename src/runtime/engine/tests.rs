@@ -1293,3 +1293,62 @@ fn contacts_hear_about_renames_and_lead_changes_and_old_labels_still_work() {
         let _ = std::fs::remove_dir_all(&scratch);
     });
 }
+
+/// Host circle mode (AFK): on/off prompts go verbatim to the circle's FIRST
+/// pane — not a `ctl lead` override — and repeating a state sends nothing.
+#[test]
+fn circle_mode_prompts_the_first_pane_once_per_change() {
+    with_test_state_dir("circle-mode", || {
+        let (mut eng, scratch) = comms_fixture("circle-mode");
+        let defs = vec![crate::host::HostCircleMode {
+            id: "afk".into(),
+            label: "AFK".into(),
+            on_label: "go afk".into(),
+            off_label: "turn off afk mode".into(),
+            on_prompt: "im going afk - activate that mode".into(),
+            off_prompt: "im back - turn off afk mode".into(),
+            top: true,
+        }];
+        eng.comms.leads.insert("claude-27".into(), "helper".into());
+        assert_eq!(eng.first_pane("claude-27").as_deref(), Some("claude-21"));
+
+        let id = eng
+            .set_circle_mode_with(&defs, "paceline-desk", "afk", true)
+            .unwrap()
+            .expect("a change sends a prompt");
+        let m = eng.message(&id).unwrap();
+        assert_eq!(
+            (m.kind.as_str(), m.to_pane.as_str(), m.text.as_str()),
+            ("prompt", "claude-21", "im going afk - activate that mode")
+        );
+        assert_eq!(
+            eng.message_paste_text(m),
+            "im going afk - activate that mode"
+        );
+        assert!(eng.comms.modes["claude-27"].contains("afk"));
+        // Already on: nothing new is sent.
+        assert_eq!(
+            eng.set_circle_mode_with(&defs, "claude-27", "afk", true)
+                .unwrap(),
+            None
+        );
+
+        let off = eng
+            .set_circle_mode_with(&defs, "claude-27", "afk", false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            eng.message(&off).unwrap().text,
+            "im back - turn off afk mode"
+        );
+        assert!(!eng.comms.modes.contains_key("claude-27"));
+        // Unknown mode / circle are refused.
+        assert!(eng
+            .set_circle_mode_with(&defs, "claude-27", "nap", true)
+            .is_err());
+        assert!(eng
+            .set_circle_mode_with(&defs, "nowhere", "afk", true)
+            .is_err());
+        let _ = std::fs::remove_dir_all(&scratch);
+    });
+}

@@ -19,6 +19,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **Circle modes** (host.json `circle_modes[]`, docs/HOST.md): right-click a
+  circle (or use the phone circle sheet) to turn on a host-defined mode such as
+  AFK. The circle's first pane gets the mode's prompt, and the rail badges the
+  row, tints it violet and, for `top` modes, lifts it above the pins. Turning
+  it off sends the off prompt. With no host config, none of this appears.
 - Phone web views show one pane at a time, with tabs across the top to switch
   panes. The active terminal fills the screen above the keyboard.
 - `--help` / `-h` anywhere on the `seance` command line prints top-level

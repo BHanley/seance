@@ -303,6 +303,8 @@ impl Engine {
                 m.text
             ),
             "notice" => format!("📇 seance notice: {}", m.text),
+            // A circle-mode prompt (AFK on/off) is the human's own words: as is.
+            "prompt" => m.text.clone(),
             _ => format!(
                 "📨 seance {} — note from {from} (FYI, no reply needed):\n\n{}",
                 m.id, m.text
@@ -480,6 +482,79 @@ impl Engine {
                 ..Default::default()
             });
         }
+    }
+
+    /// The circle's first-created terminal pane (earliest birth; panes older
+    /// than the birth record count as oldest, in pane-list order). Unlike
+    /// [`Self::effective_lead`], a `ctl lead` override does not apply.
+    pub(crate) fn first_pane(&self, circle: &str) -> Option<String> {
+        self.panes
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.workspace == circle && p.kind != "file")
+            .min_by_key(|(i, p)| (self.comms.born.get(&p.slug).copied().unwrap_or(0), *i))
+            .map(|(_, p)| p.slug.clone())
+    }
+
+    /// Turn a host circle mode (host.json `circle_modes`, e.g. AFK) on or off
+    /// for `circle`, and send the mode's prompt to the circle's first pane.
+    /// No-op (no prompt) when it is already in that state. Returns the
+    /// prompt's message id.
+    pub(crate) fn set_circle_mode(
+        &mut self,
+        circle: &str,
+        mode: &str,
+        on: bool,
+    ) -> Result<Option<String>, String> {
+        self.set_circle_mode_with(&crate::host::circle_modes(), circle, mode, on)
+    }
+
+    /// [`Self::set_circle_mode`] against explicit mode defs (tests).
+    pub(crate) fn set_circle_mode_with(
+        &mut self,
+        defs: &[crate::host::HostCircleMode],
+        circle: &str,
+        mode: &str,
+        on: bool,
+    ) -> Result<Option<String>, String> {
+        let def = defs
+            .iter()
+            .find(|m| m.id == mode)
+            .cloned()
+            .ok_or_else(|| format!("no circle mode '{mode}' in host.json"))?;
+        let (slug, _) = self
+            .resolve_circle(circle)
+            .ok_or_else(|| format!("no circle '{circle}'"))?;
+        let first = self
+            .first_pane(&slug)
+            .ok_or_else(|| format!("circle '{circle}' has no pane to tell"))?;
+        let set = self.comms.modes.entry(slug.clone()).or_default();
+        let changed = if on {
+            set.insert(mode.to_string())
+        } else {
+            set.remove(mode)
+        };
+        if set.is_empty() {
+            self.comms.modes.remove(&slug);
+        }
+        if !changed {
+            return Ok(None);
+        }
+        events::log(
+            "human",
+            Some(&slug),
+            Some(&first),
+            "circle_mode",
+            format!("{mode} {}", if on { "on" } else { "off" }),
+        );
+        let id = self.post_message(MessageRecord {
+            kind: "prompt".into(),
+            to_pane: first,
+            to_circle: Some(slug),
+            text: if on { def.on_prompt } else { def.off_prompt },
+            ..Default::default()
+        });
+        Ok(Some(id))
     }
 
     /// Message deliverability for a pane whose screen reads `activity`:

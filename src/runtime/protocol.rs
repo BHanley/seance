@@ -126,6 +126,10 @@ pub struct CommsState {
     pub messages: Vec<MessageRecord>,
     #[serde(default)]
     pub counter: u64,
+    /// circle slug → host circle modes on there (e.g. "afk"); see host.json
+    /// `circle_modes`.
+    #[serde(default)]
+    pub modes: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
 }
 
 /// One message between sessions (`ctl ask --to` / `tell` / `reply`, and
