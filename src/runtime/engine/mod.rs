@@ -1,5 +1,6 @@
 //! Session engine: panes, control plane, layout state. gpui-free.
 
+pub(crate) mod agent_session;
 mod comms;
 mod control;
 mod gui;
@@ -60,8 +61,8 @@ pub struct EnginePane {
     pub command: String,
     pub tiled: bool,
     pub resume_on_restore: bool,
-    /// Claude conversation this pane owns; restored with `--resume`.
-    pub claude_session: Option<String>,
+    /// Agent conversation this pane owns (`agent_session.rs`).
+    pub agent_session: Option<String>,
     /// Asleep: no `session`, no process, no RAM. Keeps identity + last frame.
     pub asleep: bool,
     pub scratch_path: PathBuf,
@@ -230,7 +231,7 @@ impl Engine {
             command: DEFAULT_COMMAND.into(),
             tiled: true,
             resume_on_restore: false,
-            claude_session: None,
+            agent_session: None,
             asleep: false,
             scratch_path,
             file: None,
@@ -455,7 +456,7 @@ impl Engine {
                     command: hp.command,
                     tiled: hp.tiled,
                     resume_on_restore: false,
-                    claude_session: None,
+                    agent_session: None,
                     asleep: hp.asleep,
                     scratch_path,
                     file: hp.file,
@@ -518,7 +519,7 @@ impl Engine {
                 command: hp.command,
                 tiled: hp.tiled,
                 resume_on_restore: hp.resume_on_restore,
-                claude_session: hp.claude_session,
+                agent_session: hp.agent_session,
                 asleep: hp.asleep,
                 scratch_path,
                 file: None,
@@ -563,7 +564,7 @@ impl Engine {
                         command: p.command.clone(),
                         tiled: p.tiled,
                         resume_on_restore: p.resume_on_restore,
-                        claude_session: p.claude_session.clone(),
+                        agent_session: p.agent_session.clone(),
                         asleep: p.asleep,
                         workspace: p.workspace.clone(),
                         status,
@@ -646,7 +647,7 @@ impl Engine {
                 command: p.command.clone(),
                 tiled: p.tiled,
                 resume_on_restore: p.resume_on_restore,
-                claude_session: p.claude_session.clone(),
+                agent_session: p.agent_session.clone(),
                 asleep: p.asleep,
                 kind: p.kind.clone(),
                 file: p.file.clone(),

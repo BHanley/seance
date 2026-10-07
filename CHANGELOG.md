@@ -19,6 +19,14 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **codex and grok panes come back on their own conversation** after a daemon
+  crash, an OOM, or a sleep/wake, the way claude panes already did. grok gets
+  a minted `--session-id` and restores with `--resume`. codex can't be handed
+  an id, so the daemon reads it off the rollout file the pane's codex holds
+  open (checked every 10s) and restores with `codex … resume <id>`. A codex
+  `/new` moves the pane to the new thread. codex and grok circles can now sleep.
+  State field `claude_session` is now `agent_session`, and old state files
+  still load.
 - **Circle modes** (host.json `circle_modes[]`, docs/HOST.md): right-click a
   circle (or use the phone circle sheet) to turn on a host-defined mode such as
   AFK. The circle's first pane gets the mode's prompt, and the rail badges the
@@ -97,6 +105,19 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Fixed
 
+- **Pane processes now die with their pane.** PTY masters were opened without
+  close-on-exec, so every pane inherited the masters of all panes spawned
+  before it and no pane's tty ever hung up. A daemon crash, a kill or a sleep
+  left the agent running as an orphan, holding its RAM (about 8GB of them had
+  built up). Masters are now CLOEXEC (and handed-off ones on receipt), kill and
+  sleep hang up the pane's whole process group (codex is a node shim over a
+  native binary), and a daemon closes any `/dev/ptmx` it inherits at startup.
+  Panes spawned before this fix keep their leaked fds until they restart.
+- **grok panes read idle / busy, so `send` and `new --wait-ready` work.** The
+  classifier didn't see grok's boxed composer (`│ ❯ … │`) and took the
+  `❯` echo of a past prompt in the transcript for an unsent paste, so `send`
+  reported failure and re-pasted (duplicate prompts), `--wait-ready` hung, and
+  a busy grok wasn't refused. Its `Ctrl+c:cancel` footer now marks a running turn.
 - Web: scrolling with a finger works in Grok (and any TUI that scrolls the
   region under the pointer). The touch scroll now reports where the drag
   began instead of the top-left corner, which was Grok's header.

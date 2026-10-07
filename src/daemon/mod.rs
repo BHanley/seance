@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context as _, Result};
 
+pub mod agentsessions;
 pub mod fsbridge;
 pub mod modewatch;
 pub mod prwatch;
@@ -34,7 +35,42 @@ pub fn run_daemon(args: Vec<String>) -> ! {
     std::process::exit(code);
 }
 
+/// A daemon spawned by a pre-CLOEXEC daemon (`seance upgrade`) inherits every
+/// pane master it held. Real masters only ever arrive over the handoff
+/// socket, so any `/dev/ptmx` open at startup is a leak that would keep those
+/// ttys from hanging up and pass on to every pane spawned here.
+#[cfg(target_os = "linux")]
+fn close_inherited_pty_masters() {
+    let Ok(rd) = std::fs::read_dir("/proc/self/fd") else {
+        return;
+    };
+    let leaked: Vec<i32> = rd
+        .flatten()
+        .filter_map(|e| e.file_name().to_str()?.parse::<i32>().ok())
+        .filter(|fd| *fd > 2)
+        .filter(|fd| {
+            std::fs::read_link(format!("/proc/self/fd/{fd}"))
+                .is_ok_and(|t| t == std::path::Path::new("/dev/ptmx"))
+        })
+        .collect();
+    for fd in &leaked {
+        unsafe {
+            libc::close(*fd);
+        }
+    }
+    if !leaked.is_empty() {
+        eprintln!(
+            "[seance daemon] closed {} inherited pty master fd(s)",
+            leaked.len()
+        );
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn close_inherited_pty_masters() {}
+
 fn run_daemon_inner(args: Vec<String>) -> Result<()> {
+    close_inherited_pty_masters();
     // Install shell integration rc.
     let rc = crate::pane::shell_rc_path();
     if let Some(dir) = rc.parent() {
@@ -126,6 +162,7 @@ fn run_daemon_inner(args: Vec<String>) -> Result<()> {
     modewatch::start_mode_poller(Arc::clone(&engine));
     // Idle circles stop holding RAM (12h; restorable circles only).
     sleepsweep::start_sleep_sweeper(Arc::clone(&engine));
+    agentsessions::start_agent_session_watcher(Arc::clone(&engine));
     // `send --queue`: deliver queued tasks when their pane goes idle.
     {
         let engine = Arc::clone(&engine);
@@ -789,6 +826,9 @@ fn recv_handoff(stream: UnixStream) -> Result<(HandoffBundle, Vec<OwnedFd>)> {
                 let count = bytes / std::mem::size_of::<RawFd>();
                 for i in 0..count {
                     let fd = *data.add(i);
+                    // A pane master without CLOEXEC leaks into every pane spawned
+                    // later, and the tty then never hangs up when its pane dies.
+                    crate::runtime::pty_session::set_cloexec(fd);
                     fds.push(OwnedFd::from_raw_fd(fd));
                 }
             }

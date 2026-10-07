@@ -26,9 +26,9 @@ pub struct HandoffPane {
     pub command: String,
     pub tiled: bool,
     pub resume_on_restore: bool,
-    /// Claude session id owned by the pane (see `PersistedPane::claude_session`).
-    #[serde(default)]
-    pub claude_session: Option<String>,
+    /// See `PersistedPane::agent_session`. Alias: handoff from a pre-rename daemon.
+    #[serde(default, alias = "claude_session")]
+    pub agent_session: Option<String>,
     /// Slept panes hand off as slept — no PTY fd to transfer, nothing to do.
     #[serde(default)]
     pub asleep: bool,

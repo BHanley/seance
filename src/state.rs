@@ -41,15 +41,19 @@ pub struct PersistedPane {
     /// shelved in the sidebar (`false`).
     pub tiled: bool,
     /// If true, restore relaunches the session with `claude --continue` in `cwd`
-    /// rather than a fresh command. Legacy: superseded by [`Self::claude_session`]
+    /// rather than a fresh command. Legacy: superseded by [`Self::agent_session`]
     /// for panes that own a minted session id.
     #[serde(default)]
     pub resume_on_restore: bool,
-    /// Claude conversation this pane owns (minted at spawn via `--session-id`).
-    /// Restore relaunches with `--resume <id>`, so a daemon crash costs nothing.
-    /// `None` for shells, file panes, and panes persisted before 0.14.2.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub claude_session: Option<String>,
+    /// Agent conversation this pane owns: minted at spawn for claude/grok,
+    /// discovered after the first prompt for codex (`agent_session.rs`).
+    /// Restore relaunches onto it, so a daemon crash costs nothing.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "claude_session"
+    )]
+    pub agent_session: Option<String>,
     /// Asleep: persisted with no live process. Restore leaves it that way —
     /// a slept circle stays slept across daemon restart and `seance upgrade`,
     /// which is the whole point (it is not holding RAM).
@@ -418,7 +422,7 @@ mod tests {
                     command: "claude".to_string(),
                     tiled: true,
                     resume_on_restore: true,
-                    claude_session: None,
+                    agent_session: None,
                     asleep: false,
                     status: Some("working".into()),
                     status_note: None,
@@ -439,7 +443,7 @@ mod tests {
                     command: "claude --dangerously-skip-permissions".to_string(),
                     tiled: false,
                     resume_on_restore: false,
-                    claude_session: None,
+                    agent_session: None,
                     asleep: false,
                     status: None,
                     status_note: None,
@@ -559,5 +563,22 @@ mod tests {
         let loaded = AppState::load();
         assert_eq!(loaded.panes.len(), 1);
         assert!(!loaded.panes[0].resume_on_restore);
+    }
+
+    #[test]
+    fn pre_rename_claude_session_key_still_loads() {
+        let guard = StateDirGuard::new("claude-session-alias");
+        std::fs::create_dir_all(&guard.dir).unwrap();
+        let json = r#"{
+            "sessions": [
+                {"name": "Old", "slug": "old", "cwd": "/tmp", "command": "claude",
+                 "tiled": true, "claude_session": "abc"}
+            ],
+            "drawer_open": false
+        }"#;
+        std::fs::write(guard.dir.join("state.json"), json).unwrap();
+
+        let loaded = AppState::load();
+        assert_eq!(loaded.panes[0].agent_session.as_deref(), Some("abc"));
     }
 }

@@ -903,7 +903,7 @@ fn sleeping_keeps_the_pane_and_survives_its_own_exit_event() {
         assert!(eng.workspace_asleep("lab"));
         let p = eng.panes.iter().find(|p| p.slug == slug).unwrap();
         assert!(p.asleep && p.session.is_none());
-        assert!(p.claude_session.is_some(), "conversation id is kept");
+        assert!(p.agent_session.is_some(), "conversation id is kept");
 
         // The PTY death that sleeping caused arrives late. It must be ignored:
         // the auto-close path would delete the pane we just slept.
@@ -983,7 +983,7 @@ fn fake_claude_pane(eng: &mut Engine, slug: &str, tag: &str) -> PathBuf {
     let p = eng.panes.iter_mut().find(|p| p.slug == slug).unwrap();
     p.command = "claude --dangerously-skip-permissions".into();
     p.cwd = cwd.to_string_lossy().to_string();
-    p.claude_session = Some(session);
+    p.agent_session = Some(session);
     transcript
 }
 
