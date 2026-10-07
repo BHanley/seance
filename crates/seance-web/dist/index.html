@@ -1141,6 +1141,16 @@
           return hit ? hit.getAttribute('data-slug') : null;
         }
 
+        // Raised from the click that follows the tap, not from touchend: the
+        // synthesized mousedown in between moves focus to the pane, which
+        // blurs the catcher and drops the keyboard again.
+        var kbAfterClick = 0;
+        tiles.addEventListener('click', function () {
+          var t0 = kbAfterClick;
+          kbAfterClick = 0;
+          if (t0 && Date.now() - t0 < 600 && !kbOpen()) openKb();
+        });
+
         tiles.addEventListener(
           'touchstart',
           function (e) {
@@ -1199,12 +1209,13 @@
             if (!t) return;
             // A tap never locked an axis (it never travelled 10px). Ask the
             // wasm what is under the finger; a URL raises the link sheet and
-            // anything else stays a plain tap on the terminal.
+            // anything else raises the keyboard (on the click, see above).
             if (gesture.axis === null) {
               if (!gesture.slug || !window.seanceMobile.urlAt) return;
               if (Date.now() - gesture.t0 > 700) return;
               var hit = window.seanceMobile.urlAt(gesture.slug, t.clientX, t.clientY);
               if (hit) openLinkSheet(hit);
+              else if (!kbOpen()) kbAfterClick = Date.now();
               return;
             }
             if (gesture.axis !== 'x') return;
