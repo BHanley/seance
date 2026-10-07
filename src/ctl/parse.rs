@@ -147,6 +147,12 @@ pub(crate) fn with_identity(
             scope,
             from,
         },
+        RenamePane { name, pane, .. } => RenamePane {
+            name,
+            pane,
+            scope,
+            from,
+        },
         Sleep { workspace, .. } => Sleep {
             workspace,
             scope,
@@ -1061,6 +1067,28 @@ pub(crate) fn parse_rename_circle(args: Vec<String>) -> Result<ControlRequest, S
     Ok(ControlRequest::RenameCircle {
         name,
         workspace,
+        scope: None,
+        from: None,
+    })
+}
+
+/// `rename-pane [PANE] NEW-NAME` — omit PANE inside a pane to rename your own.
+pub(crate) fn parse_rename_pane(args: Vec<String>) -> Result<ControlRequest, String> {
+    let mut positionals = args;
+    let (pane, name) = match positionals.len() {
+        0 => return Err("rename-pane: expected [PANE] NEW-NAME".into()),
+        1 => (None, positionals.remove(0)),
+        _ => {
+            let pane = positionals.remove(0);
+            (Some(pane), positionals.join(" "))
+        }
+    };
+    if name.trim().is_empty() {
+        return Err("rename-pane: the new name is empty".into());
+    }
+    Ok(ControlRequest::RenamePane {
+        name,
+        pane,
         scope: None,
         from: None,
     })

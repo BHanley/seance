@@ -1127,6 +1127,33 @@ impl Engine {
                 );
                 ok(json!({"workspace": ws, "removed": removed}))
             }
+            RenamePane {
+                name,
+                pane,
+                scope,
+                from,
+            } => {
+                let Some(key) = pane.or_else(|| from.clone()) else {
+                    return err("rename-pane: expected a pane".into());
+                };
+                match find(self, &key, &scope) {
+                    Ok(idx) => {
+                        let slug = self.panes[idx].slug.clone();
+                        self.panes[idx].name = name.clone();
+                        self.persist();
+                        self.push_state_to_all();
+                        events::log(
+                            &actor(&from),
+                            Some(&self.panes[idx].workspace.clone()),
+                            Some(&slug),
+                            "pane_renamed",
+                            format!("name -> '{name}'"),
+                        );
+                        ok(json!({"pane": slug, "name": name}))
+                    }
+                    Err(e) => err(e),
+                }
+            }
             RenameCircle {
                 name,
                 workspace,
