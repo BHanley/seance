@@ -30,7 +30,7 @@ impl SeanceApp {
             "bell" => {
                 desktop_notify::bell_sound();
                 if !watching {
-                    desktop_notify::notify_alert(&name, "Bell");
+                    desktop_notify::notify_alert(pane, &name, "Bell");
                 }
             }
             "notify" if !watching => {
@@ -39,7 +39,7 @@ impl SeanceApp {
                 } else {
                     format!("{name}: {title}")
                 };
-                desktop_notify::notify_alert(&summary, body);
+                desktop_notify::notify_alert(pane, &summary, body);
             }
             "command" => {
                 let wanted = match cfg.notify_on_command_finish {
@@ -54,7 +54,7 @@ impl SeanceApp {
                         None => "Finished".to_string(),
                     };
                     desktop_notify::bell_sound();
-                    desktop_notify::notify_alert(&format!("{name}: {status}"), body);
+                    desktop_notify::notify_alert(pane, &format!("{name}: {status}"), body);
                 }
             }
             _ => {}
