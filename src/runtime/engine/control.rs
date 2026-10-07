@@ -891,6 +891,21 @@ impl Engine {
                 }
                 // Throttle-persist cmdlog so export-from-disk sees recent cmds.
                 self.persist();
+                // Clients apply their own notify-on-command-finish rule.
+                let alert = closed
+                    .then(|| self.cmd_log.last(&pane, false))
+                    .flatten()
+                    .map(|rec| GuiEvent::PaneAlert {
+                        pane: pane.clone(),
+                        kind: "command".into(),
+                        title: String::new(),
+                        body: rec.command.clone(),
+                        duration_ms: rec.duration_ms().unwrap_or(0),
+                        exit_code: Some(exit),
+                    });
+                if let Some(alert) = alert {
+                    self.broadcast(alert);
+                }
                 let (detail, span) = match self.cmd_log.last(&pane, false) {
                     Some(rec) => (
                         format!(

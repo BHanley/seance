@@ -19,6 +19,17 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- `~/.config/seance/terminal.conf` (Ghostty config syntax, `config-file`
+  includes and `theme` names work) sets the terminal palette, font, bell
+  sound and command-finish notifications. No file keeps today's look.
+- Terminal alerts: BEL plays the bell sound, and BEL, OSC 9 / OSC 777 and long
+  shell commands post a desktop notification when you aren't looking at that
+  pane (new `pane_alert` event). OSC 52 copies reach the clipboard of the
+  window showing the pane (`pane_clipboard`).
+- macOS line editing like Ghostty: cmd+backspace, cmd+left/right,
+  option+left/right; cmd+click opens links. Alt+backspace deletes a word on
+  every platform.
+
 - Phone web views show one pane at a time, with tabs across the top to switch
   panes. The active terminal fills the screen above the keyboard.
 - `--help` / `-h` anywhere on the `seance` command line prints top-level
