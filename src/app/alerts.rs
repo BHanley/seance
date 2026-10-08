@@ -27,12 +27,9 @@ impl SeanceApp {
             .map(|p| format!("{} · {}", self.workspace_label(&p.workspace), p.name))
             .unwrap_or_else(|| pane.to_string());
         match kind {
-            "bell" => {
-                desktop_notify::bell_sound();
-                if !watching {
-                    desktop_notify::notify_alert(pane, &name, "Bell");
-                }
-            }
+            // Sound only, as in Ghostty: shells ring on every failed tab
+            // completion, and a program that wants a banner sends OSC 9/777.
+            "bell" => desktop_notify::bell_sound(),
             "notify" if !watching => {
                 let summary = if title.is_empty() {
                     name

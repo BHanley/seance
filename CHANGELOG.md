@@ -22,7 +22,7 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 - `~/.config/seance/terminal.conf` (Ghostty config syntax, `config-file`
   includes and `theme` names work) sets the terminal palette, font, bell
   sound and command-finish notifications. No file keeps today's look.
-- Terminal alerts: BEL plays the bell sound, and BEL, OSC 9 / OSC 777 and long
+- Terminal alerts: BEL plays the bell sound, and OSC 9 / OSC 777 and long
   shell commands post a desktop notification when you aren't looking at that
   pane (new `pane_alert` event). OSC 52 copies reach the clipboard of the
   window showing the pane (`pane_clipboard`).
