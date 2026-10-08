@@ -580,7 +580,16 @@ pub(super) fn render_pane(
             }),
         )
         // Drop another pane's title strip here: it takes this pane's spot.
-        .drag_over::<DraggedPane>(|style, _, _, _| style.border_color(SeancePalette::flame_dim()))
+        .drag_over::<DraggedPane>({
+            let slug = slug.clone();
+            move |style, drag: &DraggedPane, _, _| {
+                if drag.slug == slug {
+                    style
+                } else {
+                    style.border_color(SeancePalette::flame_dim())
+                }
+            }
+        })
         .on_drop(cx.listener({
             let slug = slug.clone();
             move |this, drag: &DraggedPane, _, cx| {
@@ -591,12 +600,13 @@ pub(super) fn render_pane(
             // Pane title strip; drag it onto another pane to move this one.
             div()
                 .id(SharedString::from(format!("pane-strip-{slug}")))
-                .on_drag(DraggedPane { slug: slug.clone() }, {
+                // Not while renaming: selecting text in the input would drag.
+                .when(rename_input.is_none(), |d| {
                     let label = format!("▸ {pane_name}");
-                    move |_, _, _, cx| {
+                    d.on_drag(DraggedPane { slug: slug.clone() }, move |_, _, _, cx| {
                         let label = label.clone();
                         cx.new(|_| DragPill { label })
-                    }
+                    })
                 })
                 .flex_none()
                 .h(px(26.))
