@@ -1032,6 +1032,10 @@ impl SeanceApp {
                 self.panes.retain(|p| p.slug != slug);
                 self.busy_panes.remove(&slug);
                 self.workspace_focus.retain(|_, s| s != &slug);
+                // A row that vanishes never reports the pointer leaving it.
+                if self.rail_hover_pane.as_deref() == Some(slug.as_str()) {
+                    self.rail_hover_pane = None;
+                }
                 // Never leave a workspace with panes but no active pane.
                 let prev = self.active_slug.clone();
                 self.ensure_active_pane_in_workspace();
@@ -2225,9 +2229,6 @@ impl SeanceApp {
         // Optimistic local remove; daemon confirms via PaneKilled.
         self.panes.retain(|p| p.slug != slug);
         self.workspace_focus.retain(|_, s| s != slug);
-        if self.rail_hover_pane.as_deref() == Some(slug) {
-            self.rail_hover_pane = None;
-        }
         // Never leave a workspace with panes but no active pane.
         let prev = self.active_slug.clone();
         self.ensure_active_pane_in_workspace();
@@ -2256,7 +2257,6 @@ impl SeanceApp {
     }
 
     /// Kill one pane; the last pane in a circle banishes the circle with it.
-    /// Shared by ctrl+shift+w and the sidebar pane-row ×.
     fn kill_pane(&mut self, slug: &str, window: &mut Window, cx: &mut Context<Self>) {
         let ws = self
             .panes
