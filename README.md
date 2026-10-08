@@ -212,7 +212,7 @@ Read keys: `theme`, `palette`, `background`, `foreground`, `cursor-color`,
 `notify-on-command-finish` (`never` / `unfocused` / `always`),
 `notify-on-command-finish-after`. A pane's BEL plays the bell sound; OSC 9 /
 OSC 777 and long shell commands post a desktop notification when you
-aren't looking at that pane (a finished command also rings the bell); OSC 52
+aren't looking at that pane (a command-finish notification also plays the bell sound); OSC 52
 copies reach the clipboard. Restart the daemon (`seance upgrade`) and GUI
 after editing.
 

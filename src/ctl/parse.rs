@@ -1212,3 +1212,33 @@ pub(crate) fn base64_encode(input: &[u8]) -> String {
 
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(a: &[&str]) -> Vec<String> {
+        a.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn rename_pane_args() {
+        assert!(parse_rename_pane(args(&[])).is_err());
+        assert!(parse_rename_pane(args(&["  "])).is_err());
+        match parse_rename_pane(args(&["new name"])).unwrap() {
+            ControlRequest::RenamePane { name, pane, .. } => {
+                assert_eq!((name.as_str(), pane), ("new name", None));
+            }
+            other => panic!("{other:?}"),
+        }
+        match parse_rename_pane(args(&["term-4", "new", "name"])).unwrap() {
+            ControlRequest::RenamePane { name, pane, .. } => {
+                assert_eq!(
+                    (name.as_str(), pane.as_deref()),
+                    ("new name", Some("term-4"))
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+}

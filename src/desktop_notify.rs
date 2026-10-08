@@ -96,14 +96,15 @@ fn mac_terminal_notifier(pane: Option<&str>, summary: &str, body: &str) -> bool 
         if let Some(pane) = pane {
             let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
             let run = format!(
-                "{} ctl select {}",
+                "{} ctl --all select {}",
                 quote(&exe.to_string_lossy()),
                 quote(pane)
             );
             cmd.args(["-execute", &run]);
         }
     }
-    cmd.stdout(std::process::Stdio::null())
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
         .is_ok_and(|s| s.success())

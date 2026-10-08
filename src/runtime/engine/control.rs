@@ -1133,8 +1133,12 @@ impl Engine {
                 scope,
                 from,
             } => {
+                let name = name.trim().to_string();
+                if name.is_empty() {
+                    return err("rename-pane: the new name is empty".into());
+                }
                 let Some(key) = pane.or_else(|| from.clone()) else {
-                    return err("rename-pane: expected a pane".into());
+                    return err("rename-pane: outside a pane, give PANE NEW-NAME".into());
                 };
                 match find(self, &key, &scope) {
                     Ok(idx) => {
