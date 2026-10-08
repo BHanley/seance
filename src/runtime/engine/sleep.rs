@@ -8,8 +8,8 @@
 //! frozen to disk and served in place of a live snapshot so the circle still
 //! reads after the process is gone.
 //!
-//! Waking is the restore path that already exists: `claude --resume <id>` in
-//! the same cwd. That is why sleep is only offered for panes that can be put
+//! Waking is the restore path that already exists: the agent's resume of the
+//! pane's own conversation id, in the same cwd (`agent_session.rs`). That is why sleep is only offered for panes that can be put
 //! back exactly — see [`Engine::pane_restorable`]. A shell pane can't (its cwd
 //! drift, its history, its running children are not reconstructible), so one
 //! shell vetoes its whole circle.
@@ -22,8 +22,8 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Result};
 
+use super::agent_session::{launch_with_session, transcript_exists, Agent};
 use super::helpers::{atomic_write_bytes, now_ms};
-use super::spawn::{claude_session_arg, is_claude_cmd, transcript_path};
 use super::Engine;
 use crate::events;
 use crate::runtime::snapshot::{decode_grid_bin, encode_grid_bin, GridSnapshot};
@@ -47,10 +47,10 @@ impl Engine {
     /// Can this pane be put back exactly as it is?
     ///
     /// * file pane — yes, it's a path and a viewer, there is no process.
-    /// * claude pane with a session id **and a transcript on disk** — yes,
-    ///   `--resume` lands on the same conversation.
-    /// * anything else (a shell, a non-claude agent, a claude pane that was
-    ///   never prompted) — no. Sleeping it would throw away state nothing can
+    /// * claude / grok / codex pane with a session id **and its conversation
+    ///   on disk** — yes, a resume lands on the same conversation.
+    /// * anything else (a shell, another agent, an agent pane that was never
+    ///   prompted) — no. Sleeping it would throw away state nothing can
     ///   rebuild, so it isn't offered.
     pub fn pane_restorable(&self, slug: &str) -> bool {
         let Some(p) = self.panes.iter().find(|p| p.slug == slug) else {
@@ -59,12 +59,12 @@ impl Engine {
         if p.kind == "file" {
             return true;
         }
-        if !is_claude_cmd(&p.command) {
+        let Some(agent) = Agent::of(&p.command) else {
             return false;
-        }
-        p.claude_session
+        };
+        p.agent_session
             .as_ref()
-            .is_some_and(|id| transcript_path(&p.cwd, id).is_file())
+            .is_some_and(|id| transcript_exists(agent, &p.cwd, id))
     }
 
     /// Every pane in the circle is restorable (and there is at least one).
@@ -139,7 +139,7 @@ impl Engine {
                 p.cwd.clone(),
                 p.command.clone(),
                 p.workspace.clone(),
-                p.claude_session.clone(),
+                p.agent_session.clone(),
             )
         };
 
@@ -158,11 +158,10 @@ impl Engine {
             return Ok(true);
         }
 
-        // `--resume` when a transcript exists, else re-assert `--session-id`:
-        // a missing transcript makes claude exit non-zero, which would close
-        // the pane we are trying to bring back.
+        // Resume only when the conversation is on disk: a missing one makes
+        // the agent exit non-zero, which would close the pane we are bringing back.
         let launch = match session_id.as_deref() {
-            Some(id) => claude_session_arg(&command, &cwd, id),
+            Some(id) => launch_with_session(&command, &cwd, id),
             None => command.clone(),
         };
         let session = self.spawn_terminal_session(slug, &launch, &cwd, &workspace, false)?;

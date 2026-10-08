@@ -53,6 +53,9 @@ pub trait Actions {
     fn pin_workspace(&self, ws: &str);
     /// Pinned row menu "unpin": back to the normal band.
     fn unpin_workspace(&self, ws: &str);
+    /// Row menu host circle mode toggle (AFK): the daemon prompts the
+    /// circle's first pane; the rail updates now rather than on the echo.
+    fn set_circle_mode(&self, ws: &str, mode: &str, on: bool);
     /// Repaint chrome on the next frame (client-only view state changed —
     /// e.g. a band unfolded).
     fn request_rebuild(&self);

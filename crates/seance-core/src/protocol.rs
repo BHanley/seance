@@ -154,6 +154,13 @@ pub enum GuiRequest {
         old: String,
         new: String,
     },
+    /// Turn a host-defined circle mode on/off (e.g. AFK). The daemon records
+    /// it and sends the mode's prompt to the circle's first pane.
+    SetCircleMode {
+        workspace: String,
+        mode: String,
+        on: bool,
+    },
     CreateWorkspace {
         name: String,
     },
@@ -326,6 +333,11 @@ pub enum GuiEvent {
         /// older daemons — clients then keep their purely local stamps.
         #[serde(default)]
         workspace_meta: Vec<WorkspaceMeta>,
+        /// Circle modes the host defines (`host.json` `circle_modes`, e.g.
+        /// AFK). Empty unless this machine configured some — a client shows
+        /// the toggles only for what is listed here.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        circle_modes: Vec<CircleModeDef>,
     },
     /// Incremental push of the daemon-owned output clock for one workspace.
     /// Emitted by the recorder tap (real content change), throttled per pane.
@@ -558,6 +570,25 @@ pub struct WorkspaceMeta {
     /// `<state_dir>/pr_watch.json` — the daemon only owns the URL list.
     #[serde(default)]
     pub pr_links: Vec<PrLink>,
+    /// Host-defined circle modes currently on here (ids from
+    /// `GuiEvent::State::circle_modes`, e.g. `["afk"]`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modes: Vec<String>,
+}
+
+/// A circle mode the host machine defines (`host.json` → `circle_modes`).
+/// Clients get the labels; the prompts stay with the daemon.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CircleModeDef {
+    pub id: String,
+    /// Short badge text on the row, e.g. "AFK".
+    pub label: String,
+    /// Menu item to turn it on / off.
+    pub on_label: String,
+    pub off_label: String,
+    /// Circles in this mode get their own band at the top of the rail.
+    #[serde(default)]
+    pub top: bool,
 }
 
 /// One PR URL observed in a workspace's pane output.
@@ -748,6 +779,7 @@ mod workspace_meta_tests {
             name: None,
             last_output_ms: 1,
             last_touch_ms: 2,
+            modes: vec!["afk".into()],
             pr_links: vec![PrLink {
                 url: "https://github.com/o/r/pull/3".into(),
                 status: Some(PrStatus {

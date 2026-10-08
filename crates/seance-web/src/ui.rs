@@ -613,15 +613,14 @@ impl Chrome {
             list.append_child(&empty)?;
         }
 
-        // Two bands — pinned, then everything else — each grouping its own
-        // circles by name prefix. The only chrome between them is a rule, and
-        // only when something is actually pinned.
-        let has_pinned = sections
-            .iter()
-            .any(|(s, c)| *s == Section::Pinned && !c.is_empty());
+        // Bands — top-mode circles (AFK), pinned, then everything else —
+        // each grouping its own circles by name prefix. The only chrome
+        // between them is a rule above each non-empty band after the first.
+        let mut rows_above = false;
         for (section, circles) in &sections {
-            let rule = *section == Section::Active && has_pinned;
+            let rule = rows_above && !circles.is_empty();
             self.build_section(&list, state, *section, circles, selected, rule)?;
+            rows_above |= !circles.is_empty();
         }
 
         // Flex filler below the rows.
@@ -735,6 +734,10 @@ impl Chrome {
         let att = state.row_attention(ws);
         let working = matches!(att, Some(Attention::Working));
         let asleep_pre = state.workspace_asleep(ws);
+        // Host circle modes (AFK): which are on here, and every def so the
+        // menu can offer each toggle.
+        let modes_on = state.circle_modes_of(ws);
+        let mode_defs = state.circle_mode_defs.clone();
 
         let row = mk(&doc, "div", &{
             let mut c = String::from("ws-row");
@@ -746,6 +749,9 @@ impl Chrome {
             }
             if matches!(att, Some(Attention::NeedsHuman)) {
                 c.push_str(" needs");
+            }
+            if !modes_on.is_empty() {
+                c.push_str(" in-mode");
             }
             c
         })?;
@@ -786,6 +792,9 @@ impl Chrome {
         }
         label_box.append_child(&name)?;
         main.append_child(&label_box)?;
+        for m in &modes_on {
+            main.append_child(text_el(&doc, "span", "ws-mode", &m.label)?.unchecked_ref())?;
+        }
         main.append_child(&att_el)?;
         main.append_child(&banish)?;
         main.append_child(&count_el)?;
@@ -853,6 +862,17 @@ impl Chrome {
                     } else {
                         MenuEntry::item("pin", move || a.pin_workspace(&w))
                     });
+                }
+                // Display-only modes (no labels) get no entry.
+                for d in mode_defs.iter().filter(|d| !d.on_label.is_empty()) {
+                    let on = modes_on.iter().any(|m| m.id == d.id);
+                    let a = actions.clone();
+                    let w = ws.clone();
+                    let id = d.id.clone();
+                    let label = if on { &d.off_label } else { &d.on_label };
+                    entries.push(MenuEntry::item(label.clone(), move || {
+                        a.set_circle_mode(&w, &id, !on)
+                    }));
                 }
                 {
                     let rn = rn.clone();

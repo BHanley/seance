@@ -19,6 +19,25 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **codex and grok panes come back on their own conversation** after a daemon
+  crash, an OOM, or a sleep/wake, the way claude panes already did. grok gets
+  a minted `--session-id` and restores with `--resume`. codex can't be handed
+  an id, so the daemon reads it off the rollout file the pane's codex holds
+  open (checked every 10s) and restores with `codex … resume <id>`. A codex
+  `/new` moves the pane to the new thread. codex and grok circles can now sleep.
+  State field `claude_session` is now `agent_session`, and old state files
+  still load.
+- **Circle modes** (host.json `circle_modes[]`, docs/HOST.md): right-click a
+  circle (or use the phone circle sheet) to turn on a host-defined mode such as
+  AFK. The circle's first pane gets the mode's prompt, and the rail badges the
+  row, tints it violet and, for `top` modes, lifts it above the pins. Turning
+  it off sends the off prompt. With no host config, none of this appears.
+  A mode can name a `state_cmd`. The daemon then polls it, and the host
+  decides who is in the mode (for AFK, vita's `onthego list`), so circles that
+  went AFK from the phone or timed out show correctly.
+  Each top mode gets its own band above the pins. A mode with no toggle
+  fields is display-only, e.g. vita's `slack` mode, which lists the circles
+  whose pane holds a cadence slack thread.
 - `~/.config/seance/terminal.conf` (Ghostty config syntax, `config-file`
   includes and `theme` names work) sets the terminal palette, font, bell
   sound and command-finish notifications. No file keeps today's look.
@@ -29,7 +48,8 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 - macOS line editing like Ghostty: cmd+backspace, cmd+left/right,
   option+left/right; cmd+click opens links. Alt+backspace deletes a word on
   every platform.
-
+- `seance ctl rename-pane [PANE] NAME` sets a pane's display name from a
+  script (the slug never moves).
 - Phone web views show one pane at a time, with tabs across the top to switch
   panes. The active terminal fills the screen above the keyboard.
 - `--help` / `-h` anywhere on the `seance` command line prints top-level
@@ -97,6 +117,26 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Fixed
 
+- **Pane processes now die with their pane.** PTY masters were opened without
+  close-on-exec, so every pane inherited the masters of all panes spawned
+  before it and no pane's tty ever hung up. A daemon crash, a kill or a sleep
+  left the agent running as an orphan, holding its RAM (about 8GB of them had
+  built up). Masters are now CLOEXEC (and handed-off ones on receipt), kill and
+  sleep hang up the pane's whole process group (codex is a node shim over a
+  native binary), and a daemon closes any `/dev/ptmx` it inherits at startup.
+  Panes spawned before this fix keep their leaked fds until they restart.
+- **grok panes read idle / busy, so `send` and `new --wait-ready` work.** The
+  classifier didn't see grok's boxed composer (`│ ❯ … │`) and took the
+  `❯` echo of a past prompt in the transcript for an unsent paste, so `send`
+  reported failure and re-pasted (duplicate prompts), `--wait-ready` hung, and
+  a busy grok wasn't refused. Its `Ctrl+c:cancel` footer now marks a running turn.
+- Web: scrolling with a finger works in Grok (and any TUI that scrolls the
+  region under the pointer). The touch scroll now reports where the drag
+  began instead of the top-left corner, which was Grok's header.
+- Web: touching or typing in the phone view takes the pane's size over from
+  the desktop (at most every 2s), so a circle sized for the desktop becomes
+  phone-sized as soon as you use it there. Focus, tab switch and rotation
+  already did.
 - Two windows showing the same circle no longer bounce a pane's size back and
   forth at frame rate. A window now only re-asserts a size it asked for itself,
   never one it saw in another client's frame.
@@ -105,6 +145,8 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   chip closes the nav drawer.
 - Web: tapping a wrapped link opens the whole URL, including links that Claude
   wraps itself (short of the edge, with an indent).
+  A list of links one per line no longer glues the next item's bullet onto
+  the URL (`…?item=289-`).
 - A folder-trust dialog can no longer be answered by accident. Claude's
   dialog opens on **"No, exit"**, so the first `send`'s Enter quit Claude.
   `new --wait-ready` now stops at once and names a trust dialog.

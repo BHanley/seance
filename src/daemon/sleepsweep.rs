@@ -2,7 +2,7 @@
 //!
 //! Deliberately dumb, and deliberately conservative. It only ever sleeps a
 //! circle that could be woken back exactly (`Engine::workspace_restorable` —
-//! claude panes with a live conversation id, and file panes), and it reads the
+//! agent panes whose conversation is on disk, and file panes), and it reads the
 //! daemon's own activity clocks, so "12h idle" means the same thing the
 //! sidebar row means. A circle with a shell in it never qualifies; neither
 //! does one whose clock was never stamped, because no observation is not

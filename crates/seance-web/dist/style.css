@@ -584,6 +584,12 @@ input:focus {
 .ws-row:hover {
   background: var(--surface);
 }
+/* In a host circle mode (AFK): violet edge + faint tint, so "left running
+   while away" reads at a glance. Selection's flame edge still wins. */
+.ws-row.in-mode .ws-main {
+  background: rgba(167, 144, 213, 0.08);
+  border-left-color: var(--violet);
+}
 .ws-row.selected .ws-main {
   background: var(--sel);
   border-left-color: var(--flame);
@@ -657,6 +663,15 @@ input:focus {
   align-items: center;
 }
 
+.ws-mode {
+  flex: 0 0 auto;
+  padding: 1px 4px;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--violet);
+  background: rgba(167, 144, 213, 0.18);
+}
 .ws-att {
   flex: 0 0 auto;
   padding: 1px 4px;
@@ -2307,6 +2322,23 @@ body.m-kb-open #m-bar {
 #m-menu-pin.on {
   border-color: var(--flame-dim);
   color: var(--flame-dim);
+}
+
+#m-menu-modes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#m-menu-modes:empty {
+  display: none;
+}
+.m-menu-mode {
+  width: 100%;
+  border-color: var(--violet-dim);
+  color: var(--violet);
+}
+.m-menu-mode.on {
+  background: rgba(167, 144, 213, 0.14);
 }
 
 #m-menu-banish {

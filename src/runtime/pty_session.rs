@@ -863,6 +863,14 @@ fn io_loop(
                 }
                 Ok(IoMsg::Shutdown { kill_child }) => {
                     if kill_child {
+                        // The pane's direct child is often a wrapper (codex is a
+                        // node shim over a native binary); hang up its whole
+                        // session's process group, not just the pid we spawned.
+                        if let Some(pid) = *child_pid.lock().unwrap() {
+                            unsafe {
+                                libc::kill(-(pid as i32), libc::SIGHUP);
+                            }
+                        }
                         if let Some(mut ch) = child.lock().unwrap().take() {
                             let _ = ch.kill();
                             let _ = ch.wait();
@@ -1065,9 +1073,23 @@ fn open_pty(cols: u16, rows: u16) -> Result<(OwnedFd, OwnedFd)> {
     if rc != 0 {
         bail!("openpty failed: {}", std::io::Error::last_os_error());
     }
+    // Without CLOEXEC every pane inherits the masters of all panes spawned
+    // before it, so no pane's tty ever hangs up: a dead daemon, a kill or a
+    // sleep then leaves the agent running as an orphan.
+    set_cloexec(master);
+    set_cloexec(slave);
     let master = unsafe { OwnedFd::from_raw_fd(master) };
     let slave = unsafe { OwnedFd::from_raw_fd(slave) };
     Ok((master, slave))
+}
+
+pub(crate) fn set_cloexec(fd: RawFd) {
+    unsafe {
+        let fl = libc::fcntl(fd, libc::F_GETFD);
+        if fl >= 0 {
+            libc::fcntl(fd, libc::F_SETFD, fl | libc::FD_CLOEXEC);
+        }
+    }
 }
 
 fn set_nonblocking(fd: RawFd) -> Result<()> {

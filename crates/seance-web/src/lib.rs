@@ -131,6 +131,8 @@ pub struct App {
     scroll_back: RefCell<HashMap<String, i32>>,
     /// Last `m-scrolled` body class we painted (the phone's jump button).
     scroll_chip_on: Cell<bool>,
+    /// When a touch/keypress last re-asserted our grid (ms), to throttle.
+    last_touch_reassert: Cell<f64>,
     /// Mirror of `localStorage[SELECTED_KEY]`, so the per-frame check only
     /// writes on change.
     selection_saved: RefCell<Option<String>>,
@@ -139,6 +141,9 @@ pub struct App {
 /// Last circle this browser had selected; asked for on attach so a browser
 /// restart lands back on it instead of the daemon's global selection.
 const SELECTED_KEY: &str = "seance_selected";
+
+/// Minimum gap between touch/keypress-driven grid re-asserts.
+const TOUCH_REASSERT_MS: f64 = 2_000.0;
 
 /// localStorage-backed [`subs::SubStore`].
 struct LocalStore;
@@ -188,6 +193,7 @@ impl App {
             rail_pending: Rc::new(Cell::new(0)),
             scroll_back: RefCell::new(HashMap::new()),
             scroll_chip_on: Cell::new(false),
+            last_touch_reassert: Cell::new(0.0),
             selection_saved: RefCell::new(None),
         })
     }
@@ -433,6 +439,19 @@ impl App {
             return;
         }
         self.save_arrangement();
+        self.need_rebuild.set(true);
+    }
+
+    /// Host circle mode toggle (AFK). The daemon owns the mode and sends the
+    /// prompt; flipping it locally too keeps the rail and the phone sheet
+    /// from showing the old state until the State echo lands.
+    pub fn set_circle_mode(&self, ws: &str, mode: &str, on: bool) {
+        self.send(&GuiRequest::SetCircleMode {
+            workspace: ws.to_string(),
+            mode: mode.to_string(),
+            on,
+        });
+        self.state.borrow_mut().set_circle_mode_local(ws, mode, on);
         self.need_rebuild.set(true);
     }
 
@@ -1243,6 +1262,9 @@ impl Actions for AppActions {
     fn pin_workspace(&self, ws: &str) {
         self.0.pin_workspace(ws);
     }
+    fn set_circle_mode(&self, ws: &str, mode: &str, on: bool) {
+        self.0.set_circle_mode(ws, mode, on);
+    }
 
     fn unpin_workspace(&self, ws: &str) {
         self.0.unpin_workspace(ws);
@@ -1595,8 +1617,13 @@ pub fn seance_mobile_key(key: &str, ctrl: bool, alt: bool, shift: bool) -> bool 
 /// Claude through prompt history instead of scrolling. Sub-row remainders
 /// accumulate in the shared `wheel_accum`, so a slow drag still moves rather
 /// than rounding to zero.
+///
+/// `client_x`/`client_y` is where the drag started: mouse-reporting TUIs
+/// scroll whatever sits under the pointer, and reporting the top-left corner
+/// (the old behaviour) scrolled Grok's header — i.e. nothing. Off-canvas or
+/// missing coordinates fall back to the middle of the screen.
 #[wasm_bindgen]
-pub fn seance_mobile_scroll(pane: &str, dy_px: f64) -> bool {
+pub fn seance_mobile_scroll(pane: &str, dy_px: f64, client_x: f64, client_y: f64) -> bool {
     with_mobile_app(|app| {
         let st = app.state.borrow();
         let Some(snap) = st.grids.get(pane).cloned() else {
@@ -1616,7 +1643,9 @@ pub fn seance_mobile_scroll(pane: &str, dy_px: f64) -> bool {
             // negate so the drag carries the content with it.
             input::wheel_rows(-dy_px, web_sys::WheelEvent::DOM_DELTA_PIXEL, cell_h, acc)
         };
-        match input::scroll_action(rows, &snap, 0, 0, true) {
+        let (col, row) =
+            cell_at_client(app, pane, client_x, client_y).unwrap_or((snap.cols / 2, snap.rows / 2));
+        match input::scroll_action(rows, &snap, col, row, true) {
             input::WheelAction::Scroll(r) => {
                 app.note_scroll(pane, r);
                 app.send(&GuiRequest::Scroll {
@@ -1644,27 +1673,39 @@ pub fn seance_mobile_scroll(pane: &str, dy_px: f64) -> bool {
 #[wasm_bindgen]
 pub fn seance_mobile_url_at(pane: &str, client_x: f64, client_y: f64) -> Option<String> {
     with_mobile_app(|app| {
-        let canvas = document().get_element_by_id(&format!("canvas-{pane}"))?;
-        let rect = canvas.get_bounding_client_rect();
-        let (x, y) = (client_x - rect.left(), client_y - rect.top());
-        if x < 0.0 || y < 0.0 || x >= rect.width() || y >= rect.height() {
-            return None;
-        }
-        let (cw, ch) = app
-            .views
-            .borrow()
-            .get(pane)
-            .map(|v| v.renderer.cell_size_css())?;
-        if cw <= 0.0 || ch <= 0.0 {
-            return None;
-        }
+        let (col, row) = cell_at_client(app, pane, client_x, client_y)?;
         let st = app.state.borrow();
-        let snap = st.grids.get(pane)?;
-        let col = ((x / cw as f64) as i32).clamp(0, snap.cols as i32 - 1) as u16;
-        let row = ((y / ch as f64) as i32).clamp(0, snap.rows as i32 - 1) as u16;
-        seance_core::links::url_at_cell(snap, row, col)
+        seance_core::links::url_at_cell(st.grids.get(pane)?, row, col)
     })
     .flatten()
+}
+
+/// The grid cell under a viewport point in `pane`'s canvas. Client
+/// coordinates, not offsets: a touch carries no `offsetX`. `None` when the
+/// point is off the canvas (or not a number — an old caller passing nothing).
+fn cell_at_client(app: &App, pane: &str, client_x: f64, client_y: f64) -> Option<(u16, u16)> {
+    if !client_x.is_finite() || !client_y.is_finite() {
+        return None;
+    }
+    let canvas = document().get_element_by_id(&format!("canvas-{pane}"))?;
+    let rect = canvas.get_bounding_client_rect();
+    let (x, y) = (client_x - rect.left(), client_y - rect.top());
+    if x < 0.0 || y < 0.0 || x >= rect.width() || y >= rect.height() {
+        return None;
+    }
+    let (cw, ch) = app
+        .views
+        .borrow()
+        .get(pane)
+        .map(|v| v.renderer.cell_size_css())?;
+    if cw <= 0.0 || ch <= 0.0 {
+        return None;
+    }
+    let st = app.state.borrow();
+    let snap = st.grids.get(pane)?;
+    let col = ((x / cw as f64) as i32).clamp(0, snap.cols as i32 - 1) as u16;
+    let row = ((y / ch as f64) as i32).clamp(0, snap.rows as i32 - 1) as u16;
+    Some((col, row))
 }
 
 /// Jump the focused pane back to the live tail. The phone's button for it is
@@ -1710,6 +1751,49 @@ pub fn seance_mobile_set_pinned(pinned: bool) -> Option<bool> {
         Some(app.state.borrow().subs.is_pinned(&ws))
     })
     .flatten()
+}
+
+/// The host circle modes (AFK) for the selected circle, as a JSON array of
+/// `{id, label, on_label, off_label, on}`. `"[]"` when the host defines none
+/// or nothing is selected — the phone sheet then shows no mode controls.
+#[wasm_bindgen]
+pub fn seance_mobile_circle_modes() -> String {
+    with_mobile_app(|app| {
+        let Some(ws) = app.selected_workspace() else {
+            return "[]".to_string();
+        };
+        let st = app.state.borrow();
+        let on: Vec<String> = st.circle_modes_of(&ws).into_iter().map(|d| d.id).collect();
+        let rows: Vec<serde_json::Value> = st
+            .circle_mode_defs
+            .iter()
+            .filter(|d| !d.on_label.is_empty())
+            .map(|d| {
+                serde_json::json!({
+                    "id": d.id,
+                    "label": d.label,
+                    "on_label": d.on_label,
+                    "off_label": d.off_label,
+                    "on": on.contains(&d.id),
+                })
+            })
+            .collect();
+        serde_json::Value::Array(rows).to_string()
+    })
+    .unwrap_or_else(|| "[]".to_string())
+}
+
+/// Turn a host circle mode on/off for the selected circle.
+#[wasm_bindgen]
+pub fn seance_mobile_set_circle_mode(mode: &str, on: bool) -> bool {
+    with_mobile_app(|app| {
+        let Some(ws) = app.selected_workspace() else {
+            return false;
+        };
+        app.set_circle_mode(&ws, mode, on);
+        true
+    })
+    .unwrap_or(false)
 }
 
 /// Banish the selected circle — kill every pane in it — and land on a
@@ -1845,6 +1929,22 @@ pub fn start() -> Result<(), JsValue> {
         let a = Rc::clone(&app);
         let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| a.reassert_grid());
         window().add_event_listener_with_callback("focus", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    // Touching or typing here is the human using THIS client: take the dims
+    // back even if no focus/visibility event fired (the phone screen stayed
+    // on while the desktop re-took the pane). Throttled — every keystroke
+    // must not cost every client a full-grid resend.
+    for event in ["pointerdown", "keydown"] {
+        let a = Rc::clone(&app);
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
+            let t = now_ms();
+            if t - a.last_touch_reassert.get() > TOUCH_REASSERT_MS {
+                a.last_touch_reassert.set(t);
+                a.reassert_grid();
+            }
+        });
+        doc.add_event_listener_with_callback_and_bool(event, cb.as_ref().unchecked_ref(), true)?;
         cb.forget();
     }
     // iOS Safari reflows the viewport after the orientation event, not with

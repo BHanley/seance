@@ -102,6 +102,12 @@ pub struct ClientState {
     /// PR links per workspace, daemon-owned (`WorkspaceMeta.pr_links`),
     /// most-recently-seen LAST. Statuses come from the external poller.
     pub workspace_pr_links: HashMap<String, Vec<PrLink>>,
+    /// Host circle modes (`host.json` `circle_modes[]`, e.g. AFK), as the
+    /// daemon advertises them. Empty when the host defines none — then the
+    /// whole feature is invisible.
+    pub circle_mode_defs: Vec<seance_core::protocol::CircleModeDef>,
+    /// slug → ids of the circle modes it is in (`WorkspaceMeta.modes`).
+    pub circle_modes: HashMap<String, Vec<String>>,
     /// `Date.now() - performance.now()` at boot. Both local clocks above live
     /// in the `performance.now()` domain; the daemon's are unix ms, so every
     /// ingested daemon stamp is converted with `perf = unix - offset`. Set
@@ -414,7 +420,42 @@ impl ClientState {
             .filter(|w| self.subs.is_pinned(w))
             .cloned()
             .collect();
-        seance_core::grouping::partition_sections(&ordered, &pinned)
+        seance_core::grouping::partition_sections(&ordered, &pinned, &self.top_mode_bands())
+    }
+
+    /// Circles in each host mode marked `top` (AFK, slack thread), one set
+    /// per mode in host order: each leads the rail in its own band.
+    pub fn top_mode_bands(&self) -> Vec<std::collections::BTreeSet<String>> {
+        let top: Vec<&str> = self
+            .circle_mode_defs
+            .iter()
+            .filter(|d| d.top)
+            .map(|d| d.id.as_str())
+            .collect();
+        seance_core::grouping::top_mode_bands(&top, &self.circle_modes)
+    }
+
+    /// Optimistic flip of a circle mode, ahead of the daemon's State echo.
+    pub fn set_circle_mode_local(&mut self, ws: &str, mode: &str, on: bool) {
+        let ids = self.circle_modes.entry(ws.to_string()).or_default();
+        ids.retain(|m| m != mode);
+        if on {
+            ids.push(mode.to_string());
+        }
+        if ids.is_empty() {
+            self.circle_modes.remove(ws);
+        }
+        self.structure_rev += 1;
+    }
+
+    /// The defs of the modes `ws` is currently in, in host order.
+    pub fn circle_modes_of(&self, ws: &str) -> Vec<seance_core::protocol::CircleModeDef> {
+        let on = self.circle_modes.get(ws);
+        self.circle_mode_defs
+            .iter()
+            .filter(|d| on.is_some_and(|ids| ids.contains(&d.id)))
+            .cloned()
+            .collect()
     }
 
     /// One band's rows: loose circles and prefix clusters, in sort order.
@@ -658,6 +699,7 @@ impl ClientState {
                 windows,
                 subscriptions,
                 workspace_meta,
+                circle_modes,
             } => {
                 // State is global from 0.12 and STAYS global — nothing is
                 // dropped at ingest.
@@ -690,7 +732,13 @@ impl ClientState {
                 // Labels arrive for every known circle, so rebuild wholesale:
                 // a circle renamed back to its slug must lose its entry.
                 self.workspace_names.clear();
+                self.circle_mode_defs = circle_modes;
+                self.circle_modes.clear();
                 for m in workspace_meta {
+                    if !m.modes.is_empty() {
+                        self.circle_modes
+                            .insert(m.workspace.clone(), m.modes.clone());
+                    }
                     self.merge_activity(&m.workspace, m.last_output_ms);
                     self.merge_touch(&m.workspace, m.last_touch_ms);
                     if let Some(n) = m.name.clone() {

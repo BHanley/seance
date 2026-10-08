@@ -94,6 +94,12 @@ pub struct ActRenameWorkspace(pub String);
 #[action(namespace = seance, no_json)]
 pub struct ActRenameGroup(pub String, pub String);
 
+/// Turn a host circle mode on/off: (workspace, mode id, on). Rail context
+/// menu; only offered for modes host.json defines (e.g. AFK).
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActCircleMode(pub String, pub String, pub bool);
+
 /// Open the web replay editor for a workspace (sidebar context menu).
 #[derive(Action, Clone, PartialEq, Deserialize)]
 #[action(namespace = seance, no_json)]

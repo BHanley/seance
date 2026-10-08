@@ -79,9 +79,20 @@ fn continues(snap: &GridSnapshot, r: u16) -> Option<Wrap> {
     }
     let next: String = row_chars(snap, r + 1).iter().map(|c| c.c).collect();
     let first = next.trim_start().split(' ').next().unwrap_or("");
+    // A list bullet is the start of a new item, never the rest of a URL:
+    // "…?item=289" over "- #259 club rides" opened `…item=289-` (2026-10-03).
+    // Numbered: 1–3 digits + `.`/`)` with the item's text after it — so a
+    // wrapped `…p179026479900` + `6399)` is still a continuation.
+    let numbered = (2..=4).contains(&first.len())
+        && first[..first.len() - 1].chars().all(|c| c.is_ascii_digit())
+        && first.ends_with(['.', ')'])
+        && !next.trim_start()[first.len()..].trim().is_empty();
+    let bullet = matches!(first, "-" | "*" | "+" | "•") || numbered;
     let continuation = !first.is_empty()
+        && !bullet
         && next.starts_with(' ') == text.starts_with(' ')
         && first.chars().all(is_url_char)
+        && first.chars().any(|c| c.is_ascii_alphanumeric())
         && !first.chars().all(|c| c.is_ascii_alphabetic());
     continuation.then_some(Wrap::Hard)
 }
@@ -306,6 +317,39 @@ mod tests {
         assert_eq!(
             url_at_cell(&snap, 0, 30).as_deref(),
             Some("https://rwgps.slack.com/archives/C05RT3C611P/p1790264799006399")
+        );
+    }
+
+    /// A markdown list of URLs, one per line (2026-10-03): the next item's
+    /// bullet is not the rest of this URL.
+    #[test]
+    fn a_list_bullet_on_the_next_line_is_not_part_of_the_url() {
+        let snap = grid_of(
+            80,
+            &[
+                "- #289 personal chat link: http://localhost:5390/#/board?item=289",
+                "- #259 club rides: http://localhost:5390/#/board?item=259",
+                "1. http://a.io/x?id=7",
+                "2. http://b.io/y",
+                "* http://c.io/z?q=1",
+                "+ more",
+            ],
+        );
+        assert_eq!(
+            url_at_cell(&snap, 0, 40).as_deref(),
+            Some("http://localhost:5390/#/board?item=289")
+        );
+        assert_eq!(
+            url_at_cell(&snap, 1, 30).as_deref(),
+            Some("http://localhost:5390/#/board?item=259")
+        );
+        assert_eq!(
+            url_at_cell(&snap, 2, 6).as_deref(),
+            Some("http://a.io/x?id=7")
+        );
+        assert_eq!(
+            url_at_cell(&snap, 4, 4).as_deref(),
+            Some("http://c.io/z?q=1")
         );
     }
 

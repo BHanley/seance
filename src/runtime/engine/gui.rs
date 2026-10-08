@@ -400,6 +400,12 @@ impl Engine {
         let workspace_meta: Vec<WorkspaceMeta> = meta_names
             .into_iter()
             .map(|ws| WorkspaceMeta {
+                modes: self
+                    .comms
+                    .modes
+                    .get(&ws)
+                    .map(|m| m.iter().cloned().collect())
+                    .unwrap_or_default(),
                 last_output_ms: self.workspace_output.get(&ws).copied().unwrap_or(0),
                 last_touch_ms: self.workspace_touch_ms.get(&ws).copied().unwrap_or(0),
                 pr_links: self.pr_links.get(&ws).cloned().unwrap_or_default(),
@@ -419,6 +425,10 @@ impl Engine {
             windows: self.window_infos(),
             subscriptions: subs,
             workspace_meta,
+            circle_modes: crate::host::circle_modes()
+                .iter()
+                .map(|m| m.def())
+                .collect(),
         }
     }
 
@@ -1470,6 +1480,18 @@ impl Engine {
                 // pointing at the same circle. The eight-structure migration
                 // this replaced could never reach that last one.
                 self.rename_workspace(&old, &new);
+                self.persist();
+                self.push_state_to_all();
+                None
+            }
+            GuiRequest::SetCircleMode {
+                workspace,
+                mode,
+                on,
+            } => {
+                if let Err(e) = self.set_circle_mode(&workspace, &mode, on) {
+                    eprintln!("[seance daemon] circle mode {mode} on {workspace}: {e}");
+                }
                 self.persist();
                 self.push_state_to_all();
                 None

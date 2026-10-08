@@ -147,6 +147,68 @@ the prompt, the file pane the agent is told to open beside itself — is the
 host's, expressed through `seance ctl`. That is the seam: a host can add a
 workflow to seance without seance learning the workflow.
 
+## Circle modes (`circle_modes[]`)
+
+A circle mode is a named on/off state a circle can be put in from its rail
+row's right-click menu (desktop and web) or the phone circle sheet. Turning
+it on sends `on_prompt` to the circle's **first pane** (earliest-created
+terminal; a `ctl lead` override does not apply), turning it off sends
+`off_prompt`. Both go through the message queue, so they wait out a busy
+turn rather than interleaving with it. The daemon persists which circles are
+in which mode (`state.json`, survives upgrade); clients show a badge with
+`label`, a violet edge, and — for `top: true` — a band above everything else,
+pins included.
+
+```json
+"circle_modes": [
+  {"id": "afk", "label": "AFK", "on_label": "go afk",
+   "off_label": "turn off afk mode",
+   "on_prompt": "im going afk - activate that mode",
+   "off_prompt": "im back - turn off afk mode", "top": true}
+]
+```
+
+### Host-owned state (`state_cmd`)
+
+When the host can enter or leave the mode on its own (vita's AFK is
+entered from the phone, ends on a 4h TTL or with "release" in telegram), the
+prompt seance sent says nothing about the current state. Give the mode a
+`state_cmd` and the daemon polls it (`src/daemon/modewatch.rs`, every
+`poll_secs`, default 30) and shows exactly what it reports:
+
+```json
+"state_cmd": "cd /home/zack/work/vita && ./run onthego list",
+"state_field": "afk", "poll_secs": 15
+```
+
+Its stdout is a JSON array: circle slugs, or objects with `circle` and/or
+`pane` plus the boolean `state_field` (default `on`). A circle is in the mode
+when it is named or holds a named pane. A menu toggle holds the badge until a
+poll agrees, polling every 10s meanwhile, for 5 minutes at most. After that
+the host wins. If the command fails or prints junk, the last state stays
+put.
+
+A mode whose state only the host can change is **display-only**: leave out
+all four toggle fields (`on_label`, `off_label`, `on_prompt`, `off_prompt`)
+and give it a `state_cmd`. It gets a badge and its own band, but no menu
+entry. vita's slack one:
+
+```json
+{"id": "slack", "label": "slack", "top": true, "poll_secs": 20,
+ "state_cmd": "python3 /home/zack/work/vita/scripts/seance_host_slack.py list"}
+```
+
+That script pairs `cadence slack status` (active claims) with running
+`cadence slack await` processes, whose `$SEANCE_SESSION` names the pane.
+
+Each `top` mode gets its own band, in host.json order, above the pins. A
+circle in two top modes sits in the first one's band.
+
+An entry with no id or label is dropped, and so is one with only some of
+the toggle fields, unless it has a `state_cmd`. With no `circle_modes`, there's
+no menu entry and no badge. What the mode *means* is entirely the prompt's
+business — seance only flips the bit and delivers the words.
+
 ## Adding another widget or menu
 
 1. Write a command that emits schema v1 JSON on stdout.

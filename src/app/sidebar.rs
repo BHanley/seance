@@ -665,6 +665,10 @@ impl SeanceApp {
         let sleepable = !asleep && self.workspace_sleepable(&workspace);
         // Live attention, or `needs` until this window has selected it once.
         let attention = self.row_attention(&workspace);
+        // Host circle modes (AFK…): badges on the row, toggles in its menu.
+        let modes_on = self.circle_modes_of(&workspace);
+        let mode_defs = self.circle_mode_defs.clone();
+        let in_mode = !modes_on.is_empty();
         let header: gpui::AnyElement = if renaming_this_ws {
             div()
                 .px_2()
@@ -682,8 +686,15 @@ impl SeanceApp {
                 .border_l_3()
                 .border_color(if selected {
                     SeancePalette::flame()
+                } else if in_mode {
+                    // In a host mode (AFK): its own edge colour, so the band
+                    // reads as "set aside" at a glance, selected or not.
+                    SeancePalette::violet()
                 } else {
                     gpui::transparent_black()
+                })
+                .when(in_mode && !selected, |d| {
+                    d.bg(SeancePalette::violet().opacity(0.08))
                 })
                 .pl(px(5.))
                 .flex()
@@ -733,6 +744,7 @@ impl SeanceApp {
                 )
                 .context_menu({
                     let ws_m = ws_for_menu.clone();
+                    let modes_on = modes_on.clone();
                     move |menu, _, _| {
                         // Pin leads: it's the one item aimed at the rail
                         // itself (where this row sits), and the one you reach
@@ -742,6 +754,21 @@ impl SeanceApp {
                         } else {
                             menu.menu("pin to top", Box::new(ActPinWorkspace(ws_m.clone())))
                         };
+                        // Host modes (AFK): one toggle each, worded for the
+                        // direction it goes. Display-only modes (slack thread)
+                        // carry no labels and get no entry.
+                        let m =
+                            mode_defs
+                                .iter()
+                                .filter(|d| !d.on_label.is_empty())
+                                .fold(m, |m, d| {
+                                    let on = modes_on.iter().any(|x| x.id == d.id);
+                                    let label = if on { &d.off_label } else { &d.on_label };
+                                    m.menu(
+                                        label.clone(),
+                                        Box::new(ActCircleMode(ws_m.clone(), d.id.clone(), !on)),
+                                    )
+                                });
                         let m = m
                             .menu(
                                 "rename workspace",
@@ -838,6 +865,17 @@ impl SeanceApp {
                                 .child(tail),
                         )
                 })
+                .children(modes_on.iter().map(|d| {
+                    div()
+                        .flex_none()
+                        .px_1()
+                        .rounded_sm()
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .bg(SeancePalette::violet().opacity(0.18))
+                        .text_color(SeancePalette::violet())
+                        .child(d.label.clone())
+                }))
                 .children({
                     // `done` is worth a mark but not a shout; `needs` already
                     // owns the glyph and the name colour, so it needs no pill.
@@ -957,13 +995,13 @@ impl SeanceApp {
         // circles by name prefix, independently. The only chrome between them
         // is a rule, and only when something is actually pinned.
         let bands = self.workspace_sections();
-        let has_pinned = bands
-            .iter()
-            .any(|(s, c)| *s == Section::Pinned && !c.is_empty());
+        // A rule above a band whenever a band above it has rows.
+        let mut rows_above = false;
         let section_rows: Vec<gpui::AnyElement> = bands
             .into_iter()
             .flat_map(|(section, circles)| {
-                let rule = section == Section::Active && has_pinned;
+                let rule = rows_above && !circles.is_empty();
+                rows_above |= !circles.is_empty();
                 self.render_section(section, circles, rule, cx)
             })
             .collect();

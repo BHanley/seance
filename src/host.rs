@@ -16,6 +16,7 @@
 //!   the GUI reads the config itself over the fs bridge — no daemon involvement
 //!   beyond running the two commands.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
@@ -151,6 +152,150 @@ pub struct HostConfig {
     pub sidebar: Vec<HostSidebarConfig>,
     #[serde(default)]
     pub menus: Vec<HostMenuConfig>,
+    #[serde(default)]
+    pub circle_modes: Vec<HostCircleMode>,
+}
+
+/// A per-circle mode the host offers on the rail's right-click menu (zack's
+/// AFK). Turning it on/off sends `on_prompt` / `off_prompt` to the circle's
+/// first pane; circles in a `top` mode get their own band at the top.
+///
+/// With `state_cmd` set, the HOST is the truth about who is in the mode — a
+/// pane can enter or leave it in ways seance never sees (vita's AFK: phone-
+/// started sessions, TTL expiry, "release" in telegram). seance then polls
+/// the command and shows what it says; its own prompt only holds the badge
+/// until the next poll agrees, or for [`MODE_PENDING_MS`] at most.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct HostCircleMode {
+    pub id: String,
+    pub label: String,
+    /// The four toggle fields: all set = the rail menu offers on/off and
+    /// sends the prompts; all left out = display-only (needs `state_cmd`),
+    /// e.g. "on a slack thread", which only the host can start or end.
+    #[serde(default)]
+    pub on_label: String,
+    #[serde(default)]
+    pub off_label: String,
+    #[serde(default)]
+    pub on_prompt: String,
+    #[serde(default)]
+    pub off_prompt: String,
+    #[serde(default)]
+    pub top: bool,
+    /// Shell command printing which circles/panes are in the mode (see
+    /// [`parse_mode_state`]). Absent = seance tracks the toggle itself.
+    #[serde(default)]
+    pub state_cmd: Option<String>,
+    /// Boolean field marking a row ON in `state_cmd` output (default `on`).
+    #[serde(default)]
+    pub state_field: Option<String>,
+    /// Seconds between `state_cmd` polls (default 30).
+    #[serde(default)]
+    pub poll_secs: Option<u64>,
+}
+
+/// How long a toggle from seance's own menu holds the badge while the host's
+/// `state_cmd` hasn't caught up — the prompt may queue behind a busy turn, and
+/// the agent then has to act on it.
+pub const MODE_PENDING_MS: u64 = 5 * 60 * 1000;
+
+/// Which circles and panes a `state_cmd` says are ON. Its stdout is a JSON
+/// array of either circle slugs, or objects carrying `circle` and/or `pane`
+/// plus the boolean `field` (rows without it true are off). Anything else is
+/// an error, so a broken command never wipes the rail.
+pub fn parse_mode_state(
+    raw: &str,
+    field: &str,
+) -> Result<(BTreeSet<String>, BTreeSet<String>), String> {
+    let rows: Vec<serde_json::Value> =
+        serde_json::from_str(raw.trim()).map_err(|e| format!("not a JSON array: {e}"))?;
+    let (mut circles, mut panes) = (BTreeSet::new(), BTreeSet::new());
+    for row in rows {
+        if let Some(c) = row.as_str() {
+            circles.insert(c.to_string());
+            continue;
+        }
+        if row.get(field).and_then(|v| v.as_bool()) != Some(true) {
+            continue;
+        }
+        if let Some(c) = row.get("circle").and_then(|v| v.as_str()) {
+            circles.insert(c.to_string());
+        }
+        if let Some(p) = row.get("pane").and_then(|v| v.as_str()) {
+            panes.insert(p.to_string());
+        }
+    }
+    Ok((circles, panes))
+}
+
+/// [`run_shell`] for the daemon's mode poller.
+pub fn run_state_cmd(cmd: &str) -> Result<String, String> {
+    run_shell(cmd)
+}
+
+impl HostCircleMode {
+    /// Whether the rail menu can turn this mode on and off.
+    pub fn toggleable(&self) -> bool {
+        ![
+            &self.on_label,
+            &self.off_label,
+            &self.on_prompt,
+            &self.off_prompt,
+        ]
+        .iter()
+        .any(|f| f.trim().is_empty())
+    }
+
+    /// What clients see (labels, no prompts). Empty menu labels mean
+    /// display-only: no menu entry.
+    pub fn def(&self) -> seance_core::protocol::CircleModeDef {
+        let toggle = self.toggleable();
+        let menu = |s: &String| if toggle { s.clone() } else { String::new() };
+        seance_core::protocol::CircleModeDef {
+            id: self.id.clone(),
+            label: self.label.clone(),
+            on_label: menu(&self.on_label),
+            off_label: menu(&self.off_label),
+            top: self.top,
+        }
+    }
+}
+
+/// Circle modes out of a host.json body; entries missing an id, label or
+/// prompt are dropped. Pure (tested); [`circle_modes`] is the cached reader.
+pub fn parse_circle_modes(raw: &str) -> Vec<HostCircleMode> {
+    serde_json::from_str::<HostConfig>(raw)
+        .map(|c| c.circle_modes)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| {
+            !m.id.trim().is_empty()
+                && !m.label.trim().is_empty()
+                && (m.toggleable() || m.state_cmd.is_some())
+        })
+        .collect()
+}
+
+/// The circle modes this machine's host.json defines (empty without one:
+/// fail closed, no toggles anywhere). Re-read only when the file's mtime
+/// changes, since the daemon asks on every state push.
+pub fn circle_modes() -> Vec<HostCircleMode> {
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<(Option<std::time::SystemTime>, Vec<HostCircleMode>)>> =
+        Mutex::new(None);
+    let path = host_config_path();
+    let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((seen, modes)) = cache.as_ref() {
+        if *seen == mtime {
+            return modes.clone();
+        }
+    }
+    let modes = std::fs::read_to_string(&path)
+        .map(|raw| parse_circle_modes(&raw))
+        .unwrap_or_default();
+    *cache = Some((mtime, modes.clone()));
+    modes
 }
 
 /// Menus out of a host.json body, dropping any entry missing a command.
@@ -424,6 +569,54 @@ fn poll_widget(cfg: &HostSidebarConfig) -> Result<HostWidgetSnap, String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn circle_modes_parse_and_drop_incomplete_entries() {
+        let raw = r#"{"circle_modes": [
+            {"id": "afk", "label": "AFK", "on_label": "go afk", "off_label": "turn off afk mode",
+             "on_prompt": "im going afk - activate that mode",
+             "off_prompt": "im back - turn off afk mode", "top": true},
+            {"id": "half", "label": "x", "on_label": "a", "off_label": "b", "on_prompt": "",
+             "off_prompt": "z"}
+        ]}"#;
+        let modes = parse_circle_modes(raw);
+        assert_eq!(modes.len(), 1, "an entry with an empty prompt is dropped");
+        assert_eq!(modes[0].id, "afk");
+        assert!(modes[0].top);
+        assert_eq!(modes[0].def().off_label, "turn off afk mode");
+        assert!(parse_circle_modes("{}").is_empty());
+        // Display-only: no toggle fields, but the host reports the state.
+        let ro = parse_circle_modes(
+            r#"{"circle_modes": [{"id": "slack", "label": "slack", "state_cmd": "x"}]}"#,
+        );
+        assert_eq!(ro.len(), 1);
+        assert!(!ro[0].toggleable());
+        assert!(ro[0].def().on_label.is_empty(), "no menu entry");
+        assert!(parse_circle_modes("not json").is_empty());
+        // Existing keys keep parsing alongside.
+        assert!(parse_menus(raw).unwrap().is_empty());
+    }
+
+    /// vita's `onthego list` shape: rows keyed by pane AND circle, ON only
+    /// where the configured field is true. Junk is an error, not "nobody".
+    #[test]
+    fn mode_state_reads_rows_by_field_and_refuses_junk() {
+        let raw = r#"[{"pane":"claude-29","circle":"wander-claude","afk":true},
+                      {"pane":"claude-46","circle":"claude-12","afk":false},
+                      {"pane":"orphan","afk":true}]"#;
+        let (c, p) = parse_mode_state(raw, "afk").unwrap();
+        assert_eq!(c.into_iter().collect::<Vec<_>>(), vec!["wander-claude"]);
+        assert_eq!(
+            p.into_iter().collect::<Vec<_>>(),
+            vec!["claude-29", "orphan"]
+        );
+        let (c, _) = parse_mode_state(r#"["a","b"]"#, "on").unwrap();
+        assert_eq!(c.len(), 2);
+        assert!(parse_mode_state("[]", "on").unwrap().0.is_empty());
+        assert!(parse_mode_state("oops", "on").is_err());
+        assert!(parse_mode_state(r#"{"afk":true}"#, "afk").is_err());
+    }
+
     use super::*;
 
     #[test]

@@ -26,9 +26,9 @@ pub struct HandoffPane {
     pub command: String,
     pub tiled: bool,
     pub resume_on_restore: bool,
-    /// Claude session id owned by the pane (see `PersistedPane::claude_session`).
-    #[serde(default)]
-    pub claude_session: Option<String>,
+    /// See `PersistedPane::agent_session`. Alias: handoff from a pre-rename daemon.
+    #[serde(default, alias = "claude_session")]
+    pub agent_session: Option<String>,
     /// Slept panes hand off as slept — no PTY fd to transfer, nothing to do.
     #[serde(default)]
     pub asleep: bool,
@@ -126,6 +126,15 @@ pub struct CommsState {
     pub messages: Vec<MessageRecord>,
     #[serde(default)]
     pub counter: u64,
+    /// circle slug → host circle modes on there (e.g. "afk"); see host.json
+    /// `circle_modes`.
+    #[serde(default)]
+    pub modes: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+    /// (circle, mode) → (on, until ms): a menu toggle of a host-polled mode
+    /// (`state_cmd`) the host hasn't confirmed yet. Holds the badge until the
+    /// poll agrees or it expires. Not persisted — a restart just re-polls.
+    #[serde(skip)]
+    pub mode_pending: std::collections::BTreeMap<(String, String), (bool, u64)>,
 }
 
 /// One message between sessions (`ctl ask --to` / `tell` / `reply`, and

@@ -16,6 +16,8 @@
 //!   closes. Old labels keep resolving (with a warning) until another circle
 //!   takes them.
 
+use std::collections::BTreeSet;
+
 use serde_json::json;
 
 use super::helpers::now_ms;
@@ -303,6 +305,8 @@ impl Engine {
                 m.text
             ),
             "notice" => format!("📇 seance notice: {}", m.text),
+            // A circle-mode prompt (AFK on/off) is the human's own words: as is.
+            "prompt" => m.text.clone(),
             _ => format!(
                 "📨 seance {} — note from {from} (FYI, no reply needed):\n\n{}",
                 m.id, m.text
@@ -480,6 +484,146 @@ impl Engine {
                 ..Default::default()
             });
         }
+    }
+
+    /// The circle's first-created terminal pane (earliest birth; panes older
+    /// than the birth record count as oldest, in pane-list order). Unlike
+    /// [`Self::effective_lead`], a `ctl lead` override does not apply.
+    pub(crate) fn first_pane(&self, circle: &str) -> Option<String> {
+        self.panes
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.workspace == circle && p.kind != "file")
+            .min_by_key(|(i, p)| (self.comms.born.get(&p.slug).copied().unwrap_or(0), *i))
+            .map(|(_, p)| p.slug.clone())
+    }
+
+    /// Turn a host circle mode (host.json `circle_modes`, e.g. AFK) on or off
+    /// for `circle`, and send the mode's prompt to the circle's first pane.
+    /// No-op (no prompt) when it is already in that state. Returns the
+    /// prompt's message id.
+    pub(crate) fn set_circle_mode(
+        &mut self,
+        circle: &str,
+        mode: &str,
+        on: bool,
+    ) -> Result<Option<String>, String> {
+        self.set_circle_mode_with(&crate::host::circle_modes(), circle, mode, on)
+    }
+
+    /// [`Self::set_circle_mode`] against explicit mode defs (tests).
+    pub(crate) fn set_circle_mode_with(
+        &mut self,
+        defs: &[crate::host::HostCircleMode],
+        circle: &str,
+        mode: &str,
+        on: bool,
+    ) -> Result<Option<String>, String> {
+        let def = defs
+            .iter()
+            .find(|m| m.id == mode)
+            .cloned()
+            .ok_or_else(|| format!("no circle mode '{mode}' in host.json"))?;
+        if !def.toggleable() {
+            return Err(format!(
+                "circle mode '{mode}' is display-only (host owns it)"
+            ));
+        }
+        let (slug, _) = self
+            .resolve_circle(circle)
+            .ok_or_else(|| format!("no circle '{circle}'"))?;
+        let first = self
+            .first_pane(&slug)
+            .ok_or_else(|| format!("circle '{circle}' has no pane to tell"))?;
+        let set = self.comms.modes.entry(slug.clone()).or_default();
+        let changed = if on {
+            set.insert(mode.to_string())
+        } else {
+            set.remove(mode)
+        };
+        if set.is_empty() {
+            self.comms.modes.remove(&slug);
+        }
+        if !changed {
+            return Ok(None);
+        }
+        if def.state_cmd.is_some() {
+            self.comms.mode_pending.insert(
+                (slug.clone(), mode.to_string()),
+                (on, now_ms() + crate::host::MODE_PENDING_MS),
+            );
+        }
+        events::log(
+            "human",
+            Some(&slug),
+            Some(&first),
+            "circle_mode",
+            format!("{mode} {}", if on { "on" } else { "off" }),
+        );
+        let id = self.post_message(MessageRecord {
+            kind: "prompt".into(),
+            to_pane: first,
+            to_circle: Some(slug),
+            text: if on { def.on_prompt } else { def.off_prompt },
+            ..Default::default()
+        });
+        Ok(Some(id))
+    }
+
+    /// Take a host `state_cmd` poll as the truth for `mode`: the circles it
+    /// names, plus the circles of the panes it names, are in the mode and no
+    /// others — except where a recent menu toggle is still pending and the
+    /// host hasn't caught up. Returns whether anything visible changed.
+    pub(crate) fn ingest_mode_state(
+        &mut self,
+        mode: &str,
+        circles: &BTreeSet<String>,
+        panes: &BTreeSet<String>,
+        now_ms: u64,
+    ) -> bool {
+        let mut on: BTreeSet<String> = circles
+            .iter()
+            .filter_map(|c| self.resolve_circle(c).map(|(slug, _)| slug))
+            .collect();
+        on.extend(
+            self.panes
+                .iter()
+                .filter(|p| panes.contains(&p.slug))
+                .map(|p| p.workspace.clone()),
+        );
+        // Pending toggles: drop once confirmed or expired, else they win.
+        self.comms
+            .mode_pending
+            .retain(|(circle, m), (want, until)| {
+                m != mode || (*until > now_ms && on.contains(circle) != *want)
+            });
+        for ((circle, m), (want, _)) in &self.comms.mode_pending {
+            if m == mode {
+                if *want {
+                    on.insert(circle.clone());
+                } else {
+                    on.remove(circle);
+                }
+            }
+        }
+        let before = self.comms.modes.clone();
+        for set in self.comms.modes.values_mut() {
+            set.remove(mode);
+        }
+        for circle in on {
+            self.comms
+                .modes
+                .entry(circle)
+                .or_default()
+                .insert(mode.to_string());
+        }
+        self.comms.modes.retain(|_, set| !set.is_empty());
+        self.comms.modes != before
+    }
+
+    /// Is a menu toggle of `mode` still waiting on the host's poll?
+    pub(crate) fn mode_pending(&self, mode: &str) -> bool {
+        self.comms.mode_pending.keys().any(|(_, m)| m == mode)
     }
 
     /// Message deliverability for a pane whose screen reads `activity`:

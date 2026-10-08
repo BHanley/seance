@@ -150,6 +150,11 @@ const PLACEHOLDERS: &[&str] = &[
     "Press up to edit queued messages",
 ];
 
+/// Footer hints an agent shows under its composer only mid-turn (grok's
+/// `Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+x:shortcuts`).
+const BUSY_FOOTER: &[&str] = &["Ctrl+c:cancel"];
+const FOOTER_WINDOW: usize = 3;
+
 /// Claude's marks for input queued behind a running turn.
 const QUEUED: &[&str] = &[
     "Press up to edit queued messages",
@@ -196,6 +201,15 @@ pub fn classify(screen: &str, title: Option<&str>) -> AgentState {
     if let Some(l) = window.iter().find(|l| BUSY.iter().any(|m| l.contains(m))) {
         return verdict(Activity::Busy, Some(l));
     }
+    if let Some(i) = prompt {
+        let footer = &lines[(i + 1).min(lines.len())..(i + 1 + FOOTER_WINDOW).min(lines.len())];
+        if let Some(l) = footer
+            .iter()
+            .find(|l| BUSY_FOOTER.iter().any(|m| l.contains(m)))
+        {
+            return verdict(Activity::Busy, Some(l));
+        }
+    }
     if let Some(t) = title.filter(|t| crate::util::title_looks_busy(t)) {
         return verdict(Activity::Busy, Some(t));
     }
@@ -211,11 +225,19 @@ pub fn classify(screen: &str, title: Option<&str>) -> AgentState {
     }
 }
 
-/// The input-box line: the last line opening with Claude's `❯` or Codex's
-/// `›` glyph.
+/// A line with grok's input-box border (`│ ❯ … │`) peeled off.
+fn unboxed(line: &str) -> &str {
+    let t = line.trim();
+    let t = t.strip_prefix('│').unwrap_or(t);
+    t.strip_suffix('│').unwrap_or(t).trim()
+}
+
+/// The input-box line: the last line opening with Claude's / grok's `❯` or
+/// Codex's `›` glyph. Last matters: grok echoes past prompts in its
+/// transcript with the same `❯`, above the composer.
 fn prompt_line(lines: &[&str]) -> Option<usize> {
     lines.iter().rposition(|l| {
-        let t = l.trim_start();
+        let t = unboxed(l);
         t.starts_with('❯') || t.starts_with('›')
     })
 }
@@ -225,7 +247,7 @@ fn prompt_line(lines: &[&str]) -> Option<usize> {
 pub fn composer_text(screen: &str) -> Option<String> {
     let lines: Vec<&str> = screen.lines().collect();
     let i = prompt_line(&lines)?;
-    let t = lines[i].trim_start();
+    let t = unboxed(lines[i]);
     let body = t
         .strip_prefix('❯')
         .or_else(|| t.strip_prefix('›'))
@@ -687,5 +709,71 @@ mod tests {
             classify("zack@host:~$ ls\nfoo bar", Some("bash")).activity,
             Activity::Unknown
         );
+    }
+
+    // Live grok 4.7 frames, 2026-10-07 (opt-in banner above the composer).
+    const GROK_TOP: &str = "  master ~/work/vita                       1.8K / 256K │ [Dashboard]
+     ❯ reply with exactly the word banana and nothing else          12:44 PM
+";
+    const GROK_BOX_TOP: &str = "  Help improve Grok                       [Opt out] [Opt in]
+  Read Terms and Privacy Policy.
+  ╭──────────────────────────────────────────────╮
+";
+    const GROK_BOX_BOTTOM: &str = "  ╰──────────────── Grok 4.7 (xhigh) · always-approve ─╯\n";
+
+    fn grok(transcript: &str, composer: &str, footer: &str) -> String {
+        format!(
+            "{GROK_TOP}{transcript}{GROK_BOX_TOP}  │ ❯ {composer:<44}│\n{GROK_BOX_BOTTOM}  {footer}"
+        )
+    }
+
+    #[test]
+    fn grok_idle_ignores_the_echoed_prompt_above_the_composer() {
+        let idle = grok(
+            "     ◆ Thought for 3.2s\n     banana   12:44 PM\n     Worked for 6.4s\n",
+            "",
+            "Shift+Tab:mode  │  Ctrl+x:shortcuts",
+        );
+        assert_eq!(classify(&idle, None).activity, Activity::Idle);
+        assert_eq!(composer_text(&idle).as_deref(), Some(""));
+        // The 7:21am double send: the echo was read as an unsent composer.
+        assert!(!composer_holds(
+            &idle,
+            "reply with exactly the word banana and nothing else"
+        ));
+    }
+
+    #[test]
+    fn grok_running_turn_is_busy() {
+        let busy = grok(
+            "   ⠹ Waiting for response… 2.1s           2.1s ⇣1.82k [stop]\n",
+            "",
+            "Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+x:shortcuts",
+        );
+        assert_eq!(classify(&busy, None).activity, Activity::Busy);
+    }
+
+    #[test]
+    fn grok_unsent_paste_is_stuck_then_delivered_once_running() {
+        let text = "reply with exactly the word banana";
+        let before = Look::of(grok("", "", "Shift+Tab:mode  │  Ctrl+x:shortcuts"), None);
+        let unsent = Look::of(
+            grok(
+                "",
+                text,
+                "Enter:send  │  Alt+Enter:newline  │  Ctrl+x:shortcuts",
+            ),
+            None,
+        );
+        assert_eq!(judge(&before, &unsent, text), Judgement::Stuck);
+        let running = Look::of(
+            grok(
+                "",
+                "",
+                "Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+x:shortcuts",
+            ),
+            None,
+        );
+        assert_eq!(judge(&before, &running, text), Judgement::Delivered("busy"));
     }
 }
