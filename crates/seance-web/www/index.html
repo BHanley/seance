@@ -122,9 +122,12 @@
         // The encoder already understands every name map_key_name accepts, so
         // nothing below needs a Rust change. Shift+enter is a newline that
         // does not submit (agent prompts). Stop is esc, which interrupts an
-        // agent; keep:1 leaves the typed line unsent.
+        // agent; keep:1 leaves the typed line unsent. nav:1 drops the
+        // keyboard and opens the circle list, since the ☰ button hides with
+        // the keyboard up.
         var ROWS = [
           [
+            { nav: 1, label: '☰' },
             { k: 'Escape', label: '■ stop', keep: 1 },
             { k: 'ArrowLeft', label: '←' },
             { k: 'ArrowDown', label: '↓' },
@@ -499,6 +502,11 @@
           b.addEventListener('pointerdown', function (e) {
             e.preventDefault();
             e.stopPropagation();
+            if (spec.nav) {
+              closeKb();
+              setNav(true);
+              return;
+            }
             if (spec.mod) {
               mods[spec.mod] = !mods[spec.mod];
               paintMods();
