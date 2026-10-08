@@ -121,9 +121,11 @@
         //   {mod:'ctrl'}                 → sticky modifier
         // The encoder already understands every name map_key_name accepts, so
         // nothing below needs a Rust change. Shift+enter is a newline that
-        // does not submit (agent prompts).
+        // does not submit (agent prompts). Stop is esc, which interrupts an
+        // agent; keep:1 leaves the typed line unsent.
         var ROWS = [
           [
+            { k: 'Escape', label: '■ stop', keep: 1 },
             { k: 'ArrowLeft', label: '←' },
             { k: 'ArrowDown', label: '↓' },
             { k: 'ArrowUp', label: '↑' },
@@ -484,7 +486,7 @@
               paintMods();
               return;
             }
-            if (flushLine()) sendKey(spec.k, spec.ctrl, spec.alt, spec.shift);
+            if (spec.keep || flushLine()) sendKey(spec.k, spec.ctrl, spec.alt, spec.shift);
           });
           return b;
         }
