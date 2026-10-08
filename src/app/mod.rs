@@ -1013,6 +1013,14 @@ impl SeanceApp {
                     self.busy_panes.insert(slug.clone());
                 }
                 self.ensure_remote_pane_cx(&pane, cx);
+                // New file panes open in the circle's dock panel, not the grid.
+                if pane.kind == "file" {
+                    self.selected_workspace = Some(ws);
+                    self.dock_pane(&slug, cx);
+                    self.rename_next_spawn = false;
+                    cx.notify();
+                    return;
+                }
                 // Summon → select workspace, make active, focus the new pane.
                 self.selected_workspace = Some(ws.clone());
                 self.active_slug = Some(slug.clone());
