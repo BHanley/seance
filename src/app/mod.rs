@@ -31,6 +31,7 @@ use std::sync::Arc;
 pub(crate) mod actions;
 mod alerts;
 mod chrome;
+mod dock;
 mod layout;
 mod menus;
 mod overview;
@@ -177,6 +178,8 @@ pub struct SeanceApp {
     selected_workspace: Option<String>,
     /// Last focused pane slug per workspace — restored on workspace switch.
     workspace_focus: std::collections::HashMap<String, String>,
+    /// Open tab in each circle's dock panel (workspace slug → pane slug).
+    dock_tab: std::collections::HashMap<String, String>,
     /// Where this window has *been*, for the mouse's back/forward buttons.
     /// Kept by watching `selected_workspace` once per render — see
     /// [`Self::sync_nav_history`].
@@ -461,6 +464,7 @@ impl SeanceApp {
             window_active: true,
             selected_workspace: None,
             workspace_focus: std::collections::HashMap::new(),
+            dock_tab: std::collections::HashMap::new(),
             extra_workspaces: Vec::new(),
             workspace_order: Vec::new(),
             renaming: None,
@@ -1036,6 +1040,10 @@ impl SeanceApp {
             }
             GuiEvent::PaneKilled { slug } => {
                 self.panes.retain(|p| p.slug != slug);
+                // Every window hears this, so the local cache is enough.
+                if self.subs_pref.docked.remove(&slug) {
+                    self.save_arrangement_local();
+                }
                 self.busy_panes.remove(&slug);
                 self.workspace_focus.retain(|_, s| s != &slug);
                 // A row that vanishes never reports the pointer leaving it.
@@ -2095,7 +2103,7 @@ impl SeanceApp {
         } else {
             self.panes
                 .iter()
-                .filter(|p| p.workspace == ws && p.popped.is_none())
+                .filter(|p| p.workspace == ws && p.popped.is_none() && !self.is_docked(p))
                 .map(|p| p.slug.clone())
                 .collect()
         };
@@ -2119,25 +2127,29 @@ impl SeanceApp {
             .and_then(|slug| self.panes.iter().find(|s| &s.slug == slug))
     }
 
-    /// Preferred pane for a workspace: last focused (if still present and not
-    /// popped), else first tiled non-popped, else any non-popped, else any.
+    /// Preferred pane for a workspace: last focused (if still present, not
+    /// popped and not docked), else first tiled non-popped, else any
+    /// non-popped non-docked, else any.
     fn preferred_pane_in_workspace(&self, workspace: &str) -> Option<String> {
         self.workspace_focus
             .get(workspace)
             .cloned()
             .filter(|s| {
-                self.panes
-                    .iter()
-                    .any(|p| p.slug == *s && p.workspace == workspace && p.popped.is_none())
+                self.panes.iter().any(|p| {
+                    p.slug == *s
+                        && p.workspace == workspace
+                        && p.popped.is_none()
+                        && !self.is_docked(p)
+                })
             })
             .or_else(|| {
                 self.panes
                     .iter()
                     .find(|p| p.workspace == workspace && p.tiled && p.popped.is_none())
                     .or_else(|| {
-                        self.panes
-                            .iter()
-                            .find(|p| p.workspace == workspace && p.popped.is_none())
+                        self.panes.iter().find(|p| {
+                            p.workspace == workspace && p.popped.is_none() && !self.is_docked(p)
+                        })
                     })
                     .or_else(|| self.panes.iter().find(|p| p.workspace == workspace))
                     .map(|p| p.slug.clone())
@@ -2185,6 +2197,9 @@ impl SeanceApp {
     }
 
     fn set_active(&mut self, slug: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.show_docked(slug, window, cx) {
+            return;
+        }
         if self.active_slug.as_deref() != Some(slug) {
             let ws = self
                 .panes
@@ -2240,12 +2255,18 @@ impl SeanceApp {
         if let Some(pane) = self.panes.iter_mut().find(|s| s.slug == slug) {
             pane.tiled = tiled;
         }
+        if self.subs_pref.docked.remove(slug) {
+            self.save_arrangement();
+        }
         let _ = self.client.set_tiled(slug, tiled);
         cx.notify();
     }
 
     fn kill_session(&mut self, slug: &str, cx: &mut Context<Self>) {
         let _ = self.client.kill(slug);
+        if self.subs_pref.docked.remove(slug) {
+            self.save_arrangement();
+        }
         // Optimistic local remove; daemon confirms via PaneKilled.
         self.panes.retain(|p| p.slug != slug);
         self.workspace_focus.retain(|_, s| s != slug);
@@ -2994,7 +3015,8 @@ impl Render for SeanceApp {
             .children(self.render_quicklaunch_editor(cx))
             .children(self.render_gui_menu(cx))
             .children(match &self.drawer {
-                Drawer::Closed => None,
+                // The pad and activity drawers cover the dock panel while open.
+                Drawer::Closed => self.render_dock_panel(cx),
                 Drawer::Activity => Some(
                     div()
                         .flex_none()

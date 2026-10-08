@@ -13,7 +13,7 @@
 //! circle, so an `active` key in an older blob parses and is discarded.
 //!
 //! Shape: `{ "seen": [...], "pinned": [...], "collapsed": [...],
-//! "flipped": "slug" }`.
+//! "flipped": "slug", "docked": [...] }`.
 //! - `seen` — every workspace this GUI has selected at least once (plus
 //!   everything that already existed on first run). One that appears without
 //!   ever being selected badges `needs` — that's a ctl-spawned circle you
@@ -51,6 +51,12 @@ pub struct SubscriptionsPref {
     /// machine too. One at a time, matching the app model.
     #[serde(default)]
     pub flipped: Option<String>,
+    /// File panes shown in their circle's right-side dock panel instead of
+    /// the grid (a docked pane is also untiled on the daemon). Part of the
+    /// arrangement so the tracker you docked stays docked on the other
+    /// machine too.
+    #[serde(default)]
+    pub docked: BTreeSet<String>,
 }
 
 /// Collapse key for a prefix group inside a section.

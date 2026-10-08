@@ -48,7 +48,12 @@ impl SeanceApp {
             .panes
             .iter()
             .filter(|p| {
-                !p.tiled && p.popped.is_none() && ws.as_ref().is_none_or(|w| p.workspace == *w)
+                !p.tiled
+                    && p.popped.is_none()
+                    // Docked files live in the circle's dock panel, which
+                    // only shows while a circle is selected.
+                    && (ws.is_none() || !self.is_docked(p))
+                    && ws.as_ref().is_none_or(|w| p.workspace == *w)
             })
             .collect();
         if shelved.is_empty() {
@@ -450,6 +455,7 @@ pub(super) fn render_pane(
     let title = pane.title(cx).unwrap_or_else(|| pane.command.clone());
     // Daemon-backed terminal panes get arm/phone chrome.
     let has_terminal = pane.remote_terminal().is_some();
+    let is_file = matches!(pane.body, crate::pane::PaneBody::File { .. });
     let exited = owner.map(|o| o.exited).unwrap_or(false);
     // Drive mode is only chrome-worthy when it's NOT the default pair mode:
     // locked_human = agents blocked from injecting; agent_led = agent drives.
@@ -862,6 +868,28 @@ pub(super) fn render_pane(
                         }))
                         .child(if is_flipped { "↻ face" } else { "✎ notes" }),
                 )
+                // Dock: file panes (trackers, todo lists) move to the
+                // right-side panel.
+                .when(is_file, |d| {
+                    d.child(
+                        div()
+                            .id(SharedString::from(format!("dock-{slug}")))
+                            .flex_none()
+                            .text_xs()
+                            .text_color(SeancePalette::text_faint())
+                            .hover(|s| s.text_color(SeancePalette::flame()))
+                            .cursor_pointer()
+                            .on_click(cx.listener({
+                                let slug = slug.clone();
+                                move |this, _, _, cx| {
+                                    this.dock_pane(&slug, cx);
+                                    cx.stop_propagation();
+                                }
+                            }))
+                            .tooltip(tip("dock in the right panel"))
+                            .child("⇥"),
+                    )
+                })
                 .child(
                     div()
                         .id(SharedString::from(format!("shelve-{slug}")))
@@ -1188,6 +1216,8 @@ pub(super) fn render_help() -> gpui::AnyElement {
              rendered) with mtime poll + history snapshots (◀/▶). no PTY. use \
              when an agent is editing a file you want to watch.",
         ))
+        .child(row("⇥", "dock a file pane in the right panel (tabs per circle)"))
+        .child(row("⇤", "put the open docked file back in the grid"))
         // ── activity ───────────────────────────────────────────────────────
         .child(h1("activity + asks"))
         .child(bullet("≋ in the footer opens the activity drawer (event feed)"))
