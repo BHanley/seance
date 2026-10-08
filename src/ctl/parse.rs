@@ -1072,7 +1072,7 @@ pub(crate) fn parse_rename_circle(args: Vec<String>) -> Result<ControlRequest, S
     })
 }
 
-/// `rename-pane [PANE] NEW-NAME` — omit PANE inside a pane to rename your own.
+/// `rename-pane [PANE] NEW-NAME`: omit PANE inside a pane to rename your own.
 pub(crate) fn parse_rename_pane(args: Vec<String>) -> Result<ControlRequest, String> {
     let mut positionals = args;
     let (pane, name) = match positionals.len() {

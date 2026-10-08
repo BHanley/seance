@@ -18,8 +18,8 @@ pub fn notify(summary: &str, body: &str) {
     post(&LAST_MS, None, summary, body);
 }
 
-/// Pane alerts (bell, OSC 9/777, finished commands). Own dedup slot, so a
-/// bell can't swallow a needs-human or ask notification right behind it.
+/// Pane alerts (OSC 9/777, finished commands). Own dedup slot, so an alert
+/// can't swallow a needs-human or ask notification right behind it.
 pub fn notify_alert(pane: &str, summary: &str, body: &str) {
     static LAST_ALERT_MS: AtomicU64 = AtomicU64::new(0);
     post(&LAST_ALERT_MS, Some(pane), summary, body);
