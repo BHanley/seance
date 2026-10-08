@@ -1863,52 +1863,6 @@ input:focus {
   opacity: 0.5;
 }
 
-/* ── manual paste sheet ─────────────────────────────────────────────────── */
-/* Only ever shown when the Clipboard API refuses. A real textarea, because
-   the long-press Paste menu is the one paste path no permission can block. */
-#m-paste {
-  position: fixed;
-  inset: 0;
-  z-index: 90;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: calc(12px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom));
-  background: var(--bg);
-}
-#m-paste[hidden] {
-  display: none;
-}
-#m-paste-head {
-  color: var(--text-dim);
-  font-size: 13px;
-}
-#m-paste-hint {
-  color: var(--text-dim);
-  font-size: 13px;
-  line-height: 1.4;
-}
-#m-paste-text {
-  flex: 1 1 auto;
-  min-height: 0;
-  width: 100%;
-  resize: none;
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-elevated);
-  color: var(--text);
-  font: inherit;
-  font-size: 16px; /* < 16px makes iOS zoom the viewport on focus */
-  line-height: 1.45;
-}
-#m-paste-bar {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: auto;
-}
-
 /* ── link sheet ─────────────────────────────────────────────────────────── */
 /* Raised by a tap on a URL inside a pane. A bottom card rather than a
    full-screen takeover: the line you tapped stays visible above it, which is
