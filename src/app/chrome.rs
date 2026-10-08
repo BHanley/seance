@@ -18,7 +18,7 @@ use crate::pane::Pane;
 use crate::scratchpad::ScratchpadDrawer;
 use crate::theme::SeancePalette;
 
-use super::util::{selected_row_fill, status_color, tip};
+use super::util::{selected_row_fill, status_color, tip, DragPill, DraggedPane};
 use super::{Drawer, OwnerChrome, PaneStatus, RenameTarget, SeanceApp};
 
 /// The grimoire in its own window.
@@ -579,9 +579,25 @@ pub(super) fn render_pane(
                 }
             }),
         )
+        // Drop another pane's title strip here: it takes this pane's spot.
+        .drag_over::<DraggedPane>(|style, _, _, _| style.border_color(SeancePalette::flame_dim()))
+        .on_drop(cx.listener({
+            let slug = slug.clone();
+            move |this, drag: &DraggedPane, _, cx| {
+                this.move_pane_to_spot(&drag.slug, &slug, cx);
+            }
+        }))
         .child(
-            // Pane title strip.
+            // Pane title strip; drag it onto another pane to move this one.
             div()
+                .id(SharedString::from(format!("pane-strip-{slug}")))
+                .on_drag(DraggedPane { slug: slug.clone() }, {
+                    let label = format!("▸ {pane_name}");
+                    move |_, _, _, cx| {
+                        let label = label.clone();
+                        cx.new(|_| DragPill { label })
+                    }
+                })
                 .flex_none()
                 .h(px(26.))
                 .px_2()
