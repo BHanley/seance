@@ -445,9 +445,11 @@
         });
 
         // ── keyboard surface ──────────────────────────────────────────────
-        // iOS only raises the system keyboard for a focused, VISIBLE, editable
-        // element — display:none or visibility:hidden won't do it. So the
-        // catcher is a real 1px input parked behind the accessory bar.
+        // The catcher is a visible line on top of the accessory bar. Typed
+        // text stays in it until Enter, so the phone keyboard's own word
+        // composition, touch selection and delete all work, then the whole
+        // line goes to the pane. With the line empty, Enter and Backspace go
+        // straight to the pane.
         //
         // ui.rs's on_keydown bails when the active element is an INPUT or
         // TEXTAREA, so while this is focused the wasm ignores the keyboard
@@ -464,6 +466,19 @@
         catcher.setAttribute('spellcheck', 'false');
         catcher.setAttribute('enterkeyhint', 'send');
         catcher.setAttribute('aria-label', 'terminal input');
+        catcher.setAttribute('placeholder', 'type, enter sends');
+
+        // Sends whatever is waiting in the catcher, so keys like tab and the
+        // arrows act after the text that was typed before them.
+        function flushLine() {
+          var v = catcher.value;
+          if (!v) return true;
+          catcher.value = '';
+          if (window.seanceMobile && window.seanceMobile.text(v, false)) return true;
+          catcher.value = v;
+          toast('no pane focused — tap a terminal first');
+          return false;
+        }
 
         function accKey(spec) {
           var b = mk('button', null, 'm-acc-key', spec.label || spec.k);
@@ -479,7 +494,7 @@
               paintMods();
               return;
             }
-            sendKey(spec.k, spec.ctrl, spec.alt);
+            if (flushLine()) sendKey(spec.k, spec.ctrl, spec.alt);
           });
           return b;
         }
@@ -520,7 +535,6 @@
           acc.hidden = false;
           body.classList.add('m-kb-open');
           kbBtn.classList.add('on');
-          catcher.value = '';
           catcher.focus();
         }
         function closeKb() {
@@ -538,12 +552,12 @@
         });
 
         // ── paste ─────────────────────────────────────────────────────────────
-        // The catcher is 1px behind the bar, so iOS's long-press Paste menu
-        // is unreachable — hence a button. readText() needs a secure context
-        // AND a live user gesture, which is why it is called straight out of
-        // pointerdown rather than after any await. Everything that can refuse
-        // it (http origin, denied permission, Firefox) lands on the manual
-        // sheet, which is a real textarea you CAN long-press into.
+        // The button sends the clipboard straight to the pane (a long-press
+        // Paste into the typing line waits for Enter instead). readText()
+        // needs a secure context AND a live user gesture, which is why it is
+        // called straight out of pointerdown rather than after any await.
+        // Everything that can refuse it (http origin, denied permission,
+        // Firefox) lands on the manual sheet, which is a real textarea you CAN long-press into.
         function sendPaste(v) {
           if (!v) {
             toast('clipboard is empty');
@@ -737,38 +751,34 @@
           a.remove();
         });
 
-        // Typed characters. iOS software keyboards don't produce reliable
-        // keydown (keyCode 229 / key "Unidentified"), so the character stream
-        // is read off `input` and the catcher is drained after each one.
-        // Backspace and Enter arrive as inputTypes, not keys.
+        // Typed characters stay in the catcher (see above). Clearing it after
+        // every character fought Android's word composition and doubled
+        // letters. Soft keyboards often skip keydown (keyCode 229), so Enter
+        // and an empty-line Backspace are also caught as inputTypes.
+        function sendLine() {
+          if (flushLine()) sendKey('Enter');
+        }
         catcher.addEventListener('beforeinput', function (e) {
-          if (e.inputType === 'deleteContentBackward') {
+          if (e.inputType === 'deleteContentBackward' && !catcher.value) {
             e.preventDefault();
             sendKey('Backspace');
           } else if (e.inputType === 'insertLineBreak') {
             e.preventDefault();
-            sendKey('Enter');
+            sendLine();
           }
         });
         catcher.addEventListener('input', function () {
+          // A modifier is armed → the character just typed is a combo.
+          if (!(mods.ctrl || mods.alt) || !catcher.value) return;
           var v = catcher.value;
-          if (!v) return;
-          catcher.value = '';
-          if (!window.seanceMobile) return;
-          // A modifier is armed → treat the next character as a combo.
-          if (mods.ctrl || mods.alt) {
-            sendKey(v.slice(-1));
-            return;
-          }
-          if (!window.seanceMobile.text(v, false)) {
-            toast('no pane focused — tap a terminal first');
-          }
+          catcher.value = v.slice(0, -1);
+          if (flushLine()) sendKey(v.slice(-1));
         });
         // Hardware keyboards (and the ⏎ on the software one) do fire keydown.
         catcher.addEventListener('keydown', function (e) {
           if (e.key === 'Enter') {
             e.preventDefault();
-            sendKey('Enter');
+            sendLine();
           } else if (e.key === 'Backspace' && !catcher.value) {
             e.preventDefault();
             sendKey('Backspace');
@@ -782,6 +792,8 @@
         catcher.addEventListener('blur', function () {
           if (pasting) return;
           if (kbOpen()) setTimeout(function () {
+            // A tap on a pane refocuses the catcher on its click.
+            if (Date.now() - kbAfterClick < 600) return;
             if (document.activeElement !== catcher && kbOpen()) closeKb();
           }, 60);
         });
@@ -1179,7 +1191,9 @@
         tiles.addEventListener('click', function () {
           var t0 = kbAfterClick;
           kbAfterClick = 0;
-          if (t0 && Date.now() - t0 < 600 && !kbOpen()) openKb();
+          if (!t0 || Date.now() - t0 >= 600) return;
+          if (kbOpen()) catcher.focus();
+          else openKb();
         });
 
         tiles.addEventListener(
@@ -1248,7 +1262,7 @@
               if (Date.now() - gesture.t0 > 700) return;
               var hit = window.seanceMobile.urlAt(gesture.slug, t.clientX, t.clientY);
               if (hit) openLinkSheet(hit);
-              else if (!kbOpen()) kbAfterClick = Date.now();
+              else kbAfterClick = Date.now();
               return;
             }
             if (gesture.axis !== 'x') return;

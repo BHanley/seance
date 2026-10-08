@@ -1991,6 +1991,7 @@ input:focus {
   bottom: 0;
   z-index: 80;
   display: flex;
+  flex-wrap: wrap;
   align-items: stretch;
   gap: 6px;
   padding: 6px calc(6px + env(safe-area-inset-right)) 6px calc(6px + env(safe-area-inset-left));
@@ -2059,26 +2060,26 @@ input:focus {
   color: var(--flame);
   background: var(--surface);
 }
-/* The catcher must be focusable and rendered — display:none or
-   visibility:hidden and iOS refuses to raise the keyboard. 1px, behind the
-   bar, transparent caret. */
+/* The typing line: a full-width row above the keys, so the phone keyboard
+   can compose words and the text can be selected and deleted by touch. */
 #m-catch {
-  position: absolute;
-  left: 2px;
-  bottom: 2px;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  border: 0;
-  opacity: 0.01;
-  background: transparent;
-  color: transparent;
-  caret-color: transparent;
+  order: -1;
+  flex: 1 0 100%;
+  min-width: 0;
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+  caret-color: var(--flame);
+  font-family: var(--mono);
   font-size: 16px; /* < 16px makes iOS zoom the viewport on focus */
 }
 #m-catch:focus {
-  outline: none;
+  border-color: var(--flame);
 }
+
 /* Keyboard up: the button cluster would sit under the bar — get it out. */
 body.m-kb-open #m-bar {
   display: none;
