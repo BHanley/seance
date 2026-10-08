@@ -882,7 +882,7 @@ pub(super) fn render_pane(
                             .on_click(cx.listener({
                                 let slug = slug.clone();
                                 move |this, _, _, cx| {
-                                    this.dock_pane(&slug, cx);
+                                    this.dock_pane(&slug, true, cx);
                                     cx.stop_propagation();
                                 }
                             }))

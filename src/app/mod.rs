@@ -1014,11 +1014,13 @@ impl SeanceApp {
                 }
                 self.ensure_remote_pane_cx(&pane, cx);
                 // New file panes open in the circle's dock panel, not the grid.
+                // Every window hears a ctl spawn, so each keeps the dock entry
+                // locally; the next deliberate save carries it to the daemon.
                 if pane.kind == "file" {
                     self.selected_workspace = Some(ws);
-                    self.dock_pane(&slug, cx);
+                    self.dock_pane(&slug, false, cx);
+                    self.ensure_active_pane_in_workspace();
                     self.rename_next_spawn = false;
-                    cx.notify();
                     return;
                 }
                 // Summon → select workspace, make active, focus the new pane.
@@ -2184,10 +2186,11 @@ impl SeanceApp {
             }
             return;
         };
-        let ok = self
-            .active_slug
-            .as_ref()
-            .is_some_and(|s| self.panes.iter().any(|p| &p.slug == s && p.workspace == ws));
+        let ok = self.active_slug.as_ref().is_some_and(|s| {
+            self.panes
+                .iter()
+                .any(|p| &p.slug == s && p.workspace == ws && !self.is_docked(p))
+        });
         if ok {
             if let Some(slug) = self.active_slug.clone() {
                 self.workspace_focus.insert(ws, slug);

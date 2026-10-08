@@ -30,7 +30,9 @@ impl SeanceApp {
             .collect()
     }
 
-    pub(super) fn dock_pane(&mut self, slug: &str, cx: &mut Context<Self>) {
+    /// `share` pushes the arrangement to the daemon (a click); a spawn every
+    /// window hears saves locally only.
+    pub(super) fn dock_pane(&mut self, slug: &str, share: bool, cx: &mut Context<Self>) {
         let Some(pane) = self.panes.iter_mut().find(|p| p.slug == slug) else {
             return;
         };
@@ -41,7 +43,11 @@ impl SeanceApp {
         let ws = pane.workspace.clone();
         let _ = self.client.set_tiled(slug, false);
         self.subs_pref.docked.insert(slug.to_string());
-        self.save_arrangement();
+        if share {
+            self.save_arrangement();
+        } else {
+            self.save_arrangement_local();
+        }
         self.dock_tab.insert(ws, slug.to_string());
         self.drawer = Drawer::Closed;
         // Its tile is gone: drop a zoom on it and move focus to a grid pane.
