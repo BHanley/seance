@@ -1957,7 +1957,7 @@ input:focus {
 }
 .m-acc-rows {
   /* basis 0, not auto: with `auto` the flex base size is the widest row's
-     max-content (~440px of keys) and the bar overflows the screen, carrying
+     max-content and the bar overflows the screen, carrying
      `done` off the right edge where it can't be tapped. */
   flex: 1 1 0;
   min-width: 0;
@@ -1998,8 +1998,7 @@ input:focus {
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
 }
-/* Stacked in .m-acc-right: split its height so the pair lines up with the
-   two key rows beside them. */
+/* done, in .m-acc-right: as tall as the key row beside it. */
 .m-acc-key.wide {
   flex: 1 1 0;
   height: auto;

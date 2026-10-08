@@ -459,6 +459,18 @@
         catcher.setAttribute('enterkeyhint', 'send');
         catcher.setAttribute('aria-label', 'terminal input');
         catcher.setAttribute('placeholder', 'type, enter sends');
+        // lib.rs sends any `paste` on the document straight to the focused
+        // pane; a paste into the line should wait for Enter like typing.
+        catcher.addEventListener('paste', function (e) {
+          e.stopPropagation();
+        });
+        var composing = false;
+        catcher.addEventListener('compositionstart', function () {
+          composing = true;
+        });
+        catcher.addEventListener('compositionend', function () {
+          composing = false;
+        });
 
         // Sends whatever is waiting in the catcher, so keys like tab and the
         // arrows act after the text that was typed before them.
@@ -466,6 +478,12 @@
           var v = catcher.value;
           if (!v) return true;
           catcher.value = '';
+          // Mid-word, the keyboard still holds the old text and would type it
+          // again; refocusing makes it start a fresh word.
+          if (composing) {
+            catcher.blur();
+            catcher.focus();
+          }
           if (window.seanceMobile && window.seanceMobile.text(v, false)) return true;
           catcher.value = v;
           toast('no pane focused — tap a terminal first');
@@ -653,8 +671,9 @@
             e.preventDefault();
             sendLine();
           } else if (e.key === 'Backspace' && !catcher.value) {
+            // A held Backspace that just emptied the line stops there.
             e.preventDefault();
-            sendKey('Backspace');
+            if (!e.repeat) sendKey('Backspace');
           } else if (e.key === 'Escape') {
             e.preventDefault();
             sendKey('Escape');
@@ -1134,7 +1153,8 @@
               if (Date.now() - gesture.t0 > 700) return;
               var hit = window.seanceMobile.urlAt(gesture.slug, t.clientX, t.clientY);
               if (hit) openLinkSheet(hit);
-              else kbAfterClick = Date.now();
+              // Tile buttons stop their click, so it never reaches #tiles.
+              else if (!(e.target.closest && e.target.closest('button'))) kbAfterClick = Date.now();
               return;
             }
             if (gesture.axis !== 'x') return;
