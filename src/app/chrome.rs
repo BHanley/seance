@@ -699,9 +699,12 @@ pub(super) fn render_pane(
                 )
                 .child(match rename_input {
                     // Renaming this pane — the inline editor takes the title slot.
+                    // Clicks stay in the editor: the frame's mouse-down
+                    // focuses the terminal, which stole focus from the input.
                     Some(input) => div()
                         .flex_1()
                         .min_w_0()
+                        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(Input::new(&input))
                         .into_any_element(),
                     None => div()
