@@ -1085,7 +1085,7 @@ impl SeanceApp {
                 cx.notify();
             }
             GuiEvent::Ask { ask } => {
-                crate::desktop_notify::ask(&ask.from, &ask.question);
+                crate::desktop_notify::ask(&self.pane_label(&ask.from), &ask.question);
                 self.asks.push(PendingAsk {
                     id: ask.id,
                     from: ask.from,
@@ -1102,7 +1102,11 @@ impl SeanceApp {
             }
             GuiEvent::Status { slug, state, note } => {
                 if state == "needs-human" || state == "blocked" {
-                    crate::desktop_notify::needs_human(&slug, note.as_deref());
+                    crate::desktop_notify::needs_human(
+                        &slug,
+                        &self.pane_label(&slug),
+                        note.as_deref(),
+                    );
                     // If this pane is phoned to telegram, post a one-liner.
                     telegram_status_bridge(
                         Arc::clone(&self.client),

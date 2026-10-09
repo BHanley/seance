@@ -147,17 +147,24 @@ pub fn bell_sound() {
     });
 }
 
-pub fn needs_human(pane: &str, note: Option<&str>) {
+/// `label` is what the human calls the pane ("circle · name"); `pane` stays
+/// the slug the click jumps to.
+pub fn needs_human(pane: &str, label: &str, note: Option<&str>) {
     let body = match note {
-        Some(n) if !n.is_empty() => format!("{pane}: {n}"),
-        _ => format!("{pane} needs you"),
+        Some(n) if !n.is_empty() => format!("{label}: {n}"),
+        _ => format!("{label} needs you"),
     };
     post(&LAST_MS, Some(pane), "seance · needs human", &body);
 }
 
 pub fn ask(from: &str, question: &str) {
     let q = if question.len() > 160 {
-        format!("{}…", &question[..160])
+        // Cut on a char boundary: a byte slice through an emoji panics.
+        let mut end = 160;
+        while !question.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…", &question[..end])
     } else {
         question.to_string()
     };

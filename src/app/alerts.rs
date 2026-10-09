@@ -20,12 +20,7 @@ impl SeanceApp {
         let cfg = crate::term_config::get();
         // Looking right at the pane: like a focused terminal, sound only.
         let watching = self.window_active && self.active_slug.as_deref() == Some(pane);
-        let name = self
-            .panes
-            .iter()
-            .find(|p| p.slug == pane)
-            .map(|p| format!("{} · {}", self.workspace_label(&p.workspace), p.name))
-            .unwrap_or_else(|| pane.to_string());
+        let name = self.pane_label(pane);
         match kind {
             // Sound only, as in Ghostty: shells ring on every failed tab
             // completion, and a program that wants a banner sends OSC 9/777.
@@ -56,5 +51,15 @@ impl SeanceApp {
             }
             _ => {}
         }
+    }
+
+    /// What a notification calls a pane: "circle · name", the names the human
+    /// gave them. Unknown slugs (an asker that isn't a pane) pass through.
+    pub(super) fn pane_label(&self, pane: &str) -> String {
+        self.panes
+            .iter()
+            .find(|p| p.slug == pane)
+            .map(|p| format!("{} · {}", self.workspace_label(&p.workspace), p.name))
+            .unwrap_or_else(|| pane.to_string())
     }
 }
