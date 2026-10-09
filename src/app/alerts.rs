@@ -25,6 +25,9 @@ impl SeanceApp {
             // Sound only, as in Ghostty: shells ring on every failed tab
             // completion, and a program that wants a banner sends OSC 9/777.
             "bell" => desktop_notify::bell_sound(),
+            "done" if !watching => {
+                desktop_notify::notify_done(pane, &format!("{name}: done"), body);
+            }
             "notify" if !watching => {
                 let summary = if title.is_empty() {
                     name

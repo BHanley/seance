@@ -262,6 +262,8 @@ pub struct SeanceApp {
     /// workspace, so a locally-derived spinner freezes on every other circle.
     /// Seeded from `PaneInfo::busy`, kept live by `GuiEvent::PaneBusy`.
     busy_panes: std::collections::HashSet<String>,
+    /// When each busy pane went busy, for the "done" alert on its falling edge.
+    busy_since: std::collections::HashMap<String, std::time::Instant>,
     /// Workspaces that currently have a live-working agent (for falling-edge
     /// touch when work finishes → top of the non-working band).
     workspace_was_working: std::collections::HashSet<String>,
@@ -499,6 +501,7 @@ impl SeanceApp {
             workspace_activity: std::collections::HashMap::new(),
             resize_settle: std::collections::HashMap::new(),
             busy_panes: std::collections::HashSet::new(),
+            busy_since: std::collections::HashMap::new(),
             workspace_was_working: std::collections::HashSet::new(),
             workspace_names: std::collections::HashMap::new(),
             circle_mode_defs: Vec::new(),
@@ -1059,6 +1062,44 @@ impl SeanceApp {
                 cx.notify();
             }
             GuiEvent::PaneBusy { pane, busy } => {
+                // A Claude that worked a while and stopped: "done" banner,
+                // for every Claude pane on either machine (no hook needed).
+                // Short blips (between tool calls) don't count.
+                if busy {
+                    self.busy_since
+                        .insert(pane.clone(), std::time::Instant::now());
+                } else if let Some(t) = self.busy_since.remove(&pane) {
+                    let took = t.elapsed().as_secs();
+                    let claude = self
+                        .panes
+                        .iter()
+                        .any(|p| p.slug == pane && workspaces::runs_claude(&p.command));
+                    if claude && took >= 5 {
+                        // Decide a moment later: sleeping a pane also clears
+                        // busy (its `asleep` lands with the next State), and a
+                        // spinner that comes straight back wasn't done.
+                        let pane = pane.clone();
+                        cx.spawn(async move |this, cx| {
+                            cx.background_executor()
+                                .timer(Duration::from_millis(1500))
+                                .await;
+                            let Some(this) = this.upgrade() else { return };
+                            this.update(cx, |app: &mut SeanceApp, _| {
+                                let idle = !app.busy_panes.contains(&pane)
+                                    && app.panes.iter().any(|p| p.slug == pane && !p.asleep);
+                                if idle {
+                                    let body = if took >= 60 {
+                                        format!("finished after {}m {}s", took / 60, took % 60)
+                                    } else {
+                                        format!("finished after {took}s")
+                                    };
+                                    app.on_pane_alert(&pane, "done", "", &body, 0, None);
+                                }
+                            });
+                        })
+                        .detach();
+                    }
+                }
                 let changed = if busy {
                     self.busy_panes.insert(pane)
                 } else {
@@ -1078,6 +1119,7 @@ impl SeanceApp {
                     self.save_arrangement_local();
                 }
                 self.busy_panes.remove(&slug);
+                self.busy_since.remove(&slug);
                 self.statuses.remove(&slug);
                 self.workspace_focus.retain(|_, s| s != &slug);
                 // A row that vanishes never reports the pointer leaving it.

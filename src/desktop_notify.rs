@@ -25,6 +25,29 @@ pub fn notify_alert(pane: &str, summary: &str, body: &str) {
     post(&LAST_ALERT_MS, Some(pane), summary, body);
 }
 
+/// A Claude finished working. Dedup is per pane, not global: two Claudes
+/// finishing together should both show.
+pub fn notify_done(pane: &str, summary: &str, body: &str) {
+    static LAST: std::sync::Mutex<Option<std::collections::HashMap<String, u64>>> =
+        std::sync::Mutex::new(None);
+    let wall = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    {
+        let mut guard = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        let map = guard.get_or_insert_with(Default::default);
+        if map
+            .get(pane)
+            .is_some_and(|prev| wall.saturating_sub(*prev) < MIN_GAP.as_millis() as u64)
+        {
+            return;
+        }
+        map.insert(pane.to_string(), wall);
+    }
+    post(&AtomicU64::new(0), Some(pane), summary, body);
+}
+
 /// `pane`, when known, is selected on click (macOS with terminal-notifier).
 fn post(last_ms: &AtomicU64, pane: Option<&str>, summary: &str, body: &str) {
     let now = Instant::now();
