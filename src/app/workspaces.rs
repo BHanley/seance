@@ -24,6 +24,16 @@ pub(super) fn banish_arm_live(armed: Option<&(String, Instant)>, ws: &str, now: 
     armed.is_some_and(|(w, at)| w == ws && now.duration_since(*at) < BANISH_ARM)
 }
 
+/// Is this pane command a Claude Code launch (`claude`, `claude-mac`, a
+/// path to either, optionally behind `env VAR=…`)?
+pub(super) fn runs_claude(command: &str) -> bool {
+    command
+        .split_whitespace()
+        .find(|t| *t != "env" && !t.contains('='))
+        .and_then(|t| t.rsplit('/').next())
+        .is_some_and(|b| b == "claude" || b == "claude-mac")
+}
+
 /// Coarse one-unit relative time for sidebar labels.
 pub(super) fn rel_label(delta_ms: u64) -> String {
     let s = delta_ms / 1000;
@@ -568,6 +578,17 @@ impl SeanceApp {
         if self.busy_panes.contains(slug) {
             return true;
         }
+        // Claude panes (claude, claude-mac) always wear the title spinner
+        // while busy, so the daemon's busy flag is the whole answer. Their
+        // "working" status goes stale: Mac panes have no hook to clear it, and
+        // an agent's inject leaves it set, which spun a circle forever.
+        if self
+            .panes
+            .iter()
+            .any(|p| p.slug == slug && runs_claude(&p.command))
+        {
+            return false;
+        }
         let owner = self.owners.get(slug);
         let st = self.statuses.get(slug).map(|s| s.state.as_str());
         match (owner, st) {
@@ -740,7 +761,13 @@ impl SeanceApp {
         if pr == Some(WorkspaceAttention::NeedsHuman) {
             return Some(WorkspaceAttention::NeedsHuman);
         }
-        self.workspace_unread.get(workspace).copied().or(pr)
+        // An unread `Working` is history, not work: live working was checked
+        // above, and drawing it froze a spinner on an idle row.
+        self.workspace_unread
+            .get(workspace)
+            .copied()
+            .filter(|a| !matches!(a, WorkspaceAttention::Working))
+            .or(pr)
     }
 
     /// Sidebar right-edge label: relative time since the last pane output in

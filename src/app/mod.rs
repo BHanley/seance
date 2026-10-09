@@ -728,6 +728,29 @@ impl SeanceApp {
         })
         .detach();
 
+        // Blink the rail's "needs you" dots (see `needs_dot_color`). Skipped
+        // while the spinner tick above is already re-rendering.
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(800))
+                .await;
+            let Some(this) = this.upgrade() else { break };
+            this.update(cx, |app: &mut SeanceApp, cx| {
+                // Same test the rail draws with, so a purple dot never
+                // freezes on its dim phase.
+                let needs = app.known_workspace_names().iter().any(|ws| {
+                    matches!(
+                        app.row_attention(ws),
+                        Some(workspaces::WorkspaceAttention::NeedsHuman)
+                    )
+                });
+                if needs && app.workspace_was_working.is_empty() {
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+
         // gpui frame tracing → [seance lat] "gpui draw": true Window::draw
         // cost (layout+prepaint+paint), the number element construction
         // probes can't see. Cheap ring buffer; drained every 5s.
@@ -1055,6 +1078,7 @@ impl SeanceApp {
                     self.save_arrangement_local();
                 }
                 self.busy_panes.remove(&slug);
+                self.statuses.remove(&slug);
                 self.workspace_focus.retain(|_, s| s != &slug);
                 // A row that vanishes never reports the pointer leaving it.
                 if self.rail_hover_pane.as_deref() == Some(slug.as_str()) {

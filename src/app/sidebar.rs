@@ -26,8 +26,8 @@ const CLUSTER_INDENT: f32 = 14.;
 
 use super::actions::*;
 use super::util::{
-    selected_row_fill, sidebar_press_no_select, tip, tip_s, ui_debug, working_spinner_glyph,
-    DraggedPane,
+    needs_dot_color, selected_row_fill, sidebar_press_no_select, tip, tip_s, ui_debug,
+    working_spinner_glyph, DraggedPane,
 };
 use super::workspaces::{banish_arm_live, WorkspaceAttention};
 use super::{RenameTarget, SashDrag, SeanceApp};
@@ -801,7 +801,7 @@ impl SeanceApp {
                     // edge, which frees the glyph to keep saying what the
                     // circle is DOING — the selected row can be working too.
                     let (glyph, color) = if needs {
-                        ("●", SeancePalette::violet())
+                        ("●", needs_dot_color())
                     } else if working {
                         (working_spinner_glyph(), SeancePalette::flame())
                     } else if selected {
@@ -1008,7 +1008,7 @@ impl SeanceApp {
                     std::time::Instant::now(),
                 );
                 let (glyph, color) = match self.pane_attention(&slug) {
-                    Some(WorkspaceAttention::NeedsHuman) => ("●", SeancePalette::violet()),
+                    Some(WorkspaceAttention::NeedsHuman) => ("●", needs_dot_color()),
                     Some(WorkspaceAttention::Working) => {
                         (working_spinner_glyph(), SeancePalette::flame())
                     }

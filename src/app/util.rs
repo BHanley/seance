@@ -128,6 +128,14 @@ pub(super) fn title_looks_busy(title: &str) -> bool {
     seance_core::util::title_looks_busy(title)
 }
 
+/// Purple "needs you" dot: full, then dimmed, every 800ms. A slow blink, not a
+/// smooth pulse, for the same reason as the spinner: each frame is a full
+/// window render.
+pub(super) fn needs_dot_color() -> gpui::Hsla {
+    let dim = (now_ms() / 800) % 2 == 1;
+    crate::theme::SeancePalette::violet().opacity(if dim { 0.4 } else { 1.0 })
+}
+
 /// Braille spinner glyph for the sidebar workspace icon (replaces the word
 /// "working" so names get more room). Phase is wall-clock so any re-render
 /// advances the frame (terminal paint / status / pad tick).
