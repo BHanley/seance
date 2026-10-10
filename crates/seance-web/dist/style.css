@@ -591,11 +591,11 @@ input:focus {
   border-left-color: var(--violet);
 }
 .ws-row.selected .ws-main {
-  background: var(--sel);
+  background: rgba(233, 160, 58, 0.22);
   border-left-color: var(--flame);
 }
 .ws-row.selected:hover .ws-main {
-  background: var(--sel-lit);
+  background: rgba(233, 160, 58, 0.3);
 }
 .ws-row.asleep .ws-main {
   opacity: 0.62;
@@ -642,8 +642,7 @@ input:focus {
   color: var(--text-dim);
 }
 .ws-row.selected .ws-name {
-  color: var(--text);
-  font-weight: 600;
+  color: var(--flame);
 }
 .ws-row.needs .ws-name {
   color: var(--violet);
@@ -2403,6 +2402,9 @@ body.m-kb-open #m-bar {
   border-left-color: var(--flame);
   background: rgba(233, 160, 58, 0.22);
   color: var(--flame);
+}
+.space-row.current:hover {
+  background: rgba(233, 160, 58, 0.3);
 }
 .space-row .fold-dot {
   width: 15px;

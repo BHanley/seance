@@ -618,7 +618,13 @@ impl SeanceApp {
             .items_center()
             .gap_1p5()
             .cursor_pointer()
-            .hover(|s| s.bg(SeancePalette::surface()))
+            .hover(move |s| {
+                if current {
+                    s.bg(SeancePalette::flame().opacity(0.3))
+                } else {
+                    s.bg(SeancePalette::surface())
+                }
+            })
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(|_this, _, window, cx| {
@@ -834,10 +840,10 @@ impl SeanceApp {
                 .gap_1p5()
                 .cursor_pointer()
                 .when(asleep && !selected, |d| d.opacity(0.62))
-                .when(selected, |d| d.bg(SeancePalette::surface()))
-                .hover(|s| {
+                .when(selected, |d| d.bg(SeancePalette::flame().opacity(0.22)))
+                .hover(move |s| {
                     if selected {
-                        s.bg(selected_row_fill().lighten(0.04))
+                        s.bg(SeancePalette::flame().opacity(0.3))
                     } else {
                         s.bg(SeancePalette::surface())
                     }
@@ -968,7 +974,7 @@ impl SeanceApp {
                     let label = self.workspace_label(&workspace);
                     let needs = matches!(attention, Some(WorkspaceAttention::NeedsHuman));
                     let name_color = if selected {
-                        SeancePalette::text()
+                        SeancePalette::flame()
                     } else if needs {
                         SeancePalette::violet()
                     } else {
@@ -987,11 +993,6 @@ impl SeanceApp {
                         .flex()
                         .items_center()
                         .text_sm()
-                        .font_weight(if selected {
-                            gpui::FontWeight::SEMIBOLD
-                        } else {
-                            gpui::FontWeight::NORMAL
-                        })
                         .when(!head.is_empty(), |d| {
                             d.child(
                                 div()
