@@ -38,6 +38,12 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
     Renaming one keeps it and keeps its prefix as an alias (rename `mtg` to
     "meetings" and `mtg-*` circles still land there).
   - New circles land in the space on screen.
+  - Clicking a space selects its first circle.
+  - Drag a space onto another to reorder (drop on "+ space" for the end).
+    Spaces never auto-sort; only circles do, inside a space. The web uses
+    move up/down instead.
+  - Right-click a space → **banish all** kills every circle in it, after a
+    confirm (a red pill on the row on desktop, a dialog on web).
   - Upgrading guesses nothing. Existing ≥2-prefix clusters become auto spaces,
     and everything else goes to `general`.
 - **Filter chips** over the rail: all · pins · one per host circle mode

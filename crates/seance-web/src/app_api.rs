@@ -26,6 +26,8 @@ pub enum RailOp {
         id: String,
         delta: i32,
     },
+    /// Kill every circle in a space (confirmed in the menu).
+    BanishSpace(String),
     /// Turn a host mode off for every circle in it (right-click its chip).
     ModeAllOff(String),
 }

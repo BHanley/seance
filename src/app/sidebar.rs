@@ -22,7 +22,7 @@ const TIME_W: f32 = 34.;
 use super::actions::*;
 use super::util::{
     selected_row_fill, sidebar_press_no_select, tip, tip_s, ui_debug, working_spinner_glyph,
-    DragPill, DraggedCircle, DraggedPane,
+    DragPill, DraggedCircle, DraggedPane, DraggedSpace,
 };
 use super::workspaces::{banish_arm_live, RailFilter, WorkspaceAttention};
 use super::{RenameTarget, SashDrag, SeanceApp};
@@ -596,7 +596,10 @@ impl SeanceApp {
         let att = self.space_attention(&id);
         let name = space.name.clone();
         let (id_click, id_drop, id_menu) = (id.clone(), id.clone(), id.clone());
+        let (id_space_drop, id_drag, id_arm) = (id.clone(), id.clone(), id.clone());
         let name_click = name.clone();
+        let drag_name = name.clone();
+        let armed = self.space_banish_armed(&id);
         let (glyph, color) = match att {
             Some(WorkspaceAttention::Working) => (working_spinner_glyph(), SeancePalette::flame()),
             Some(a) => ("\u{25cf}", a.color()),
@@ -641,6 +644,22 @@ impl SeanceApp {
                 this.move_circle_to_space(&drag.slug, &id_drop);
                 cx.notify();
             }))
+            // Spaces only move by hand: drop one on another to sit above it.
+            .on_drag(DraggedSpace { id: id_drag }, move |_, _, _, cx| {
+                let label = format!("▤ {drag_name}");
+                cx.new(|_| DragPill { label })
+            })
+            .drag_over::<DraggedSpace>(|style, _, _, _| style.bg(SeancePalette::violet_dim()))
+            .on_drop(cx.listener(move |this, drag: &DraggedSpace, _, cx| {
+                if this
+                    .subs_pref
+                    .spaces
+                    .reorder(&drag.id, Some(&id_space_drop))
+                {
+                    this.save_arrangement();
+                }
+                cx.notify();
+            }))
             .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, window, cx| {
                 if ev.click_count() == 2 {
                     this.start_rename(
@@ -650,8 +669,7 @@ impl SeanceApp {
                         cx,
                     );
                 } else {
-                    this.rail_space = Some(id_click.clone());
-                    this.rail_filter = RailFilter::All;
+                    this.show_space(&id_click, window, cx);
                     cx.notify();
                 }
             }))
@@ -661,15 +679,27 @@ impl SeanceApp {
                     .menu("new space", Box::new(ActNewSpace(true)))
                     .menu("move up", Box::new(ActSpaceShift(id_menu.clone(), -1)))
                     .menu("move down", Box::new(ActSpaceShift(id_menu.clone(), 1)));
-                if is_default {
+                let m = if is_default {
                     m
                 } else {
                     m.menu("make default", Box::new(ActSpaceDefault(id_menu.clone())))
-                        .separator()
-                        .menu(
-                            "delete space (circles go to the default)",
-                            Box::new(ActDeleteSpace(id_menu.clone())),
-                        )
+                };
+                let m = m.separator();
+                let m = if count > 0 {
+                    m.menu(
+                        format!("banish all {count} circle(s)…"),
+                        Box::new(ActBanishSpace(id_menu.clone())),
+                    )
+                } else {
+                    m
+                };
+                if is_default {
+                    m
+                } else {
+                    m.menu(
+                        "delete space (circles go to the default)",
+                        Box::new(ActDeleteSpace(id_menu.clone())),
+                    )
                 }
             })
             .child(
@@ -693,13 +723,33 @@ impl SeanceApp {
                     })
                     .child(name),
             )
-            .when(is_default, |d| {
+            .when(is_default && !armed, |d| {
                 d.child(
                     div()
                         .flex_none()
                         .text_xs()
                         .text_color(SeancePalette::text_faint())
                         .child("default"),
+                )
+            })
+            .when(armed, |d| {
+                d.child(
+                    div()
+                        .id(SharedString::from(format!("space-banish-{id}")))
+                        .flex_none()
+                        .px_1()
+                        .rounded_sm()
+                        .text_xs()
+                        .cursor_pointer()
+                        .bg(SeancePalette::danger().opacity(0.2))
+                        .text_color(SeancePalette::danger())
+                        .hover(|s| s.bg(SeancePalette::danger().opacity(0.35)))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.banish_space_click(&id_arm, window, cx);
+                            cx.notify();
+                        }))
+                        .child(format!("banish {count}? click")),
                 )
             })
             .child(
@@ -717,6 +767,13 @@ impl SeanceApp {
     fn render_new_space_row(&self, cx: &Context<Self>) -> gpui::AnyElement {
         div()
             .id("space-new")
+            .drag_over::<DraggedSpace>(|style, _, _, _| style.bg(SeancePalette::violet_dim()))
+            .on_drop(cx.listener(|this, drag: &DraggedSpace, _, cx| {
+                if this.subs_pref.spaces.reorder(&drag.id, None) {
+                    this.save_arrangement();
+                }
+                cx.notify();
+            }))
             .h(px(22.))
             .pl(px(8. + GLYPH_W))
             .flex()

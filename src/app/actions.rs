@@ -111,6 +111,12 @@ pub struct ActSpaceDefault(pub String);
 #[action(namespace = seance, no_json)]
 pub struct ActSpaceShift(pub String, pub i32);
 
+/// Arm (first) / fire (second, within the arm window) banishing every
+/// circle in a space.
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActBanishSpace(pub String);
+
 /// (circle, space id).
 #[derive(Action, Clone, PartialEq, Deserialize)]
 #[action(namespace = seance, no_json)]

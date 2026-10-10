@@ -459,6 +459,32 @@ impl App {
                 RailOp::ShowSpace(id) => {
                     st.rail_space = Some(id);
                     st.rail_filter = state::RailFilter::All;
+                    let first = st.visible_workspaces().into_iter().next();
+                    drop(st);
+                    if let Some(first) = first {
+                        self.select_workspace(&first);
+                    }
+                    self.need_rebuild.set(true);
+                    return;
+                }
+                RailOp::BanishSpace(id) => {
+                    let circles = st.subs.spaces.circles_in(&id, &st.workspaces());
+                    let next = st
+                        .selected_workspace
+                        .as_ref()
+                        .filter(|s| circles.contains(s))
+                        .and_then(|_| st.workspaces().into_iter().find(|w| !circles.contains(w)));
+                    drop(st);
+                    for ws in &circles {
+                        self.send(&GuiRequest::KillWorkspace {
+                            workspace: ws.clone(),
+                        });
+                    }
+                    if let Some(next) = next {
+                        self.select_workspace(&next);
+                    }
+                    self.need_rebuild.set(true);
+                    return;
                 }
                 RailOp::Filter(f) => {
                     st.rail_filter = if st.rail_filter == f {

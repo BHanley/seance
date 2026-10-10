@@ -32,6 +32,12 @@ pub(super) struct DraggedCircle {
     pub slug: String,
 }
 
+/// Payload for dragging a space row to reorder the spaces.
+#[derive(Clone)]
+pub(super) struct DraggedSpace {
+    pub id: String,
+}
+
 /// Payload for dragging a quicklaunch chip (reorder chips, insert-before).
 #[derive(Clone)]
 pub(super) struct DraggedQuickLaunch {

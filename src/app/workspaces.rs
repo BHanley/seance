@@ -16,6 +16,15 @@ use seance_core::util::{rail_prefs_is_foreign, recency_rank, settle_absent};
 /// How long the sidebar banish × stays armed after a first click. Matches the
 /// web client's `KILL_CONFIRM_MS` so both clients feel the same.
 pub(super) const BANISH_ARM: Duration = Duration::from_millis(2000);
+/// Longer than a row's ×: the confirm pill appears after a menu closes, so
+/// the hand has further to travel.
+pub(super) const SPACE_BANISH_ARM: Duration = Duration::from_millis(5000);
+
+/// Arm key for a space's banish-all; shares `banish_armed` with row ×s so
+/// only one destructive control is ever hot.
+pub(super) fn space_banish_key(id: &str) -> String {
+    format!("space:{id}")
+}
 
 /// Is `ws` the armed circle, with the arm still live at `now`? Pure so the
 /// two-click window is testable without leaning on a real clock.
@@ -480,6 +489,77 @@ impl SeanceApp {
         if self.subs_pref.spaces.rename(id, name) {
             self.save_arrangement();
         }
+    }
+
+    /// Show a space and land on its first circle.
+    pub(super) fn show_space(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.rail_space = Some(id.to_string());
+        self.rail_filter = RailFilter::All;
+        if let Some(first) = self.visible_workspaces().into_iter().next() {
+            if self.selected_workspace.as_deref() != Some(first.as_str()) {
+                self.select_workspace(&first, window, cx);
+            }
+        }
+    }
+
+    pub(super) fn space_banish_armed(&self, id: &str) -> bool {
+        self.banish_armed
+            .as_ref()
+            .is_some_and(|(k, at)| *k == space_banish_key(id) && at.elapsed() < SPACE_BANISH_ARM)
+    }
+
+    /// First call arms (the row shows a confirm pill), a second inside
+    /// `SPACE_BANISH_ARM` kills every circle in the space.
+    pub(super) fn banish_space_click(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.space_banish_armed(id) {
+            self.banish_armed = None;
+            let circles = self.subs_pref.spaces.circles_in(id, &self.workspaces());
+            let lost_selection = self
+                .selected_workspace
+                .as_ref()
+                .is_some_and(|s| circles.contains(s));
+            self.client.log_event(
+                "human",
+                None,
+                None,
+                "space_banished",
+                format!("banished {} circle(s) in space '{id}'", circles.len()),
+            );
+            for ws in &circles {
+                let _ = self.client.kill_workspace(ws);
+            }
+            if lost_selection {
+                let next = self.workspaces().into_iter().find(|w| !circles.contains(w));
+                if let Some(next) = next {
+                    self.select_workspace(&next, window, cx);
+                }
+                // Stay on the emptied space; the rail shows it empty.
+                self.rail_space = Some(id.to_string());
+            }
+            return;
+        }
+        self.banish_armed = Some((space_banish_key(id), Instant::now()));
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SPACE_BANISH_ARM).await;
+            if let Some(this) = this.upgrade() {
+                this.update(cx, |app: &mut SeanceApp, cx| {
+                    if app
+                        .banish_armed
+                        .as_ref()
+                        .is_some_and(|(_, at)| at.elapsed() >= SPACE_BANISH_ARM)
+                    {
+                        app.banish_armed = None;
+                        cx.notify();
+                    }
+                });
+            }
+        })
+        .detach();
     }
 
     pub(super) fn space_set_default(&mut self, id: &str) {

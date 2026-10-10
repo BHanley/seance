@@ -2784,6 +2784,10 @@ impl Render for SeanceApp {
                 this.create_space(window, cx);
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, act: &ActBanishSpace, window, cx| {
+                this.banish_space_click(&act.0.clone(), window, cx);
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, act: &ActSpaceDefault, _, cx| {
                 this.space_set_default(&act.0.clone());
                 cx.notify();

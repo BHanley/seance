@@ -1134,13 +1134,32 @@ impl Chrome {
                     }));
                 }
                 if !is_default {
-                    {
-                        let (a, id) = (actions.clone(), id.clone());
-                        entries.push(MenuEntry::item("make default", move || {
-                            a.rail(RailOp::SetDefault(id))
-                        }));
-                    }
-                    entries.push(MenuEntry::Separator);
+                    let (a, id) = (actions.clone(), id.clone());
+                    entries.push(MenuEntry::item("make default", move || {
+                        a.rail(RailOp::SetDefault(id))
+                    }));
+                }
+                entries.push(MenuEntry::Separator);
+                if count > 0 {
+                    let (a, id, name) = (actions.clone(), id.clone(), name.clone());
+                    entries.push(MenuEntry::danger(
+                        format!("banish all {count} circle(s)…"),
+                        move || {
+                            let ok = web_sys::window()
+                                .and_then(|w| {
+                                    w.confirm_with_message(&format!(
+                                        "banish all {count} circle(s) in {name}? every pane in them is killed"
+                                    ))
+                                    .ok()
+                                })
+                                .unwrap_or(false);
+                            if ok {
+                                a.rail(RailOp::BanishSpace(id));
+                            }
+                        },
+                    ));
+                }
+                if !is_default {
                     let (a, id) = (actions.clone(), id.clone());
                     entries.push(MenuEntry::danger(
                         "delete space (circles go to the default)",
