@@ -22,4 +22,5 @@ pub mod links;
 pub mod protocol;
 pub mod replay;
 pub mod snapshot;
+pub mod spaces;
 pub mod util;
