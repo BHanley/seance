@@ -2401,9 +2401,8 @@ body.m-kb-open #m-bar {
 }
 .space-row.current {
   border-left-color: var(--flame);
-  background: var(--surface);
-  color: var(--text);
-  font-weight: 600;
+  background: rgba(233, 160, 58, 0.22);
+  color: var(--flame);
 }
 .space-row .fold-dot {
   width: 15px;

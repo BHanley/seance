@@ -599,8 +599,11 @@ impl SeanceApp {
             Some(a) => ("\u{25cf}", a.color()),
             None => ("", SeancePalette::text_faint()),
         };
+        // flex_none + one font weight: a row that shrinks or re-measures when
+        // selected makes the whole rail jump on every click.
         div()
             .id(SharedString::from(format!("space-{id}")))
+            .flex_none()
             .h(px(ROW_H))
             .pr_2()
             .pl(px(5.))
@@ -610,7 +613,7 @@ impl SeanceApp {
             } else {
                 gpui::transparent_black()
             })
-            .when(current, |d| d.bg(SeancePalette::surface()))
+            .when(current, |d| d.bg(SeancePalette::flame().opacity(0.22)))
             .flex()
             .items_center()
             .gap_1p5()
@@ -674,13 +677,8 @@ impl SeanceApp {
                     .min_w_0()
                     .truncate()
                     .text_sm()
-                    .font_weight(if current {
-                        gpui::FontWeight::SEMIBOLD
-                    } else {
-                        gpui::FontWeight::NORMAL
-                    })
                     .text_color(if current {
-                        SeancePalette::text()
+                        SeancePalette::flame()
                     } else {
                         SeancePalette::text_dim()
                     })
