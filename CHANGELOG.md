@@ -40,9 +40,9 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   - New circles land in the space on screen.
   - Upgrading guesses nothing. Existing ≥2-prefix clusters become auto spaces,
     and everything else goes to `general`.
-- **Filter chips** over the rail: all · needs · ★ · one per host circle mode
+- **Filter chips** over the rail: all · pins · one per host circle mode
   (AFK, slack). A filter narrows the list across every space and never moves
-  a circle. **Right-click a mode chip** to turn the mode off for every circle
+  a circle. A chip with nothing in it doesn't show. **Right-click a mode chip** to turn the mode off for every circle
   in it, e.g. "i'm back" to all AFK circles at once.
 - `ctl space [list]`, `ctl space new|rename|rm|default`, and `ctl move
   [CIRCLE] SPACE` edit the same arrangement and push it to every window.
@@ -52,10 +52,17 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Changed
 
-- **Pins are stars.** The pinned band is gone. ★ (ctrl+shift+p, the row
-  menu, the phone sheet) only marks a circle for the ★ filter and doesn't
-  move it. Existing pins carry over as stars.
+- **Pins don't move circles anymore.** The pinned band is gone. Pinning
+  (ctrl+shift+p, the row menu, the phone sheet) puts a circle under the
+  pins chip and leaves it where it is.
 - Prefix clusters and their folds are gone; spaces replaced them.
+- **The rail's `needs` state is gone**: no needs badge for a circle you
+  never selected, for a `needs-human`/`blocked` status, or for a PR waiting
+  on you. It lit up for too many reasons to mean anything. PR chips and the
+  PR board still color a PR that needs you, and `ctl status-set needs-human`
+  still notifies.
+- The selected circle and space get an amber fill, and hovering deepens it
+  instead of replacing it.
 - Host modes no longer get bands above the rail, so `top` is ignored. Their
   circles show under their chip.
 - Quicklaunch and host-menu circles no longer arrive pinned. They land in the

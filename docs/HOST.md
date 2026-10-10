@@ -114,7 +114,7 @@ already grouped.
 | `error` | failure text (falls back to the command's stderr) |
 | `message` | success toast (defaults to the item's label) |
 | `workspace` | **menus only**: seance selects this circle — how a host that just spawned one gets the rail to follow. It lands in the space on screen unless its label prefix routes it |
-| `pin` | **menus only**: `true` also stars it (★). Default off since 0.27 |
+| `pin` | **menus only**: `true` also pins it (it shows under the pins chip). Default off since 0.27 |
 
 A non-zero exit, or `ok:false`, keeps the dropdown open with the reason under
 it, so the human can read it and pick again.

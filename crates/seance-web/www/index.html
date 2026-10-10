@@ -250,10 +250,10 @@
         nameSave.type = 'button';
         menuName.appendChild(nameInput);
         menuName.appendChild(nameSave);
-        // Star + space moves: the desktop's are a right-click on a rail row,
+        // Pin + space moves: the desktop's are a right-click on a rail row,
         // which a finger has no spelling for.
         var menuRailHead = mk('div', null, 'm-menu-sec', 'rail');
-        var pinBtn = mk('button', 'm-menu-pin', 'm-sheet-btn', '★ star');
+        var pinBtn = mk('button', 'm-menu-pin', 'm-sheet-btn', 'pin');
         pinBtn.type = 'button';
         // Host circle modes (AFK) — one toggle each, only when host.json
         // defines any. The daemon prompts the circle's first pane.
@@ -339,7 +339,7 @@
           // rather than showing one that does nothing.
           pinBtn.hidden = on === undefined;
           menuRailHead.hidden = on === undefined;
-          pinBtn.textContent = on ? 'unstar' : '★ star';
+          pinBtn.textContent = on ? 'unpin' : 'pin';
           pinBtn.classList.toggle('on', !!on);
           paintModes();
           paintSpaces();
@@ -394,7 +394,7 @@
           if (was === undefined) return;
           var now = window.seanceMobile.setPinned(!was);
           paintPin();
-          toast(now ? 'starred' : 'unstarred');
+          toast(now ? 'pinned' : 'unpinned');
         });
         nameSave.addEventListener('click', function (e) {
           e.preventDefault();

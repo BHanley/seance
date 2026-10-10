@@ -130,7 +130,6 @@ pub struct ClientState {
 pub enum RailFilter {
     #[default]
     All,
-    Needs,
     Starred,
     Mode(String),
 }
@@ -311,12 +310,8 @@ impl ClientState {
             .collect()
     }
 
-    /// Row badge: a circle this GUI has never selected (a `ctl` spawn with no
-    /// GUI attribution) badges `needs` until it is.
+    /// Row badge. The rail has no `needs` state (removed 0.27, native twin).
     pub fn row_attention(&self, ws: &str) -> Option<Attention> {
-        if !self.subs.has_seen(ws) {
-            return Some(Attention::NeedsHuman);
-        }
         self.workspace_attention(ws)
     }
 
@@ -352,22 +347,14 @@ impl ClientState {
 
     /// Live attention badge for a sidebar row (native `workspace_attention_cx`).
     pub fn workspace_attention(&self, workspace: &str) -> Option<Attention> {
-        let needs = self.panes.iter().any(|p| {
-            p.workspace == workspace
-                && matches!(
-                    self.statuses.get(&p.slug).map(|s| s.state.as_str()),
-                    Some("needs-human" | "blocked" | "risky")
-                )
-        });
-        if needs {
-            return Some(Attention::NeedsHuman);
-        }
         if self.workspace_has_working_agent(workspace) {
             return Some(Attention::Working);
         }
-        // PR verdicts from the external poller: a red PR resurfaces a quiet
-        // circle exactly like an agent asking for help. Live work still wins.
-        if let Some(a) = self.pr_attention(workspace) {
+        // PR `needs` colors the PR chips, not the rail.
+        if let Some(a) = self
+            .pr_attention(workspace)
+            .filter(|a| *a == Attention::Done)
+        {
             return Some(a);
         }
         self.workspace_unread.get(workspace).copied()
@@ -468,7 +455,6 @@ impl ClientState {
     pub fn rail_filter_matches(&self, filter: &RailFilter, ws: &str) -> bool {
         match filter {
             RailFilter::All => true,
-            RailFilter::Needs => matches!(self.row_attention(ws), Some(Attention::NeedsHuman)),
             RailFilter::Starred => self.subs.is_pinned(ws),
             RailFilter::Mode(id) => self
                 .circle_modes
@@ -664,7 +650,6 @@ impl ClientState {
             return;
         }
         let att = match state {
-            "needs-human" | "blocked" | "risky" => Some(Attention::NeedsHuman),
             "done" => Some(Attention::Done),
             "working" | "planning" => Some(Attention::Working),
             _ => None,
@@ -1262,12 +1247,12 @@ mod tests {
     }
 
     #[test]
-    fn pr_attention_needs_beats_done_and_live_work_beats_both() {
+    fn a_needs_pr_colors_its_chip_but_never_the_rail() {
         let mut st = ClientState::default();
         st.apply_event(pr_state_event("needs"), 0.0);
         st.subs.mark_seen("raid");
         assert_eq!(st.pr_attention("raid"), Some(Attention::NeedsHuman));
-        assert_eq!(st.row_attention("raid"), Some(Attention::NeedsHuman));
+        assert_eq!(st.row_attention("raid"), None);
 
         st.apply_event(pr_state_event("done"), 0.0);
         st.subs.mark_seen("raid");
@@ -1444,19 +1429,14 @@ mod tests {
         .unwrap()
     }
 
-    /// A circle that shows up after the seed was never selected here, so it
-    /// badges `needs` — the ctl-spawn case, now the only source of that badge.
+    /// A circle ctl spawned with no GUI attribution used to badge `needs`;
+    /// the rail has no `needs` state now.
     #[test]
-    fn a_ctl_spawned_circle_badges_needs_human() {
+    fn a_ctl_spawned_circle_gets_no_badge() {
         let mut st = ClientState::default();
-        // Seed with `lab` alone…
         st.apply_event(lab_only_event(), 0.0);
-        // …then `raid` appears, spawned by ctl with no GUI attribution.
         st.subs_dirty = false;
         st.apply_event(global_state_event(), 0.0);
-        assert_eq!(st.row_attention("raid"), Some(Attention::NeedsHuman));
-        // First select acknowledges it.
-        st.subs.mark_seen("raid");
         assert_eq!(st.row_attention("raid"), None);
     }
 

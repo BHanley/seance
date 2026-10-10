@@ -473,14 +473,14 @@ impl SeanceApp {
         .detach();
     }
 
-    /// Filter chips over the rail: all · needs · ★ · one per host mode.
-    /// Right-click a mode chip to turn the mode off for every circle in it.
+    /// Filter chips over the rail: all · pins · one per host mode. An empty
+    /// chip hides (unless it's the active filter). Right-click a mode chip to
+    /// turn the mode off for every circle in it.
     fn render_rail_chips(&self, cx: &Context<Self>) -> gpui::AnyElement {
         let ordered = self.workspaces();
         let mut chips: Vec<(RailFilter, String, String)> = vec![
             (RailFilter::All, "all".into(), String::new()),
-            (RailFilter::Needs, "needs".into(), String::new()),
-            (RailFilter::Starred, "★".into(), String::new()),
+            (RailFilter::Starred, "pins".into(), String::new()),
         ];
         for d in &self.circle_mode_defs {
             chips.push((
@@ -492,12 +492,15 @@ impl SeanceApp {
         let els: Vec<gpui::AnyElement> = chips
             .into_iter()
             .enumerate()
-            .map(|(i, (filter, label, off_label))| {
+            .filter_map(|(i, (filter, label, off_label))| {
                 let n = ordered
                     .iter()
                     .filter(|w| self.rail_filter_matches(&filter, w))
                     .count();
                 let on = self.rail_filter == filter;
+                if n == 0 && !on && filter != RailFilter::All {
+                    return None;
+                }
                 let hot = n > 0 && !matches!(filter, RailFilter::All | RailFilter::Starred);
                 let click = filter.clone();
                 let chip = div()
@@ -543,7 +546,7 @@ impl SeanceApp {
                         cx.notify();
                     }))
                     .child(format!("{label} {n}"));
-                match filter {
+                Some(match filter {
                     RailFilter::Mode(id) if !off_label.is_empty() && n > 0 => chip
                         .context_menu(move |menu, _, _| {
                             menu.menu(
@@ -553,7 +556,7 @@ impl SeanceApp {
                         })
                         .into_any_element(),
                     _ => chip.into_any_element(),
-                }
+                })
             })
             .collect();
         div()
@@ -790,7 +793,6 @@ impl SeanceApp {
         // circle can be put back exactly (it checks the filesystem, we can't).
         let asleep = self.workspace_asleep(&workspace);
         let sleepable = !asleep && self.workspace_sleepable(&workspace);
-        // Live attention, or `needs` until this window has selected it once.
         let attention = self.row_attention(&workspace);
         // Host circle modes (AFK…): badges on the row, toggles in its menu.
         let modes_on = self.circle_modes_of(&workspace);
@@ -890,9 +892,9 @@ impl SeanceApp {
                         // itself (where this row sits), and the one you reach
                         // for often enough to want it under the cursor.
                         let m = if pinned {
-                            menu.menu("unstar", Box::new(ActUnpinWorkspace(ws_m.clone())))
+                            menu.menu("unpin", Box::new(ActUnpinWorkspace(ws_m.clone())))
                         } else {
-                            menu.menu("★ star", Box::new(ActPinWorkspace(ws_m.clone())))
+                            menu.menu("pin", Box::new(ActPinWorkspace(ws_m.clone())))
                         };
                         let targets = move_targets.clone();
                         let ws_s = ws_m.clone();
@@ -943,13 +945,10 @@ impl SeanceApp {
                     // nothing; leaving them off is what makes the two rows
                     // that ARE doing something impossible to miss.
                     let working = matches!(attention, Some(WorkspaceAttention::Working));
-                    let needs = matches!(attention, Some(WorkspaceAttention::NeedsHuman));
                     // Selection is carried by the flame anchor down the left
                     // edge, which frees the glyph to keep saying what the
                     // circle is DOING — the selected row can be working too.
-                    let (glyph, color) = if needs {
-                        ("●", SeancePalette::violet())
-                    } else if working {
+                    let (glyph, color) = if working {
                         (working_spinner_glyph(), SeancePalette::flame())
                     } else if selected {
                         ("◆", SeancePalette::flame())
@@ -968,15 +967,10 @@ impl SeanceApp {
                         .child(glyph)
                 })
                 .child({
-                    // Inside a cluster the shared prefix is already in the
-                    // header above; repeating it at full strength makes you
-                    // re-read it on every row, so it recedes.
+                    // A prefix the space already names recedes.
                     let label = self.workspace_label(&workspace);
-                    let needs = matches!(attention, Some(WorkspaceAttention::NeedsHuman));
                     let name_color = if selected {
                         SeancePalette::flame()
-                    } else if needs {
-                        SeancePalette::violet()
                     } else {
                         SeancePalette::text_dim()
                     };
@@ -1021,8 +1015,7 @@ impl SeanceApp {
                         .child(d.label.clone())
                 }))
                 .children({
-                    // `done` is worth a mark but not a shout; `needs` already
-                    // owns the glyph and the name colour, so it needs no pill.
+                    // `done` is worth a mark but not a shout.
                     let att = if selected {
                         None
                     } else {

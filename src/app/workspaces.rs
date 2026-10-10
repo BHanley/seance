@@ -123,7 +123,6 @@ impl NavHistory {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum RailFilter {
     All,
-    Needs,
     Starred,
     /// A host circle mode (AFK, slack thread) by id.
     Mode(String),
@@ -384,9 +383,6 @@ impl SeanceApp {
     pub(super) fn rail_filter_matches(&self, filter: &RailFilter, ws: &str) -> bool {
         match filter {
             RailFilter::All => true,
-            RailFilter::Needs => {
-                matches!(self.row_attention(ws), Some(WorkspaceAttention::NeedsHuman))
-            }
             RailFilter::Starred => self.subs_pref.is_pinned(ws),
             RailFilter::Mode(id) => self
                 .circle_modes
@@ -515,17 +511,10 @@ impl SeanceApp {
         }
     }
 
-    /// Badge for a rail row: the normal live attention, or `needs` for a circle
-    /// this window has never selected — which is how a ctl-spawned circle
-    /// announces itself.
+    /// Badge for a rail row. The rail has no `needs` state (removed 0.27 —
+    /// it lit up for too many reasons to mean anything).
     pub(super) fn row_attention(&self, ws: &str) -> Option<WorkspaceAttention> {
-        self.workspace_attention_cx(ws).or({
-            if self.subs_pref.never_seen(ws) {
-                Some(WorkspaceAttention::NeedsHuman)
-            } else {
-                None
-            }
-        })
+        self.workspace_attention_cx(ws)
     }
 
     /// All workspaces in sidebar display order.
@@ -706,7 +695,6 @@ impl SeanceApp {
             return;
         }
         let att = match state {
-            "needs-human" | "blocked" | "risky" => Some(WorkspaceAttention::NeedsHuman),
             "done" => Some(WorkspaceAttention::Done),
             "working" | "planning" => Some(WorkspaceAttention::Working),
             _ => None,
@@ -722,27 +710,12 @@ impl SeanceApp {
     /// Live attention with title spinners (needs `&App`) — badges only;
     /// sidebar order uses [`Self::workspace_has_working_agent`].
     pub(super) fn workspace_attention_cx(&self, workspace: &str) -> Option<WorkspaceAttention> {
-        let needs = self.panes.iter().any(|p| {
-            p.workspace == workspace
-                && matches!(
-                    self.statuses.get(&p.slug).map(|s| s.state.as_str()),
-                    Some("needs-human") | Some("blocked") | Some("risky")
-                )
-        });
-        if needs {
-            return Some(WorkspaceAttention::NeedsHuman);
-        }
-        // A live working spinner outranks PR attention — an agent actively in
-        // the circle is usually already on the red PR; the chip stays visible
-        // regardless. On idle circles a `needs` PR resurfaces the row exactly
-        // like an agent asking for help (web client mirrors this order).
         if self.workspace_has_working_agent(workspace) {
             return Some(WorkspaceAttention::Working);
         }
-        let pr = super::prlinks::pr_attention(self.pr_links_for(workspace));
-        if pr == Some(WorkspaceAttention::NeedsHuman) {
-            return Some(WorkspaceAttention::NeedsHuman);
-        }
+        // PR `needs` colors the PR chips, not the rail.
+        let pr = super::prlinks::pr_attention(self.pr_links_for(workspace))
+            .filter(|a| *a == WorkspaceAttention::Done);
         self.workspace_unread.get(workspace).copied().or(pr)
     }
 

@@ -887,9 +887,9 @@ impl Chrome {
                     let a = actions.clone();
                     let w = ws.clone();
                     entries.push(if pinned {
-                        MenuEntry::item("unstar", move || a.unpin_workspace(&w))
+                        MenuEntry::item("unpin", move || a.unpin_workspace(&w))
                     } else {
-                        MenuEntry::item("★ star", move || a.pin_workspace(&w))
+                        MenuEntry::item("pin", move || a.pin_workspace(&w))
                     });
                 }
                 // An empty label means that direction isn't offered.
@@ -994,8 +994,8 @@ impl Chrome {
         Ok(())
     }
 
-    /// all · needs · ★ · one per host mode. Right-click a mode chip to turn
-    /// the mode off for every circle in it.
+    /// all · pins · one per host mode; an empty chip hides. Right-click a
+    /// mode chip to turn the mode off for every circle in it.
     fn build_rail_chips(&mut self, state: &ClientState) -> Result<(), JsValue> {
         let doc = self.doc.clone();
         let bar = mk(&doc, "div", "rail-chips")?;
@@ -1003,8 +1003,7 @@ impl Chrome {
         let ordered = state.workspaces();
         let mut chips: Vec<(RailFilter, String, String)> = vec![
             (RailFilter::All, "all".into(), String::new()),
-            (RailFilter::Needs, "needs".into(), String::new()),
-            (RailFilter::Starred, "★".into(), String::new()),
+            (RailFilter::Starred, "pins".into(), String::new()),
         ];
         for d in &state.circle_mode_defs {
             chips.push((
@@ -1018,6 +1017,9 @@ impl Chrome {
                 .iter()
                 .filter(|w| state.rail_filter_matches(&filter, w))
                 .count();
+            if n == 0 && state.rail_filter != filter && filter != RailFilter::All {
+                continue;
+            }
             let mut cls = String::from("rail-chip");
             if state.rail_filter == filter {
                 cls.push_str(" on");

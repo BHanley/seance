@@ -142,11 +142,6 @@ impl SubscriptionsPref {
         self.pinned.retain(|w| known.contains(w));
         before != (self.seen.len(), self.pinned.len())
     }
-
-    /// Never selected in this GUI — badge `needs` until it is.
-    pub fn never_seen(&self, ws: &str) -> bool {
-        !self.seen.contains(ws)
-    }
 }
 
 #[cfg(test)]
@@ -259,7 +254,7 @@ mod tests {
         let mut pref = SubscriptionsPref::default();
         assert!(pref.pin("lab"));
         assert!(pref.is_pinned("lab"));
-        assert!(!pref.never_seen("lab"));
+        assert!(pref.seen.contains("lab"));
         assert!(!pref.pin("lab"), "re-pinning is a no-op");
     }
 
@@ -269,7 +264,7 @@ mod tests {
         pref.pin("lab");
         assert!(pref.unpin("lab"));
         assert!(!pref.is_pinned("lab"));
-        assert!(!pref.never_seen("lab"));
+        assert!(pref.seen.contains("lab"));
         assert!(!pref.unpin("lab"));
     }
 
@@ -303,7 +298,7 @@ mod tests {
         let known = set(&["lab", "cadence", "notes"]);
         let mut pref = SubscriptionsPref::default();
         pref.seed_seen(&known);
-        assert!(!pref.never_seen("notes"));
+        assert!(pref.seen.contains("notes"));
     }
 
     /// `needs` is now purely "never selected here" — the ctl-spawned circle
@@ -312,8 +307,8 @@ mod tests {
     fn unselected_circle_is_the_ctl_spawn_case() {
         let mut pref = SubscriptionsPref::default();
         pref.mark_seen("lab");
-        assert!(!pref.never_seen("lab"));
-        assert!(pref.never_seen("ctl-spawned"));
+        assert!(pref.seen.contains("lab"));
+        assert!(!pref.seen.contains("ctl-spawned"));
     }
 
     #[test]
