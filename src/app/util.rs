@@ -26,6 +26,12 @@ pub(super) struct DraggedPane {
     pub slug: String,
 }
 
+/// Payload for dragging a circle's rail row onto a space.
+#[derive(Clone)]
+pub(super) struct DraggedCircle {
+    pub slug: String,
+}
+
 /// Payload for dragging a quicklaunch chip (reorder chips, insert-before).
 #[derive(Clone)]
 pub(super) struct DraggedQuickLaunch {

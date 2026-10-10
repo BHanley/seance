@@ -42,6 +42,13 @@ pub struct SubPrefs {
     /// Gates the first-run "mark everything known as seen" pass.
     #[serde(skip)]
     pub seeded: bool,
+    /// Shared with native: dropping this on save would wipe every window's
+    /// spaces (`seance_core::spaces`).
+    #[serde(default, skip_serializing_if = "seance_core::spaces::Spaces::is_empty")]
+    pub spaces: seance_core::spaces::Spaces,
+    /// Native's notes face; carried so a web save doesn't close it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flipped: Option<String>,
 }
 
 impl SubPrefs {

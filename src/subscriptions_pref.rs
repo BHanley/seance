@@ -51,11 +51,9 @@ pub struct SubscriptionsPref {
     /// machine too. One at a time, matching the app model.
     #[serde(default)]
     pub flipped: Option<String>,
-}
-
-/// Collapse key for a prefix group inside a section.
-pub fn group_key(section: &str, prefix: &str) -> String {
-    format!("{section}/{}", prefix.to_ascii_lowercase())
+    /// The rail's spaces (`seance_core::spaces`). `pinned` above is the ★ set.
+    #[serde(default, skip_serializing_if = "seance_core::spaces::Spaces::is_empty")]
+    pub spaces: seance_core::spaces::Spaces,
 }
 
 pub fn config_path() -> PathBuf {
@@ -102,33 +100,6 @@ pub fn save(pref: &SubscriptionsPref) {
 }
 
 impl SubscriptionsPref {
-    /// Is this cluster folded?
-    pub fn is_collapsed(&self, key: &str) -> bool {
-        self.collapsed.as_ref().is_some_and(|s| s.contains(key))
-    }
-
-    /// Unfold `key` if it is folded. Reports whether anything changed, so the
-    /// caller only persists on a real edit.
-    ///
-    /// Used when the rail has to *reveal* a row — jumping to a circle inside a
-    /// folded band can't just scroll to it, because the row isn't drawn at all.
-    pub fn uncollapse(&mut self, key: &str) -> bool {
-        if !self.is_collapsed(key) {
-            return false;
-        }
-        self.toggle_collapsed(key);
-        true
-    }
-
-    /// Fold / unfold. Always reports `true` — the caller persists.
-    pub fn toggle_collapsed(&mut self, key: &str) -> bool {
-        let set = self.collapsed.get_or_insert_with(BTreeSet::new);
-        if !set.remove(key) {
-            set.insert(key.to_string());
-        }
-        true
-    }
-
     /// Drop folds for clusters that no longer exist, so a cluster you renamed
     /// away doesn't leave a fold behind that surprises you when the name comes
     /// back. Bare band keys (`active`, and `parked`/`sleeping` from older
@@ -212,11 +183,12 @@ mod tests {
         let mut pref = SubscriptionsPref::default();
         pref.pin("growth");
         pref.mark_seen("lab");
-        pref.toggle_collapsed("active/mtg");
+        pref.spaces
+            .reconcile(&[("growth".into(), "growth".into())], None);
         let back = parse(&encode(&pref).unwrap()).unwrap();
         assert_eq!(back, pref);
         assert!(back.is_pinned("growth"));
-        assert!(back.is_collapsed("active/mtg"));
+        assert_eq!(back.spaces.space_of("growth"), "general");
     }
 
     /// A blob we can't read means "keep the rail you have". Returning a
@@ -319,51 +291,16 @@ mod tests {
         assert!(!pref.prune(&set(&["lab"])));
     }
 
-    /// Nothing is folded until the human folds it — there are no band
-    /// defaults left to spring back to.
-    #[test]
-    fn nothing_is_folded_by_default() {
-        let mut pref = SubscriptionsPref::default();
-        let k = group_key("active", "mtg");
-        assert!(!pref.is_collapsed(&k));
-        pref.toggle_collapsed(&k);
-        assert!(pref.is_collapsed(&k));
-        pref.toggle_collapsed(&k);
-        assert!(!pref.is_collapsed(&k));
-    }
-
-    /// A cluster fold is per section: folding `mtg` under active leaves the
-    /// slept `mtg` circles alone.
-    #[test]
-    fn group_folds_are_scoped_to_their_section() {
-        let mut pref = SubscriptionsPref::default();
-        let a = group_key("active", "mtg");
-        let s = group_key("sleeping", "MTG");
-        pref.toggle_collapsed(&a);
-        assert!(pref.is_collapsed(&a));
-        assert!(!pref.is_collapsed(&s));
-        assert_eq!(s, "sleeping/mtg", "prefix key is case-insensitive");
-    }
-
-    #[test]
-    fn prune_drops_dead_group_folds() {
-        let mut pref = SubscriptionsPref::default();
-        pref.toggle_collapsed(&group_key("active", "mtg"));
-        pref.toggle_collapsed(&group_key("active", "gone"));
-        assert!(pref.prune_collapsed(&set(&["active/mtg"])));
-        assert!(pref.is_collapsed("active/mtg"));
-        assert!(!pref.is_collapsed("active/gone"));
-    }
-
-    /// Older blobs carry bare band keys (`parked`, `sleeping`, `active`) that
-    /// name nothing foldable now — sweep them instead of carrying them.
+    /// Fold keys that name nothing foldable are swept, not carried.
     #[test]
     fn prune_sweeps_bare_band_folds() {
         let mut pref = parse(r#"{"collapsed":["parked","sleeping","active/mtg"]}"#).unwrap();
         assert!(pref.prune_collapsed(&set(&["active/mtg"])));
-        assert!(!pref.is_collapsed("parked"));
-        assert!(!pref.is_collapsed("sleeping"));
-        assert!(pref.is_collapsed("active/mtg"), "live clusters survive");
+        assert_eq!(
+            pref.collapsed,
+            Some(set(&["active/mtg"])),
+            "live keys survive"
+        );
     }
 
     /// First run: everything that already exists counts as looked-at, so an

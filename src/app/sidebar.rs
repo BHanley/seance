@@ -9,7 +9,6 @@ use gpui_component::{
 
 use crate::runtime::protocol::GuiRequest;
 use crate::theme::SeancePalette;
-use seance_core::grouping::{Section, SectionRow};
 
 /// Rail metrics. One left axis and one right edge: every glyph slot, every
 /// name, and every time/count line up regardless of row kind.
@@ -19,15 +18,13 @@ const ROW_H: f32 = 28.;
 const GLYPH_W: f32 = 15.;
 /// Time / count column, right-aligned.
 const TIME_W: f32 = 34.;
-/// How far a cluster's members sit inside their header.
-const CLUSTER_INDENT: f32 = 14.;
 
 use super::actions::*;
 use super::util::{
     selected_row_fill, sidebar_press_no_select, tip, tip_s, ui_debug, working_spinner_glyph,
-    DraggedPane,
+    DragPill, DraggedCircle, DraggedPane,
 };
-use super::workspaces::{banish_arm_live, WorkspaceAttention};
+use super::workspaces::{banish_arm_live, RailFilter, WorkspaceAttention};
 use super::{RenameTarget, SashDrag, SeanceApp};
 
 impl SeanceApp {
@@ -476,28 +473,113 @@ impl SeanceApp {
         .detach();
     }
 
-    /// A band header. Deliberately a different species from a cluster header:
-    /// uppercase, letterspaced, quiet — a landmark you navigate by, not a line
-    /// you read. Its caret sits in the same column as every row's glyph, so
-    /// the rail has ONE left axis instead of three.
-    /// A cluster header. Reads like a row, not like a band — same size and
-    /// axis as the circles it holds, because conceptually it is one of them.
-    fn render_group_header(
+    /// Filter chips over the rail: all · needs · ★ · one per host mode.
+    /// Right-click a mode chip to turn the mode off for every circle in it.
+    fn render_rail_chips(&self, cx: &Context<Self>) -> gpui::AnyElement {
+        let ordered = self.workspaces();
+        let mut chips: Vec<(RailFilter, String, String)> = vec![
+            (RailFilter::All, "all".into(), String::new()),
+            (RailFilter::Needs, "needs".into(), String::new()),
+            (RailFilter::Starred, "★".into(), String::new()),
+        ];
+        for d in &self.circle_mode_defs {
+            chips.push((
+                RailFilter::Mode(d.id.clone()),
+                d.label.clone(),
+                d.off_label.clone(),
+            ));
+        }
+        let els: Vec<gpui::AnyElement> = chips
+            .into_iter()
+            .enumerate()
+            .map(|(i, (filter, label, off_label))| {
+                let n = ordered
+                    .iter()
+                    .filter(|w| self.rail_filter_matches(&filter, w))
+                    .count();
+                let on = self.rail_filter == filter;
+                let hot = n > 0 && !matches!(filter, RailFilter::All | RailFilter::Starred);
+                let click = filter.clone();
+                let chip = div()
+                    .id(SharedString::from(format!("rail-chip-{i}")))
+                    .flex_none()
+                    .px_1p5()
+                    .rounded_md()
+                    .text_xs()
+                    .cursor_pointer()
+                    .border_1()
+                    .border_color(if on {
+                        SeancePalette::flame()
+                    } else if hot {
+                        SeancePalette::violet_dim()
+                    } else {
+                        SeancePalette::border()
+                    })
+                    .bg(if on {
+                        SeancePalette::flame()
+                    } else {
+                        SeancePalette::surface()
+                    })
+                    .text_color(if on {
+                        SeancePalette::bg()
+                    } else if hot {
+                        SeancePalette::violet()
+                    } else {
+                        SeancePalette::text_dim()
+                    })
+                    .hover(|s| s.border_color(SeancePalette::flame_dim()))
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(|_this, _, window, cx| {
+                            sidebar_press_no_select(window, cx);
+                        }),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.rail_filter = if this.rail_filter == click {
+                            RailFilter::All
+                        } else {
+                            click.clone()
+                        };
+                        cx.notify();
+                    }))
+                    .child(format!("{label} {n}"));
+                match filter {
+                    RailFilter::Mode(id) if !off_label.is_empty() && n > 0 => chip
+                        .context_menu(move |menu, _, _| {
+                            menu.menu(
+                                format!("{off_label} — all {n}"),
+                                Box::new(ActCircleModeAllOff(id.clone())),
+                            )
+                        })
+                        .into_any_element(),
+                    _ => chip.into_any_element(),
+                }
+            })
+            .collect();
+        div()
+            .flex_none()
+            .px_2()
+            .py_1p5()
+            .flex()
+            .flex_wrap()
+            .gap_1()
+            .border_b_1()
+            .border_color(SeancePalette::border())
+            .children(els)
+            .into_any_element()
+    }
+
+    /// One space in the rail's top tier. Click shows its circles below; drop
+    /// a circle's row on it to move the circle there.
+    fn render_space_row(
         &self,
-        section: Section,
-        prefix: &str,
-        members: &[String],
+        space: &seance_core::spaces::Space,
+        current: bool,
         cx: &Context<Self>,
     ) -> gpui::AnyElement {
-        let key = crate::subscriptions_pref::group_key(section.key(), prefix);
-        if let Some((
-            RenameTarget::Group {
-                key: rename_key, ..
-            },
-            input,
-        )) = &self.renaming
-        {
-            if *rename_key == key {
+        let id = space.id.clone();
+        if let Some((RenameTarget::Space(r), input)) = &self.renaming {
+            if *r == id {
                 return div()
                     .px_2()
                     .py_1p5()
@@ -505,48 +587,86 @@ impl SeanceApp {
                     .into_any_element();
             }
         }
-        let collapsed = self.subs_pref.is_collapsed(&key);
-        let count = members.len();
-        let att = if collapsed {
-            members
-                .iter()
-                .filter_map(|ws| self.workspace_attention_cx(ws))
-                .max_by_key(|a| a.priority())
-        } else {
-            None
+        let spaces = &self.subs_pref.spaces;
+        let is_default = spaces.default_id() == id;
+        let count = spaces.circles_in(&id, &self.workspaces()).len();
+        let att = self.space_attention(&id);
+        let name = space.name.clone();
+        let (id_click, id_drop, id_menu) = (id.clone(), id.clone(), id.clone());
+        let name_click = name.clone();
+        let (glyph, color) = match att {
+            Some(WorkspaceAttention::Working) => (working_spinner_glyph(), SeancePalette::flame()),
+            Some(a) => ("\u{25cf}", a.color()),
+            None => ("", SeancePalette::text_faint()),
         };
-        let label = prefix.to_string();
-        let toggle_key = key.clone();
-        let rename_key = key.clone();
-        let rename_prefix = prefix.to_string();
         div()
-            .id(SharedString::from(format!("group-{key}")))
+            .id(SharedString::from(format!("space-{id}")))
             .h(px(ROW_H))
-            .pl(px(5.))
             .pr_2()
+            .pl(px(5.))
+            .border_l_3()
+            .border_color(if current {
+                SeancePalette::flame()
+            } else {
+                gpui::transparent_black()
+            })
+            .when(current, |d| d.bg(SeancePalette::surface()))
             .flex()
             .items_center()
             .gap_1p5()
             .cursor_pointer()
             .hover(|s| s.bg(SeancePalette::surface()))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.subs_pref.toggle_collapsed(&toggle_key);
-                this.save_arrangement();
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|_this, _, window, cx| {
+                    sidebar_press_no_select(window, cx);
+                }),
+            )
+            .drag_over::<DraggedCircle>(|style, _, _, _| {
+                style.bg(SeancePalette::flame_dim().opacity(0.35))
+            })
+            .on_drop(cx.listener(move |this, drag: &DraggedCircle, _, cx| {
+                this.move_circle_to_space(&drag.slug, &id_drop);
                 cx.notify();
             }))
+            .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, window, cx| {
+                if ev.click_count() == 2 {
+                    this.start_rename(
+                        RenameTarget::Space(id_click.clone()),
+                        &name_click,
+                        window,
+                        cx,
+                    );
+                } else {
+                    this.rail_space = Some(id_click.clone());
+                    this.rail_filter = RailFilter::All;
+                    cx.notify();
+                }
+            }))
             .context_menu(move |menu, _, _| {
-                menu.menu(
-                    "rename group",
-                    Box::new(ActRenameGroup(rename_key.clone(), rename_prefix.clone())),
-                )
+                let m = menu
+                    .menu("rename space", Box::new(ActRenameSpace(id_menu.clone())))
+                    .menu("new space", Box::new(ActNewSpace(true)))
+                    .menu("move up", Box::new(ActSpaceShift(id_menu.clone(), -1)))
+                    .menu("move down", Box::new(ActSpaceShift(id_menu.clone(), 1)));
+                if is_default {
+                    m
+                } else {
+                    m.menu("make default", Box::new(ActSpaceDefault(id_menu.clone())))
+                        .separator()
+                        .menu(
+                            "delete space (circles go to the default)",
+                            Box::new(ActDeleteSpace(id_menu.clone())),
+                        )
+                }
             })
             .child(
                 div()
                     .flex_none()
                     .w(px(GLYPH_W))
-                    .text_xs()
-                    .text_color(SeancePalette::text_faint())
-                    .child(if collapsed { "\u{25b8}" } else { "\u{25be}" }),
+                    .text_sm()
+                    .text_color(color)
+                    .child(glyph),
             )
             .child(
                 div()
@@ -554,18 +674,27 @@ impl SeanceApp {
                     .min_w_0()
                     .truncate()
                     .text_sm()
-                    .text_color(SeancePalette::text_dim())
-                    .child(label),
-            )
-            .children(att.map(|a| {
-                div().flex_none().text_xs().text_color(a.color()).child(
-                    if matches!(a, WorkspaceAttention::Working) {
-                        working_spinner_glyph()
+                    .font_weight(if current {
+                        gpui::FontWeight::SEMIBOLD
                     } else {
-                        "\u{25cf}"
-                    },
+                        gpui::FontWeight::NORMAL
+                    })
+                    .text_color(if current {
+                        SeancePalette::text()
+                    } else {
+                        SeancePalette::text_dim()
+                    })
+                    .child(name),
+            )
+            .when(is_default, |d| {
+                d.child(
+                    div()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(SeancePalette::text_faint())
+                        .child("default"),
                 )
-            }))
+            })
             .child(
                 div()
                     .flex_none()
@@ -578,68 +707,62 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    /// One band, fully rendered — loose circles at the band's indent,
-    /// clustered ones under their prefix header. Bands carry no header of
-    /// their own: `rule_above` draws the only thing separating them, and only
-    /// under a pinned band that actually has rows.
-    fn render_section(
-        &self,
-        section: Section,
-        circles: Vec<String>,
-        rule_above: bool,
-        cx: &Context<Self>,
-    ) -> Vec<gpui::AnyElement> {
-        let mut out: Vec<gpui::AnyElement> = Vec::new();
+    fn render_new_space_row(&self, cx: &Context<Self>) -> gpui::AnyElement {
+        div()
+            .id("space-new")
+            .h(px(22.))
+            .pl(px(8. + GLYPH_W))
+            .flex()
+            .items_center()
+            .text_xs()
+            .cursor_pointer()
+            .text_color(SeancePalette::text_faint())
+            .hover(|s| s.text_color(SeancePalette::flame()))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.create_space(window, cx);
+                cx.notify();
+            }))
+            .child("+ space")
+            .into_any_element()
+    }
+
+    /// The rail's lower tier: the current space's circles, or every match
+    /// for an active filter.
+    fn render_circle_list(&self, cx: &Context<Self>) -> Vec<gpui::AnyElement> {
+        let circles = self.visible_workspaces();
         if circles.is_empty() {
-            return out;
+            let msg = match self.rail_filter {
+                RailFilter::All => "empty — drag a circle onto this space",
+                _ => "nothing matches",
+            };
+            return vec![div()
+                .px_3()
+                .py_2()
+                .text_xs()
+                .text_color(SeancePalette::text_faint())
+                .child(msg)
+                .into_any_element()];
         }
-        if rule_above {
-            out.push(
-                div()
-                    .flex_none()
-                    .my(px(6.))
-                    .h(px(1.))
-                    .w_full()
-                    .bg(SeancePalette::border())
-                    .into_any_element(),
-            );
-        }
-        for row in self.section_rows(&circles) {
-            match row {
-                SectionRow::Circle(ws) => {
-                    out.push(self.render_workspace_group(ws, cx));
-                }
-                SectionRow::Group { prefix, members } => {
-                    out.push(self.render_group_header(section, &prefix, &members, cx));
-                    let key = crate::subscriptions_pref::group_key(section.key(), &prefix);
-                    if self.subs_pref.is_collapsed(&key) {
-                        continue;
-                    }
-                    // A hairline down the members ties them into one object,
-                    // so a cluster reads as a block rather than as rows that
-                    // happen to be indented.
-                    for ws in members {
-                        out.push(
-                            div()
-                                .ml(px(CLUSTER_INDENT))
-                                .border_l_1()
-                                .border_color(SeancePalette::border())
-                                .child(self.render_workspace_row(ws, true, cx))
-                                .into_any_element(),
-                        );
-                    }
-                }
-            }
-        }
-        out
+        let space_prefix = (self.rail_filter == RailFilter::All)
+            .then(|| {
+                self.subs_pref
+                    .spaces
+                    .get(&self.current_space())
+                    .and_then(|s| s.prefix.clone())
+            })
+            .flatten();
+        circles
+            .into_iter()
+            .map(|ws| {
+                let dim = space_prefix.is_some()
+                    && seance_core::spaces::space_prefix(&self.workspace_label(&ws))
+                        == space_prefix;
+                self.render_workspace_row(ws, dim, cx)
+            })
+            .collect()
     }
 
-    /// One sidebar workspace group.
-    fn render_workspace_group(&self, workspace: String, cx: &Context<Self>) -> gpui::AnyElement {
-        self.render_workspace_row(workspace, false, cx)
-    }
-
-    /// `in_cluster` dims the shared prefix — see the name column below.
+    /// `in_cluster` dims a prefix the row's space already names.
     fn render_workspace_row(
         &self,
         workspace: String,
@@ -669,6 +792,17 @@ impl SeanceApp {
         let modes_on = self.circle_modes_of(&workspace);
         let mode_defs = self.circle_mode_defs.clone();
         let in_mode = !modes_on.is_empty();
+        let here = self.subs_pref.spaces.space_of(&workspace).to_string();
+        let move_targets: Vec<(String, String)> = self
+            .subs_pref
+            .spaces
+            .list
+            .iter()
+            .filter(|s| s.id != here)
+            .map(|s| (s.id.clone(), s.name.clone()))
+            .collect();
+        let drag_slug = workspace.clone();
+        let drag_label = self.workspace_label(&workspace);
         let header: gpui::AnyElement = if renaming_this_ws {
             div()
                 .px_2()
@@ -716,9 +850,11 @@ impl SeanceApp {
                         sidebar_press_no_select(window, cx);
                     }),
                 )
+                .on_drag(DraggedCircle { slug: drag_slug }, move |_, _, _, cx| {
+                    let label = format!("◈ {drag_label}");
+                    cx.new(|_| DragPill { label })
+                })
                 // Drop a pane onto the header → move into this circle.
-                // Workspace-vs-workspace drag-reorder is intentionally gone;
-                // order is auto (working agents, then last human touch).
                 .drag_over::<DraggedPane>(|style, _, _, _| style.bg(SeancePalette::violet_dim()))
                 .on_drop(cx.listener(move |this, drag: &DraggedPane, _, cx| {
                     ui_debug(&format!(
@@ -745,30 +881,39 @@ impl SeanceApp {
                 .context_menu({
                     let ws_m = ws_for_menu.clone();
                     let modes_on = modes_on.clone();
-                    move |menu, _, _| {
+                    move |menu, window, cx| {
                         // Pin leads: it's the one item aimed at the rail
                         // itself (where this row sits), and the one you reach
                         // for often enough to want it under the cursor.
                         let m = if pinned {
-                            menu.menu("unpin", Box::new(ActUnpinWorkspace(ws_m.clone())))
+                            menu.menu("unstar", Box::new(ActUnpinWorkspace(ws_m.clone())))
                         } else {
-                            menu.menu("pin to top", Box::new(ActPinWorkspace(ws_m.clone())))
+                            menu.menu("★ star", Box::new(ActPinWorkspace(ws_m.clone())))
                         };
+                        let targets = move_targets.clone();
+                        let ws_s = ws_m.clone();
+                        let m = m.submenu("move to space", window, cx, move |sub, _, _| {
+                            targets.iter().fold(sub, |sub, (id, name)| {
+                                sub.menu(
+                                    name.clone(),
+                                    Box::new(ActMoveToSpace(ws_s.clone(), id.clone())),
+                                )
+                            })
+                        });
                         // Host modes (AFK): one toggle each, worded for the
                         // direction it goes. Display-only modes (slack thread)
                         // carry no labels and get no entry.
-                        let m =
-                            mode_defs
-                                .iter()
-                                .filter(|d| !d.on_label.is_empty())
-                                .fold(m, |m, d| {
-                                    let on = modes_on.iter().any(|x| x.id == d.id);
-                                    let label = if on { &d.off_label } else { &d.on_label };
-                                    m.menu(
-                                        label.clone(),
-                                        Box::new(ActCircleMode(ws_m.clone(), d.id.clone(), !on)),
-                                    )
-                                });
+                        let m = mode_defs.iter().fold(m, |m, d| {
+                            let on = modes_on.iter().any(|x| x.id == d.id);
+                            let label = if on { &d.off_label } else { &d.on_label };
+                            if label.is_empty() {
+                                return m;
+                            }
+                            m.menu(
+                                label.clone(),
+                                Box::new(ActCircleMode(ws_m.clone(), d.id.clone(), !on)),
+                            )
+                        });
                         let m = m
                             .menu(
                                 "rename workspace",
@@ -990,21 +1135,26 @@ impl SeanceApp {
         window_active: bool,
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        // Ordered groups, INCLUDING empty workspaces (they render with 0 panes).
-        // Two bands — pinned, then everything else — each grouping its own
-        // circles by name prefix, independently. The only chrome between them
-        // is a rule, and only when something is actually pinned.
-        let bands = self.workspace_sections();
-        // A rule above a band whenever a band above it has rows.
-        let mut rows_above = false;
-        let section_rows: Vec<gpui::AnyElement> = bands
-            .into_iter()
-            .flat_map(|(section, circles)| {
-                let rule = rows_above && !circles.is_empty();
-                rows_above |= !circles.is_empty();
-                self.render_section(section, circles, rule, cx)
-            })
+        let current = self.current_space();
+        let filtered = self.rail_filter != RailFilter::All;
+        let mut rail_rows: Vec<gpui::AnyElement> = self
+            .subs_pref
+            .spaces
+            .list
+            .iter()
+            .map(|sp| self.render_space_row(sp, !filtered && sp.id == current, cx))
             .collect();
+        rail_rows.push(self.render_new_space_row(cx));
+        rail_rows.push(
+            div()
+                .flex_none()
+                .my(px(4.))
+                .h(px(1.))
+                .w_full()
+                .bg(SeancePalette::border())
+                .into_any_element(),
+        );
+        rail_rows.extend(self.render_circle_list(cx));
 
         let _ = window_active; // focus chrome reserved for future empty-window dimming
 
@@ -1074,6 +1224,7 @@ impl SeanceApp {
                             .child("◈+"),
                     ),
             )
+            .child(self.render_rail_chips(cx))
             .child({
                 // Workspace list only — context menus live on *rows*, not the scroller.
                 // Empty-area multi-window menu is a separate flex filler (avoids double menus).
@@ -1087,7 +1238,7 @@ impl SeanceApp {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .children(section_rows)
+                    .children(rail_rows)
                     .child(div().id("sidebar-empty-hit").flex_1().min_h(px(48.)).w_full())
             })
             // `PRs (N)` sweep button — sits just above the quicklaunch strip so

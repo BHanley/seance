@@ -55,7 +55,7 @@ use self::workspaces::WorkspaceAttention;
 enum RenameTarget {
     Pane(String),
     Workspace(String),
-    Group { key: String, prefix: String },
+    Space(String),
 }
 
 /// What the right drawer shows. Notes live on the *back of a pane* now
@@ -237,6 +237,12 @@ pub struct SeanceApp {
     /// Until then the first State marks every known circle seen, so a fresh
     /// install doesn't badge the whole rail `needs`.
     subs_seeded: bool,
+    /// The daemon's arrangement was read at boot. Until then spaces reconcile
+    /// locally only — pushing a fresh migration would overwrite the real one.
+    rail_loaded: bool,
+    /// Space whose circles the rail lists (None → the selected circle's).
+    rail_space: Option<String>,
+    rail_filter: workspaces::RailFilter,
     /// Last activity timestamp (ms) per workspace — input/inject/status, not click.
     workspace_touch: std::collections::HashMap<String, u64>,
     /// Last observed pane output per workspace (ms) — sidebar shows "time
@@ -479,6 +485,9 @@ impl SeanceApp {
             subs_pref: pref.unwrap_or_default(),
             absent_since: std::collections::HashMap::new(),
             subs_seeded,
+            rail_loaded: false,
+            rail_space: None,
+            rail_filter: workspaces::RailFilter::All,
             workspace_touch: std::collections::HashMap::new(),
             workspace_activity: std::collections::HashMap::new(),
             resize_settle: std::collections::HashMap::new(),
@@ -554,13 +563,17 @@ impl SeanceApp {
                     if let Some(pref) = crate::subscriptions_pref::parse(&json) {
                         app.subs_pref = pref;
                         app.subs_seeded = true;
+                        app.rail_loaded = true;
                         crate::subscriptions_pref::save(&app.subs_pref);
                     }
                 }
                 // A daemon with no copy yet — first window up after the
                 // upgrade donates its arrangement instead of everyone
                 // starting from a blank rail.
-                Ok(None) => app.push_rail_to_daemon(),
+                Ok(None) => {
+                    app.rail_loaded = true;
+                    app.push_rail_to_daemon();
+                }
                 Err(e) => eprintln!("[seance gui] rail prefs load failed: {e}"),
             }
         }
@@ -1972,7 +1985,7 @@ impl SeanceApp {
                 .find(|p| p.slug == *slug)
                 .map(|p| p.name.clone()),
             RenameTarget::Workspace(w) => Some(w.clone()),
-            RenameTarget::Group { prefix, .. } => Some(prefix.clone()),
+            RenameTarget::Space(id) => self.subs_pref.spaces.get(id).map(|s| s.name.clone()),
         };
         let Some(current) = current else {
             // Target not ready yet — retry next frame.
@@ -1990,27 +2003,6 @@ impl SeanceApp {
     }
 
     fn commit_rename(&mut self, new_name: &str, cx: &mut Context<Self>) -> bool {
-        if let Some((RenameTarget::Group { prefix, .. }, _)) = &self.renaming {
-            let labels = match workspaces::group_rename_labels(
-                &self.workspaces(),
-                |ws| self.workspace_label(ws),
-                prefix,
-                new_name,
-            ) {
-                Ok(labels) => labels,
-                Err(message) => {
-                    crate::desktop_notify::notify("seance · rename group", message);
-                    return false;
-                }
-            };
-            for (slug, label) in labels {
-                if let Err(e) = self.client.rename_workspace(&slug, &label) {
-                    crate::desktop_notify::notify("seance · rename failed", &e.to_string());
-                    return false;
-                }
-                self.workspace_names.insert(slug, label);
-            }
-        }
         let Some((target, _)) = self.renaming.take() else {
             return true;
         };
@@ -2036,7 +2028,7 @@ impl SeanceApp {
                     .insert(slug.clone(), new_name.to_string());
                 let _ = self.client.rename_workspace(&slug, new_name);
             }
-            RenameTarget::Group { .. } => {}
+            RenameTarget::Space(id) => self.rename_space(&id, new_name),
         }
         cx.notify();
         true
@@ -2775,16 +2767,57 @@ impl Render for SeanceApp {
                 let label = this.workspace_label(&act.0);
                 this.start_rename(RenameTarget::Workspace(act.0.clone()), &label, window, cx);
             }))
-            .on_action(cx.listener(|this, act: &ActRenameGroup, window, cx| {
-                this.start_rename(
-                    RenameTarget::Group {
-                        key: act.0.clone(),
-                        prefix: act.1.clone(),
-                    },
-                    &act.1,
-                    window,
-                    cx,
-                );
+            .on_action(cx.listener(|this, act: &ActRenameSpace, window, cx| {
+                let name = this
+                    .subs_pref
+                    .spaces
+                    .get(&act.0)
+                    .map(|s| s.name.clone())
+                    .unwrap_or_default();
+                this.start_rename(RenameTarget::Space(act.0.clone()), &name, window, cx);
+            }))
+            .on_action(cx.listener(|this, act: &ActDeleteSpace, _, cx| {
+                this.delete_space(&act.0.clone());
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _act: &ActNewSpace, window, cx| {
+                this.create_space(window, cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, act: &ActSpaceDefault, _, cx| {
+                this.space_set_default(&act.0.clone());
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, act: &ActSpaceShift, _, cx| {
+                this.space_shift(&act.0.clone(), act.1);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, act: &ActMoveToSpace, _, cx| {
+                let ActMoveToSpace(ws, space) = act.clone();
+                this.move_circle_to_space(&ws, &space);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, act: &ActCircleModeAllOff, _, cx| {
+                let mode = act.0.clone();
+                let circles: Vec<String> = this
+                    .circle_modes
+                    .iter()
+                    .filter(|(_, on)| on.iter().any(|m| *m == mode))
+                    .map(|(ws, _)| ws.clone())
+                    .collect();
+                for ws in circles {
+                    let _ = this.client.set_circle_mode(&ws, &mode, false);
+                    if let Some(on) = this.circle_modes.get_mut(&ws) {
+                        on.retain(|m| *m != mode);
+                        if on.is_empty() {
+                            this.circle_modes.remove(&ws);
+                        }
+                    }
+                }
+                if this.rail_filter == workspaces::RailFilter::Mode(mode) {
+                    this.rail_filter = workspaces::RailFilter::All;
+                }
+                cx.notify();
             }))
             .on_action(cx.listener(|_this, act: &ActShareReplay, _, _cx| {
                 share_replay_open(&act.0);

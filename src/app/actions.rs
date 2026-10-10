@@ -92,7 +92,35 @@ pub struct ActRenameWorkspace(pub String);
 
 #[derive(Action, Clone, PartialEq, Deserialize)]
 #[action(namespace = seance, no_json)]
-pub struct ActRenameGroup(pub String, pub String);
+pub struct ActRenameSpace(pub String);
+
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActDeleteSpace(pub String);
+
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActNewSpace(pub bool);
+
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActSpaceDefault(pub String);
+
+/// (space id, -1 up / +1 down).
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActSpaceShift(pub String, pub i32);
+
+/// (circle, space id).
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActMoveToSpace(pub String, pub String);
+
+/// Turn a host mode OFF for every circle in it (right-click its rail chip):
+/// "i'm back" to all AFK circles at once.
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActCircleModeAllOff(pub String);
 
 /// Turn a host circle mode on/off: (workspace, mode id, on). Rail context
 /// menu; only offered for modes host.json defines (e.g. AFK).

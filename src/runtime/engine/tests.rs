@@ -1418,7 +1418,21 @@ fn polled_circle_mode_follows_the_host_and_holds_pending_toggles() {
         assert!(eng
             .set_circle_mode_with(&ro, "claude-27", "slack", true)
             .unwrap_err()
-            .contains("display-only"));
+            .contains("host owns it"));
+        // Off-only: the host owns entering, seance may offer the way out.
+        let off_only = vec![crate::host::HostCircleMode {
+            id: "slack".into(),
+            label: "slack".into(),
+            state_cmd: Some("true".into()),
+            off_label: "disconnect".into(),
+            off_prompt: "leave the slack thread".into(),
+            ..Default::default()
+        }];
+        assert!(eng
+            .set_circle_mode_with(&off_only, "claude-27", "slack", true)
+            .is_err());
+        assert!(off_only[0].def().on_label.is_empty());
+        assert_eq!(off_only[0].def().off_label, "disconnect");
         let _ = std::fs::remove_dir_all(&scratch);
     });
 }
