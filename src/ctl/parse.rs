@@ -139,6 +139,12 @@ pub(crate) fn with_identity(
     use ControlRequest::*;
     match request {
         List { .. } => List { scope, from },
+        Space { action, args, .. } => Space {
+            action,
+            args,
+            scope,
+            from,
+        },
         RenameCircle {
             name, workspace, ..
         } => RenameCircle {

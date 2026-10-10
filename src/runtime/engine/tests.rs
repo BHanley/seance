@@ -1436,3 +1436,46 @@ fn polled_circle_mode_follows_the_host_and_holds_pending_toggles() {
         let _ = std::fs::remove_dir_all(&scratch);
     });
 }
+
+/// `ctl space`/`ctl move` edit only the `spaces` key: pins, seen and the
+/// notes face in the same blob must come through untouched.
+#[test]
+fn space_ops_edit_the_rail_blob_and_keep_its_other_keys() {
+    with_test_state_dir("spaces", || {
+        let scratch = std::env::temp_dir().join(format!("seance-spaces-{}", std::process::id()));
+        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
+        eng.push_stub_pane("a", "ui-a");
+        eng.push_stub_pane("b", "ui-b");
+        eng.push_stub_pane("c", "loose");
+        let path = crate::daemon::fsbridge::subs_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"seen":["loose"],"pinned":["loose"],"flipped":"c"}"#,
+        )
+        .unwrap();
+
+        let listed = eng.space_op("list", &[], None).unwrap();
+        let ids: Vec<&str> = listed["spaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, vec!["general", "ui"]);
+
+        eng.space_op("new", &["later".into()], None).unwrap();
+        eng.space_op("move", &["ui-a".into(), "later".into()], None)
+            .unwrap();
+        assert!(eng.space_op("rm", &["general".into()], None).is_err());
+        let blob: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(blob["pinned"], serde_json::json!(["loose"]));
+        assert_eq!(blob["flipped"], "c");
+        assert_eq!(blob["spaces"]["of"]["ui-a"], "later");
+        // A move from inside a pane with no CIRCLE uses the caller's own.
+        eng.space_op("move", &["general".into()], Some("loose"))
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&scratch);
+    });
+}

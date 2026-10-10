@@ -440,6 +440,22 @@ fn run_local(args: Vec<String>) -> i32 {
         "policy" => parse_policy(sub_args),
         "pr-link" | "pr-links" => parse_pr_link(sub_args),
         "rename-circle" | "rename-workspace" => parse_rename_circle(sub_args),
+        "space" | "spaces" => {
+            let mut it = sub_args.into_iter();
+            let action = it.next().unwrap_or_else(|| "list".into());
+            Ok(ControlRequest::Space {
+                action,
+                args: it.collect(),
+                scope: None,
+                from: None,
+            })
+        }
+        "move" => Ok(ControlRequest::Space {
+            action: "move".into(),
+            args: sub_args,
+            scope: None,
+            from: None,
+        }),
         "sleep" => parse_sleep(sub_args, false),
         "wake" | "awaken" => parse_sleep(sub_args, true),
         "seize" => parse_seize(sub_args),

@@ -565,6 +565,18 @@ pub enum ControlRequest {
         from: Option<String>,
     },
 
+    /// `space list|new|rename|rm|default|move` — edits the rail's spaces
+    /// (`seance_core::spaces`) in the shared arrangement blob.
+    Space {
+        action: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        scope: Option<String>,
+        #[serde(default)]
+        from: Option<String>,
+    },
+
     /// Drop one PR link (`url` set) or all of a workspace's links.
     PrLinkClear {
         #[serde(default)]
@@ -722,6 +734,7 @@ impl ControlRequest {
             | Self::Roster { from, .. }
             | Self::PrLinkAdd { from, .. }
             | Self::PrLinkClear { from, .. }
+            | Self::Space { from, .. }
             | Self::Sleep { from, .. }
             | Self::Wake { from, .. }
             | Self::RenameCircle { from, .. }
@@ -766,6 +779,7 @@ impl ControlRequest {
                 workspace, scope, ..
             } => workspace.as_deref().or(scope.as_deref()),
             Self::List { scope, .. }
+            | Self::Space { scope, .. }
             | Self::Send { scope, .. }
             | Self::TaskFail { scope, .. }
             | Self::MsgSend { scope, .. }

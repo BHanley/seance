@@ -8,6 +8,7 @@ pub(crate) mod helpers;
 mod pr_links;
 pub mod queue;
 mod sleep;
+mod spaces;
 mod spawn;
 mod workspaces;
 

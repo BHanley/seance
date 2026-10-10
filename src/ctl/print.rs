@@ -17,6 +17,7 @@ pub(crate) fn print_ok_human(sub: &str, response: &ControlResponse) {
 
     match sub {
         "list" | "ls" | "brief" | "roster" | "stage" => print_list(data),
+        "space" | "spaces" if data.get("spaces").is_some() => print_spaces(data),
         "task" | "inbox" => {
             if let Some(body) = data.get("body").and_then(|v| v.as_str()) {
                 let id = data.get("id").and_then(|v| v.as_str()).unwrap_or("?");
@@ -391,6 +392,9 @@ COMMANDS:
     watch [opts]                  stream events
          --kinds a,b  --pane P  --actor A  --since-seq N  --no-catch-up
     rename-circle [WS] NAME       set a circle's label (its slug never moves)
+    space [list]                  spaces and the circles in each
+    space new NAME · rename SPACE NAME · rm SPACE · default SPACE
+    move [CIRCLE] SPACE           put a circle in a space (sticky; prefixes stop routing it)
     sleep [WS]                    sleep a circle (frees its RAM; wakes on resume)
     wake [WS]                     wake a sleeping circle
     pr-link add WS URL            seed a PR link on a workspace
@@ -426,4 +430,30 @@ EXAMPLES:
     seance ctl roster
     seance ctl doctor"
     );
+}
+
+fn print_spaces(data: &serde_json::Value) {
+    let Some(rows) = data.get("spaces").and_then(|v| v.as_array()) else {
+        return;
+    };
+    for row in rows {
+        let s = |k: &str| row.get(k).and_then(|v| v.as_str()).unwrap_or("");
+        let flag = |k: &str| row.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+        let circles = row.get("circles").and_then(|v| v.as_array());
+        let mut head = format!("{} [{}]", s("name"), s("id"));
+        if flag("default") {
+            head.push_str(" (default)");
+        }
+        if flag("auto") {
+            head.push_str(" (auto)");
+        }
+        if let Some(p) = row.get("prefix").and_then(|v| v.as_str()) {
+            head.push_str(&format!(" catches {p}-"));
+        }
+        println!("{head}");
+        for c in circles.into_iter().flatten() {
+            let label = c.get("label").and_then(|v| v.as_str()).unwrap_or("");
+            println!("  {label}");
+        }
+    }
 }

@@ -171,7 +171,7 @@ fn layout_path() -> PathBuf {
 /// The shared rail arrangement, beside the layout. Note this is the daemon's
 /// *state* dir, not `~/.config/seance/` where the pre-0.23 per-GUI file lived
 /// — a thin client writing the config path would have written its own disk.
-fn subs_path() -> PathBuf {
+pub(crate) fn subs_path() -> PathBuf {
     state_dir_file("subscriptions.json")
 }
 

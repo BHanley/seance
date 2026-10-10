@@ -1112,6 +1112,26 @@ impl Engine {
                 );
                 ok(json!({"workspace": ws, "removed": removed}))
             }
+            Space {
+                action,
+                args,
+                scope,
+                from,
+            } => match self.space_op(&action, &args, scope.as_deref()) {
+                Ok(v) => {
+                    if action != "list" && action != "ls" {
+                        events::log(
+                            &actor(&from),
+                            scope.as_deref(),
+                            None,
+                            "space",
+                            format!("{action} {}", args.join(" ")),
+                        );
+                    }
+                    ok(v)
+                }
+                Err(e) => err(e),
+            },
             RenameCircle {
                 name,
                 workspace,
