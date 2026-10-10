@@ -811,11 +811,16 @@ impl ClientState {
                         (ws, label)
                     })
                     .collect();
-                if self.rail_space.is_none() {
-                    self.rail_space = Some(self.current_space());
-                }
                 let focused = self.current_space();
                 self.spaces_dirty |= self.subs.spaces.reconcile(&circles, Some(&focused));
+                // Freeze the view once the selection has a space (native twin).
+                if self.rail_space.is_none() {
+                    if let Some(sel) = self.selected_workspace.as_deref() {
+                        if self.subs.spaces.of.contains_key(sel) {
+                            self.rail_space = Some(self.subs.spaces.space_of(sel).to_string());
+                        }
+                    }
+                }
                 self.structure_rev += 1;
                 Applied::Structure
             }

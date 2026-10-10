@@ -221,17 +221,23 @@ impl SeanceApp {
             .iter()
             .map(|ws| (ws.clone(), self.workspace_label(ws)))
             .collect();
-        // Freeze the view once: a fresh circle is selected before it has a
-        // space, and following the selection then would send it to the default.
-        if self.rail_space.is_none() {
-            self.rail_space = Some(self.current_space());
-        }
         let focused = self.current_space();
         if self.subs_pref.spaces.reconcile(&circles, Some(&focused)) {
             if self.rail_loaded {
                 self.save_arrangement();
             } else {
                 self.save_arrangement_local();
+            }
+        }
+        // Then freeze the view on the selected circle's space: a fresh circle
+        // is selected before it has one, and following the selection then
+        // would send it to the default. Only once the selection is assigned —
+        // freezing before the first migration pinned the rail to `general`.
+        if self.rail_space.is_none() {
+            if let Some(sel) = self.selected_workspace.as_deref() {
+                if self.subs_pref.spaces.of.contains_key(sel) {
+                    self.rail_space = Some(self.subs_pref.spaces.space_of(sel).to_string());
+                }
             }
         }
         if changed {
