@@ -2355,3 +2355,71 @@ body.m-kb-open #m-bar {
   margin-top: auto;
   width: 100%;
 }
+
+/* ── spaces (0.27) — native twin: app/sidebar.rs ─────────────────────── */
+.rail-chips {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.rail-chip {
+  font: inherit;
+  font-size: var(--fs-xs);
+  padding: 1px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.rail-chip.hot {
+  border-color: var(--violet-dim, var(--violet));
+  color: var(--violet);
+}
+.rail-chip.on {
+  background: var(--flame);
+  border-color: var(--flame);
+  color: var(--bg);
+}
+.space-row {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px 0 5px;
+  border-left: 3px solid transparent;
+  font-size: var(--fs-row);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.space-row:hover {
+  background: var(--surface);
+}
+.space-row.current {
+  border-left-color: var(--flame);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+}
+.space-row .fold-dot {
+  width: 15px;
+}
+.space-default {
+  flex: 0 0 auto;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+.space-new {
+  flex: 0 0 auto;
+  padding: 2px 8px 2px 26px;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.space-new:hover {
+  color: var(--flame);
+}

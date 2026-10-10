@@ -5,6 +5,31 @@
 
 use seance_core::protocol::GuiRequest;
 
+/// Rail arrangement edits (spaces, filters). Native twin: the `Act*Space`
+/// actions in `src/app/actions.rs`.
+#[derive(Clone, Debug)]
+pub enum RailOp {
+    ShowSpace(String),
+    Filter(crate::state::RailFilter),
+    MoveToSpace {
+        ws: String,
+        space: String,
+    },
+    NewSpace(String),
+    RenameSpace {
+        id: String,
+        name: String,
+    },
+    DeleteSpace(String),
+    SetDefault(String),
+    ShiftSpace {
+        id: String,
+        delta: i32,
+    },
+    /// Turn a host mode off for every circle in it (right-click its chip).
+    ModeAllOff(String),
+}
+
 /// App-level actions available to chrome + input handling. Fire-and-forget:
 /// results come back as daemon events folded into `ClientState`.
 pub trait Actions {
@@ -61,6 +86,7 @@ pub trait Actions {
     fn request_rebuild(&self);
     /// Fold / unfold a rail band or prefix cluster, and persist it.
     fn toggle_collapsed(&self, key: &str);
+    fn rail(&self, op: RailOp);
     /// Ctrl+PageUp/Down — ACTIVE circles only.
     fn cycle_workspace(&self, delta: i32);
     fn cycle_pane(&self, delta: i32);

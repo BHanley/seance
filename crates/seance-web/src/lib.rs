@@ -215,12 +215,20 @@ impl App {
                 self.send(&GuiRequest::GridAck { seq });
             }
         }
-        let (applied, subs_dirty) = {
+        let (applied, subs_dirty, spaces_dirty) = {
             let mut st = self.state.borrow_mut();
             let applied = st.apply_event(ev, now_ms());
-            (applied, std::mem::take(&mut st.subs_dirty))
+            (
+                applied,
+                std::mem::take(&mut st.subs_dirty),
+                std::mem::take(&mut st.spaces_dirty),
+            )
         };
-        if subs_dirty {
+        // Space assignments are shared, but only once the daemon's copy is in
+        // hand: pushing a pre-load migration would overwrite the real one.
+        if spaces_dirty && self.rail_base.borrow().is_some() {
+            self.save_arrangement();
+        } else if subs_dirty || spaces_dirty {
             self.persist_subs();
         }
         match applied {
@@ -352,6 +360,9 @@ impl App {
             let st = self.state.borrow();
             root["seen"] = serde_json::json!(st.subs.seen);
             root["pinned"] = serde_json::json!(st.subs.pinned);
+            if !st.subs.spaces.is_empty() {
+                root["spaces"] = serde_json::json!(st.subs.spaces);
+            }
         }
         let Ok(json) = serde_json::to_string(&root) else {
             return;
@@ -422,14 +433,96 @@ impl App {
         }
         {
             let mut st = self.state.borrow_mut();
-            if st.subs.pinned == pref.pinned && st.subs.seen == pref.seen {
+            if st.subs.pinned == pref.pinned
+                && st.subs.seen == pref.seen
+                && st.subs.spaces == pref.spaces
+            {
                 return;
             }
             st.subs.seen = pref.seen.clone();
             st.subs.pinned = pref.pinned.clone();
+            st.subs.spaces = pref.spaces.clone();
             st.subs.seeded = true;
         }
         self.persist_subs();
+        self.need_rebuild.set(true);
+    }
+
+    /// Spaces and filters. Arrangement edits go to the daemon; which space or
+    /// filter this window is showing stays local.
+    pub fn rail(self: &Rc<Self>, op: app_api::RailOp) {
+        use app_api::RailOp;
+        let mut shared = false;
+        {
+            let mut st = self.state.borrow_mut();
+            match op {
+                RailOp::ShowSpace(id) => {
+                    st.rail_space = Some(id);
+                    st.rail_filter = state::RailFilter::All;
+                }
+                RailOp::Filter(f) => {
+                    st.rail_filter = if st.rail_filter == f {
+                        state::RailFilter::All
+                    } else {
+                        f
+                    };
+                }
+                RailOp::MoveToSpace { ws, space } => {
+                    shared = st.subs.spaces.move_circle(&ws, &space);
+                }
+                RailOp::NewSpace(name) => {
+                    let id = st.subs.spaces.create(&name);
+                    st.rail_space = Some(id);
+                    st.rail_filter = state::RailFilter::All;
+                    shared = true;
+                }
+                RailOp::RenameSpace { id, name } => shared = st.subs.spaces.rename(&id, &name),
+                RailOp::DeleteSpace(id) => {
+                    shared = st.subs.spaces.delete(&id);
+                    if st.rail_space.as_deref() == Some(id.as_str()) {
+                        st.rail_space = None;
+                    }
+                }
+                RailOp::SetDefault(id) => shared = st.subs.spaces.set_default(&id),
+                RailOp::ShiftSpace { id, delta } => {
+                    let list = &st.subs.spaces.list;
+                    if let Some(i) = list.iter().position(|s| s.id == id) {
+                        let before = if delta < 0 {
+                            i.checked_sub(1).map(|j| Some(list[j].id.clone()))
+                        } else if i + 1 < list.len() {
+                            Some(list.get(i + 2).map(|s| s.id.clone()))
+                        } else {
+                            None
+                        };
+                        if let Some(before) = before {
+                            shared = st.subs.spaces.reorder(&id, before.as_deref());
+                        }
+                    }
+                }
+                RailOp::ModeAllOff(mode) => {
+                    let circles: Vec<String> = st
+                        .circle_modes
+                        .iter()
+                        .filter(|(_, on)| on.iter().any(|m| *m == mode))
+                        .map(|(ws, _)| ws.clone())
+                        .collect();
+                    drop(st);
+                    for ws in circles {
+                        self.set_circle_mode(&ws, &mode, false);
+                    }
+                    let mut st = self.state.borrow_mut();
+                    if st.rail_filter == state::RailFilter::Mode(mode) {
+                        st.rail_filter = state::RailFilter::All;
+                    }
+                    drop(st);
+                    self.need_rebuild.set(true);
+                    return;
+                }
+            }
+        }
+        if shared {
+            self.save_arrangement();
+        }
         self.need_rebuild.set(true);
     }
 
@@ -1261,6 +1354,9 @@ impl Actions for AppActions {
 
     fn pin_workspace(&self, ws: &str) {
         self.0.pin_workspace(ws);
+    }
+    fn rail(&self, op: app_api::RailOp) {
+        self.0.rail(op);
     }
     fn set_circle_mode(&self, ws: &str, mode: &str, on: bool) {
         self.0.set_circle_mode(ws, mode, on);

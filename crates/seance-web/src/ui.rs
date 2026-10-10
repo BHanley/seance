@@ -105,11 +105,9 @@ use web_sys::{Document, Element, HtmlInputElement, KeyboardEvent, MouseEvent, Wi
 use seance_core::control::ControlRequest;
 use seance_core::protocol::{FsOp, GuiRequest, PaneInfo, PrLink};
 
-use crate::app_api::Actions;
+use crate::app_api::{Actions, RailOp};
 use crate::menus::{close_menu, open_menu, MenuEntry};
-use crate::state::{Attention, ClientState, HostWidget};
-use crate::subs::group_key;
-use seance_core::grouping::{Section, SectionRow};
+use crate::state::{Attention, ClientState, HostWidget, RailFilter};
 
 type ClickClosure = Closure<dyn FnMut(MouseEvent)>;
 type KeyClosure = Closure<dyn FnMut(KeyboardEvent)>;
@@ -590,37 +588,60 @@ impl Chrome {
         state: &ClientState,
         selected: Option<&str>,
     ) -> Result<(), JsValue> {
-        let sections = state.workspace_sections();
         let doc = self.doc.clone();
         self.sidebar.set_inner_html("");
 
         // `◈+` / quicklaunch uniquify against EVERY known circle.
-        let all: Vec<String> = sections.iter().flat_map(|(_, c)| c.clone()).collect();
+        let all: Vec<String> = state.workspaces();
         self.build_brand(state, &all)?;
+        self.build_rail_chips(state)?;
 
         let list = mk(&doc, "div", "ws-list")?;
         self.sidebar.append_child(&list)?;
 
-        if all.is_empty() {
-            let empty = mk(&doc, "div", "empty")?;
-            empty.append_child(text_el(&doc, "div", "", "no workspaces here")?.unchecked_ref())?;
-            {
-                let hint = mk(&doc, "div", "empty-hint")?;
-                hint.append_child(text_el(&doc, "span", "", "run ")?.unchecked_ref())?;
-                hint.append_child(text_el(&doc, "code", "", "seance ctl new")?.unchecked_ref())?;
-                empty.append_child(&hint)?;
-            }
-            list.append_child(&empty)?;
+        // Spaces, then the current space's circles (or a filter's matches).
+        let filtered = state.rail_filter != RailFilter::All;
+        let current = state.current_space();
+        for sp in &state.subs.spaces.list {
+            self.build_space_row(&list, state, sp, !filtered && sp.id == current)?;
         }
+        {
+            let add = text_el(&doc, "div", "space-new", "+ space")?;
+            list.append_child(&add)?;
+            let actions = self.actions.clone();
+            bind_click(&add, &mut self.structural, move |ev| {
+                ev.stop_propagation();
+                if let Some(name) = prompt_text("new space", "") {
+                    actions.rail(RailOp::NewSpace(name));
+                }
+            })?;
+        }
+        list.append_child(mk(&doc, "div", "pin-rule")?.unchecked_ref())?;
 
-        // Bands — top-mode circles (AFK), pinned, then everything else —
-        // each grouping its own circles by name prefix. The only chrome
-        // between them is a rule above each non-empty band after the first.
-        let mut rows_above = false;
-        for (section, circles) in &sections {
-            let rule = rows_above && !circles.is_empty();
-            self.build_section(&list, state, *section, circles, selected, rule)?;
-            rows_above |= !circles.is_empty();
+        let circles = state.visible_workspaces();
+        if circles.is_empty() {
+            let msg = if all.is_empty() {
+                "no workspaces here — run seance ctl new"
+            } else if filtered {
+                "nothing matches"
+            } else {
+                "empty — move a circle here from its menu"
+            };
+            list.append_child(text_el(&doc, "div", "empty-hint", msg)?.unchecked_ref())?;
+        }
+        let space_prefix = if filtered {
+            None
+        } else {
+            state
+                .subs
+                .spaces
+                .get(&current)
+                .and_then(|s| s.prefix.clone())
+        };
+        for ws in &circles {
+            let dim = space_prefix.is_some()
+                && seance_core::spaces::space_prefix(&state.workspace_label(ws)) == space_prefix;
+            self.build_ws_row(&list, state, ws, selected, dim)?;
         }
 
         // Flex filler below the rows.
@@ -738,6 +759,15 @@ impl Chrome {
         // menu can offer each toggle.
         let modes_on = state.circle_modes_of(ws);
         let mode_defs = state.circle_mode_defs.clone();
+        let here = state.subs.spaces.space_of(ws).to_string();
+        let move_targets: Vec<(String, String)> = state
+            .subs
+            .spaces
+            .list
+            .iter()
+            .filter(|s| s.id != here)
+            .map(|s| (s.id.clone(), s.name.clone()))
+            .collect();
 
         let row = mk(&doc, "div", &{
             let mut c = String::from("ws-row");
@@ -768,8 +798,7 @@ impl Chrome {
         )?;
         let label = state.workspace_label(ws);
         self.ws_labels.insert(ws.to_string(), label.clone());
-        // Inside a cluster the shared prefix is already in the header above,
-        // so it recedes rather than being re-read on every row.
+        // A prefix the row's space already names recedes.
         let (head_txt, tail_txt) = match in_cluster.then(|| label.split_once('-')).flatten() {
             Some((h, t)) => (format!("{h}-"), t.to_string()),
             None => (String::new(), label.clone()),
@@ -858,20 +887,31 @@ impl Chrome {
                     let a = actions.clone();
                     let w = ws.clone();
                     entries.push(if pinned {
-                        MenuEntry::item("unpin", move || a.unpin_workspace(&w))
+                        MenuEntry::item("unstar", move || a.unpin_workspace(&w))
                     } else {
-                        MenuEntry::item("pin", move || a.pin_workspace(&w))
+                        MenuEntry::item("★ star", move || a.pin_workspace(&w))
                     });
                 }
-                // Display-only modes (no labels) get no entry.
-                for d in mode_defs.iter().filter(|d| !d.on_label.is_empty()) {
+                // An empty label means that direction isn't offered.
+                for d in mode_defs.iter() {
                     let on = modes_on.iter().any(|m| m.id == d.id);
+                    let label = if on { &d.off_label } else { &d.on_label };
+                    if label.is_empty() {
+                        continue;
+                    }
                     let a = actions.clone();
                     let w = ws.clone();
                     let id = d.id.clone();
-                    let label = if on { &d.off_label } else { &d.on_label };
                     entries.push(MenuEntry::item(label.clone(), move || {
                         a.set_circle_mode(&w, &id, !on)
+                    }));
+                }
+                // WEB DIVERGENCE #2: no drag, so moves live in the menu.
+                for (id, name) in move_targets.iter() {
+                    let a = actions.clone();
+                    let (w, id) = (ws.clone(), id.clone());
+                    entries.push(MenuEntry::item(format!("move to → {name}"), move || {
+                        a.rail(RailOp::MoveToSpace { ws: w, space: id })
                     }));
                 }
                 {
@@ -954,109 +994,161 @@ impl Chrome {
         Ok(())
     }
 
-    /// One band's rows — loose circles at the band indent, clustered ones
-    /// under their prefix header. Bands carry no header of their own;
-    /// `rule_above` draws the only thing separating them.
-    fn build_section(
-        &mut self,
-        list: &Element,
-        state: &ClientState,
-        section: Section,
-        circles: &[String],
-        selected: Option<&str>,
-        rule_above: bool,
-    ) -> Result<(), JsValue> {
-        if circles.is_empty() {
-            return Ok(());
-        }
+    /// all · needs · ★ · one per host mode. Right-click a mode chip to turn
+    /// the mode off for every circle in it.
+    fn build_rail_chips(&mut self, state: &ClientState) -> Result<(), JsValue> {
         let doc = self.doc.clone();
-        let key = section.key().to_string();
-        if rule_above {
-            let rule = mk(&doc, "div", "pin-rule")?;
-            list.append_child(&rule)?;
+        let bar = mk(&doc, "div", "rail-chips")?;
+        self.sidebar.append_child(&bar)?;
+        let ordered = state.workspaces();
+        let mut chips: Vec<(RailFilter, String, String)> = vec![
+            (RailFilter::All, "all".into(), String::new()),
+            (RailFilter::Needs, "needs".into(), String::new()),
+            (RailFilter::Starred, "★".into(), String::new()),
+        ];
+        for d in &state.circle_mode_defs {
+            chips.push((
+                RailFilter::Mode(d.id.clone()),
+                d.label.clone(),
+                d.off_label.clone(),
+            ));
         }
-
-        for row in state.section_rows(circles) {
-            match row {
-                SectionRow::Circle(ws) => {
-                    self.build_ws_row(list, state, &ws, selected, false)?;
-                }
-                SectionRow::Group { prefix, members } => {
-                    let gkey = group_key(&key, &prefix);
-                    let gopen = !state.subs.is_collapsed(&gkey);
-                    let gatt = if gopen {
-                        None
-                    } else {
-                        members
-                            .iter()
-                            .filter_map(|w| state.row_attention(w))
-                            .max_by_key(|a| a.priority())
-                    };
-                    let ghead = self.build_fold_head(
-                        &format!("grp-{gkey}"),
-                        "grp-head",
-                        gopen,
-                        &format!("{prefix} {}", members.len()),
-                        gatt,
-                        &gkey,
-                    )?;
-                    list.append_child(&ghead)?;
-                    if !gopen {
-                        continue;
-                    }
-                    let nest = mk(&doc, "div", "grp-rows")?;
-                    list.append_child(&nest)?;
-                    for ws in &members {
-                        self.build_ws_row(&nest, state, ws, selected, true)?;
-                    }
+        for (filter, label, off_label) in chips {
+            let n = ordered
+                .iter()
+                .filter(|w| state.rail_filter_matches(&filter, w))
+                .count();
+            let mut cls = String::from("rail-chip");
+            if state.rail_filter == filter {
+                cls.push_str(" on");
+            } else if n > 0 && !matches!(filter, RailFilter::All | RailFilter::Starred) {
+                cls.push_str(" hot");
+            }
+            let chip = text_el(&doc, "button", &cls, &format!("{label} {n}"))?;
+            bar.append_child(&chip)?;
+            {
+                let actions = self.actions.clone();
+                let f = filter.clone();
+                bind_click(&chip, &mut self.structural, move |ev| {
+                    ev.stop_propagation();
+                    actions.rail(RailOp::Filter(f.clone()));
+                })?;
+            }
+            if let RailFilter::Mode(id) = filter {
+                if !off_label.is_empty() && n > 0 {
+                    let actions = self.actions.clone();
+                    bind_ctx(&chip, &mut self.structural, move |ev| {
+                        ev.prevent_default();
+                        ev.stop_propagation();
+                        let a = actions.clone();
+                        let id = id.clone();
+                        open_menu(
+                            ev.client_x() as f64,
+                            ev.client_y() as f64,
+                            vec![MenuEntry::item(
+                                format!("{off_label} — all {n}"),
+                                move || a.rail(RailOp::ModeAllOff(id)),
+                            )],
+                        );
+                    })?;
                 }
             }
         }
         Ok(())
     }
 
-    /// A folding header (band or cluster): caret, title, and — while folded —
-    /// one dot for the loudest thing hidden underneath.
-    fn build_fold_head(
+    fn build_space_row(
         &mut self,
-        id: &str,
-        class: &str,
-        open: bool,
-        title: &str,
-        att: Option<Attention>,
-        toggle_key: &str,
-    ) -> Result<Element, JsValue> {
+        list: &Element,
+        state: &ClientState,
+        sp: &seance_core::spaces::Space,
+        current: bool,
+    ) -> Result<(), JsValue> {
         let doc = self.doc.clone();
-        let cls = if open {
-            format!("{class} open")
-        } else {
-            class.to_string()
-        };
-        let head = mk(&doc, "div", &cls)?;
-        head.set_id(id);
-        head.append_child(
-            text_el(&doc, "span", "fold-caret", if open { "▾" } else { "▸" })?.unchecked_ref(),
+        let is_default = state.subs.spaces.default_id() == sp.id;
+        let count = state
+            .subs
+            .spaces
+            .circles_in(&sp.id, &state.workspaces())
+            .len();
+        let row = mk(
+            &doc,
+            "div",
+            if current {
+                "space-row current"
+            } else {
+                "space-row"
+            },
         )?;
-        let (title_text, count_text) = match title.rsplit_once(' ') {
-            Some((t, c)) => (t.to_string(), c.to_string()),
-            None => (title.to_string(), String::new()),
-        };
-        head.append_child(text_el(&doc, "span", "fold-title", &title_text)?.unchecked_ref())?;
-        let (dot_text, dot_class) = match att {
+        let (dot_text, dot_class) = match state.space_attention(&sp.id) {
             Some(Attention::NeedsHuman) => ("●", "fold-dot needs"),
-            Some(Attention::Working) => ("●", "fold-dot working"),
+            Some(Attention::Working) => ("◆", "fold-dot working"),
             Some(Attention::Done) => ("●", "fold-dot done"),
             None => ("", "fold-dot"),
         };
-        head.append_child(text_el(&doc, "span", dot_class, dot_text)?.unchecked_ref())?;
-        head.append_child(text_el(&doc, "span", "fold-count", &count_text)?.unchecked_ref())?;
-        let actions = self.actions.clone();
-        let key = toggle_key.to_string();
-        bind_click(&head, &mut self.structural, move |ev| {
-            ev.stop_propagation();
-            actions.toggle_collapsed(&key);
-        })?;
-        Ok(head)
+        row.append_child(text_el(&doc, "span", dot_class, dot_text)?.unchecked_ref())?;
+        row.append_child(text_el(&doc, "span", "fold-title", &sp.name)?.unchecked_ref())?;
+        if is_default {
+            row.append_child(text_el(&doc, "span", "space-default", "default")?.unchecked_ref())?;
+        }
+        row.append_child(text_el(&doc, "span", "fold-count", &count.to_string())?.unchecked_ref())?;
+        list.append_child(&row)?;
+        {
+            let actions = self.actions.clone();
+            let id = sp.id.clone();
+            bind_click(&row, &mut self.structural, move |ev| {
+                ev.stop_propagation();
+                actions.rail(RailOp::ShowSpace(id.clone()));
+            })?;
+        }
+        {
+            let actions = self.actions.clone();
+            let id = sp.id.clone();
+            let name = sp.name.clone();
+            bind_ctx(&row, &mut self.structural, move |ev| {
+                ev.prevent_default();
+                ev.stop_propagation();
+                let mut entries = Vec::new();
+                {
+                    let (a, id, name) = (actions.clone(), id.clone(), name.clone());
+                    entries.push(MenuEntry::item("rename space", move || {
+                        if let Some(n) = prompt_text("rename space", &name) {
+                            a.rail(RailOp::RenameSpace { id, name: n });
+                        }
+                    }));
+                }
+                {
+                    let a = actions.clone();
+                    entries.push(MenuEntry::item("new space", move || {
+                        if let Some(n) = prompt_text("new space", "") {
+                            a.rail(RailOp::NewSpace(n));
+                        }
+                    }));
+                }
+                for (label, delta) in [("move up", -1), ("move down", 1)] {
+                    let (a, id) = (actions.clone(), id.clone());
+                    entries.push(MenuEntry::item(label, move || {
+                        a.rail(RailOp::ShiftSpace { id, delta })
+                    }));
+                }
+                if !is_default {
+                    {
+                        let (a, id) = (actions.clone(), id.clone());
+                        entries.push(MenuEntry::item("make default", move || {
+                            a.rail(RailOp::SetDefault(id))
+                        }));
+                    }
+                    entries.push(MenuEntry::Separator);
+                    let (a, id) = (actions.clone(), id.clone());
+                    entries.push(MenuEntry::danger(
+                        "delete space (circles go to the default)",
+                        move || a.rail(RailOp::DeleteSpace(id)),
+                    ));
+                }
+                open_menu(ev.client_x() as f64, ev.client_y() as f64, entries);
+            })?;
+        }
+        Ok(())
     }
 
     // ── quicklaunch strip ───────────────────────────────────────────────
@@ -2910,6 +3002,17 @@ fn input_el(doc: &Document, kind: &str, placeholder: &str) -> Result<HtmlInputEl
     el.set_placeholder(placeholder);
     el.set_attribute("spellcheck", "false")?;
     Ok(el)
+}
+
+/// `window.prompt` — `None` on cancel or a blank answer.
+fn prompt_text(message: &str, default: &str) -> Option<String> {
+    let win = web_sys::window()?;
+    let answer = win
+        .prompt_with_message_and_default(message, default)
+        .ok()
+        .flatten()?;
+    let answer = answer.trim().to_string();
+    (!answer.is_empty()).then_some(answer)
 }
 
 fn bind(

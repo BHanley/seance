@@ -10,8 +10,7 @@ use base64::Engine as _;
 use seance_core::protocol::{AskInfo, GuiEvent, PaneInfo, PrLink, StatusInfo, WindowInfo};
 use seance_core::snapshot::{decode_grid_bin_onto, GridSnapshot};
 
-use crate::subs::{group_key, SubPrefs};
-use seance_core::grouping::{Section, SectionRow};
+use crate::subs::SubPrefs;
 
 /// What a folded event dirtied.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -118,6 +117,22 @@ pub struct ClientState {
     /// keeps a quicklaunch pin alive across the `State` that lands before its
     /// spawn does.
     pub absent_since: HashMap<String, u64>,
+    /// Space whose circles the rail lists (None → the selected circle's).
+    pub rail_space: Option<String>,
+    pub rail_filter: RailFilter,
+    /// Space assignments changed on reconcile — shared state, so it goes to
+    /// the daemon (unlike `subs_dirty`, which is local bookkeeping).
+    pub spaces_dirty: bool,
+}
+
+/// What the rail's circle list is narrowed to (native `RailFilter`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum RailFilter {
+    #[default]
+    All,
+    Needs,
+    Starred,
+    Mode(String),
 }
 
 /// One row of the host-bridge widget strip (native `HostWidgetSnap` shape).
@@ -412,29 +427,6 @@ impl ClientState {
     }
 
     /// Bump recency (human typing here / fresh spawn).
-    /// The rail's two bands in display order, each carrying the same sort.
-    pub fn workspace_sections(&self) -> Vec<(Section, Vec<String>)> {
-        let ordered = self.workspaces();
-        let pinned: std::collections::BTreeSet<String> = ordered
-            .iter()
-            .filter(|w| self.subs.is_pinned(w))
-            .cloned()
-            .collect();
-        seance_core::grouping::partition_sections(&ordered, &pinned, &self.top_mode_bands())
-    }
-
-    /// Circles in each host mode marked `top` (AFK, slack thread), one set
-    /// per mode in host order: each leads the rail in its own band.
-    pub fn top_mode_bands(&self) -> Vec<std::collections::BTreeSet<String>> {
-        let top: Vec<&str> = self
-            .circle_mode_defs
-            .iter()
-            .filter(|d| d.top)
-            .map(|d| d.id.as_str())
-            .collect();
-        seance_core::grouping::top_mode_bands(&top, &self.circle_modes)
-    }
-
     /// Optimistic flip of a circle mode, ahead of the daemon's State echo.
     pub fn set_circle_mode_local(&mut self, ws: &str, mode: &str, on: bool) {
         let ids = self.circle_modes.entry(ws.to_string()).or_default();
@@ -458,33 +450,58 @@ impl ClientState {
             .collect()
     }
 
-    /// One band's rows: loose circles and prefix clusters, in sort order.
-    /// Grouping reads the LABEL, so retyping a name is how you regroup.
-    pub fn section_rows(&self, circles: &[String]) -> Vec<SectionRow> {
-        seance_core::grouping::group_by_prefix(circles, |ws| self.workspace_label(ws))
-    }
-
-    /// Every circle the rail is actually SHOWING, in draw order — the
-    /// ctrl+page ring. Folds count, so folding a pile narrows the rotation.
-    pub fn visible_workspaces(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        for (section, circles) in self.workspace_sections() {
-            if circles.is_empty() || self.subs.is_collapsed(section.key()) {
-                continue;
-            }
-            for row in self.section_rows(&circles) {
-                match row {
-                    SectionRow::Circle(ws) => out.push(ws),
-                    SectionRow::Group { prefix, members } => {
-                        let key = group_key(section.key(), &prefix);
-                        if !self.subs.is_collapsed(&key) {
-                            out.extend(members);
-                        }
-                    }
-                }
+    /// The space the rail is showing: picked, else the selected circle's,
+    /// else the default.
+    pub fn current_space(&self) -> String {
+        let spaces = &self.subs.spaces;
+        if let Some(id) = self.rail_space.as_deref() {
+            if spaces.get(id).is_some() {
+                return id.to_string();
             }
         }
-        out
+        match self.selected_workspace.as_deref() {
+            Some(ws) => spaces.space_of(ws).to_string(),
+            None => spaces.default_id().to_string(),
+        }
+    }
+
+    pub fn rail_filter_matches(&self, filter: &RailFilter, ws: &str) -> bool {
+        match filter {
+            RailFilter::All => true,
+            RailFilter::Needs => matches!(self.row_attention(ws), Some(Attention::NeedsHuman)),
+            RailFilter::Starred => self.subs.is_pinned(ws),
+            RailFilter::Mode(id) => self
+                .circle_modes
+                .get(ws)
+                .is_some_and(|m| m.iter().any(|x| x == id)),
+        }
+    }
+
+    /// Every circle the rail is listing, in draw order — the ctrl+page ring.
+    /// Unfiltered: the current space. Filtered: matches from every space.
+    pub fn visible_workspaces(&self) -> Vec<String> {
+        let ordered = self.workspaces();
+        let spaces = &self.subs.spaces;
+        match &self.rail_filter {
+            RailFilter::All => spaces.circles_in(&self.current_space(), &ordered),
+            f => spaces
+                .list
+                .iter()
+                .flat_map(|s| spaces.circles_in(&s.id, &ordered))
+                .filter(|ws| self.rail_filter_matches(f, ws))
+                .collect(),
+        }
+    }
+
+    /// Strongest attention among a space's circles.
+    pub fn space_attention(&self, id: &str) -> Option<Attention> {
+        let ordered = self.workspaces();
+        self.subs
+            .spaces
+            .circles_in(id, &ordered)
+            .iter()
+            .filter_map(|ws| self.row_attention(ws))
+            .max_by_key(|a| a.priority())
     }
 
     /// What to show for a circle: its label, falling back to its slug — which
@@ -752,6 +769,7 @@ impl ClientState {
                 // Rail bookkeeping: first State marks everything known as
                 // looked-at, every State prunes circles that are gone.
                 let known = self.workspaces();
+                let mut space_circles: Vec<String> = known.clone();
                 if self.subs.seeded {
                     // Prune against what the daemon knows PLUS anything only
                     // recently missing: quicklaunch pins the circle the
@@ -765,6 +783,7 @@ impl ClientState {
                         .pinned
                         .iter()
                         .chain(self.subs.seen.iter())
+                        .chain(self.subs.spaces.of.keys())
                         .cloned()
                         .collect();
                     let known_set: std::collections::BTreeSet<String> =
@@ -778,10 +797,22 @@ impl ClientState {
                     .into_iter()
                     .collect();
                     self.subs_dirty |= self.subs.reconcile(&protected);
+                    space_circles = protected;
                 } else {
                     self.subs.seed(&known);
                     self.subs_dirty = true;
                 }
+                // Space bookkeeping covers recently-absent circles too, so a
+                // State that lags a spawn doesn't forget where one lives.
+                let circles: Vec<(String, String)> = space_circles
+                    .into_iter()
+                    .map(|ws| {
+                        let label = self.workspace_label(&ws);
+                        (ws, label)
+                    })
+                    .collect();
+                let focused = self.current_space();
+                self.spaces_dirty |= self.subs.spaces.reconcile(&circles, Some(&focused));
                 self.structure_rev += 1;
                 Applied::Structure
             }
@@ -1317,17 +1348,37 @@ mod tests {
         st.subs.pin("raid");
         assert_eq!(st.pinned_workspaces(), vec!["raid".to_string()]);
         assert_eq!(st.unpinned_active_workspaces(), vec!["lab".to_string()]);
+        // Spaces replaced the pinned band: a star never reorders the ring.
         assert_eq!(
             st.displayed_active_ring(),
-            vec!["raid".to_string(), "lab".to_string()]
+            vec!["lab".to_string(), "raid".to_string()]
         );
-        // Ring == pinned ++ unpinned == render order, and nothing is dropped
-        // or duplicated relative to the flat active list.
+        // One space holds everything here, so the ring is the full list.
         let mut ring = st.displayed_active_ring();
         let mut active = st.active_workspaces();
         ring.sort();
         active.sort();
         assert_eq!(ring, active);
+    }
+
+    #[test]
+    fn the_rail_lists_one_space_and_a_filter_spans_them_all() {
+        let mut st = ClientState::default();
+        st.apply_event(pr_state_event("needs"), 0.0);
+        assert!(st.spaces_dirty, "first State migrates spaces");
+        assert_eq!(st.subs.spaces.space_of("lab"), "general");
+        let other = st.subs.spaces.create("other");
+        st.subs.spaces.move_circle("raid", &other);
+        st.selected_workspace = Some("lab".into());
+        assert_eq!(st.visible_workspaces(), vec!["lab".to_string()]);
+        st.rail_space = Some(other.clone());
+        assert_eq!(st.visible_workspaces(), vec!["raid".to_string()]);
+        st.subs.pin("lab");
+        st.subs.pin("raid");
+        st.rail_filter = RailFilter::Starred;
+        let mut both = st.visible_workspaces();
+        both.sort();
+        assert_eq!(both, vec!["lab".to_string(), "raid".to_string()]);
     }
 
     /// Touches minutes apart still order. Sub-second ones deliberately do not
