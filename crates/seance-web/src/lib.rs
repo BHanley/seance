@@ -510,6 +510,13 @@ impl App {
                     }
                 }
                 RailOp::SetDefault(id) => shared = st.subs.spaces.set_default(&id),
+                RailOp::UnpinAll => {
+                    shared = !st.subs.pinned.is_empty();
+                    st.subs.pinned.clear();
+                    if st.rail_filter == state::RailFilter::Starred {
+                        st.rail_filter = state::RailFilter::All;
+                    }
+                }
                 RailOp::ShiftSpace { id, delta } => {
                     let list = &st.subs.spaces.list;
                     if let Some(i) = list.iter().position(|s| s.id == id) {

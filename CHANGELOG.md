@@ -48,7 +48,8 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
     and everything else goes to `general`.
 - **Filter chips** over the rail: all · pins · one per host circle mode
   (AFK, slack). A filter narrows the list across every space and never moves
-  a circle. A chip with nothing in it doesn't show. **Right-click a mode chip** to turn the mode off for every circle
+  a circle. A chip with nothing in it doesn't show. Right-click **pins** to
+  unpin everything. **Right-click a mode chip** to turn the mode off for every circle
   in it, e.g. "i'm back" to all AFK circles at once.
 - `ctl space [list]`, `ctl space new|rename|rm|default`, and `ctl move
   [CIRCLE] SPACE` edit the same arrangement and push it to every window.

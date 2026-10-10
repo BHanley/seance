@@ -555,6 +555,11 @@ impl SeanceApp {
                             )
                         })
                         .into_any_element(),
+                    RailFilter::Starred if n > 0 => chip
+                        .context_menu(move |menu, _, _| {
+                            menu.menu(format!("unpin all {n}"), Box::new(ActUnpinAll(true)))
+                        })
+                        .into_any_element(),
                     _ => chip.into_any_element(),
                 })
             })

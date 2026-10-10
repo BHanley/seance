@@ -2784,6 +2784,16 @@ impl Render for SeanceApp {
                 this.create_space(window, cx);
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _act: &ActUnpinAll, _, cx| {
+                if !this.subs_pref.pinned.is_empty() {
+                    this.subs_pref.pinned.clear();
+                    this.save_arrangement();
+                }
+                if this.rail_filter == workspaces::RailFilter::Starred {
+                    this.rail_filter = workspaces::RailFilter::All;
+                }
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, act: &ActBanishSpace, window, cx| {
                 this.banish_space_click(&act.0.clone(), window, cx);
                 cx.notify();

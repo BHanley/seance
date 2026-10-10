@@ -1036,6 +1036,21 @@ impl Chrome {
                     actions.rail(RailOp::Filter(f.clone()));
                 })?;
             }
+            if filter == RailFilter::Starred && n > 0 {
+                let actions = self.actions.clone();
+                bind_ctx(&chip, &mut self.structural, move |ev| {
+                    ev.prevent_default();
+                    ev.stop_propagation();
+                    let a = actions.clone();
+                    open_menu(
+                        ev.client_x() as f64,
+                        ev.client_y() as f64,
+                        vec![MenuEntry::item(format!("unpin all {n}"), move || {
+                            a.rail(RailOp::UnpinAll)
+                        })],
+                    );
+                })?;
+            }
             if let RailFilter::Mode(id) = filter {
                 if !off_label.is_empty() && n > 0 {
                     let actions = self.actions.clone();

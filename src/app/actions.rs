@@ -117,6 +117,10 @@ pub struct ActSpaceShift(pub String, pub i32);
 #[action(namespace = seance, no_json)]
 pub struct ActBanishSpace(pub String);
 
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActUnpinAll(pub bool);
+
 /// (circle, space id).
 #[derive(Action, Clone, PartialEq, Deserialize)]
 #[action(namespace = seance, no_json)]
