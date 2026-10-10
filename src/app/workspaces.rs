@@ -417,10 +417,10 @@ impl SeanceApp {
         }
     }
 
-    /// Rows the rail scroller emits above the circle list: one per space, the
-    /// "+ space" row, and the rule.
+    /// Rows the rail scroller emits above the circle list: one per space and
+    /// the divider.
     pub(super) fn rail_rows_above_circles(&self) -> usize {
-        self.subs_pref.spaces.list.len() + 2
+        self.subs_pref.spaces.list.len() + 1
     }
 
     /// Bring a circle's row into view: switch the rail to its space (unless a

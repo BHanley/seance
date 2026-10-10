@@ -605,17 +605,6 @@ impl Chrome {
         for sp in &state.subs.spaces.list {
             self.build_space_row(&list, state, sp, !filtered && sp.id == current)?;
         }
-        {
-            let add = text_el(&doc, "div", "space-new", "+ space")?;
-            list.append_child(&add)?;
-            let actions = self.actions.clone();
-            bind_click(&add, &mut self.structural, move |ev| {
-                ev.stop_propagation();
-                if let Some(name) = prompt_text("new space", "") {
-                    actions.rail(RailOp::NewSpace(name));
-                }
-            })?;
-        }
         list.append_child(mk(&doc, "div", "pin-rule")?.unchecked_ref())?;
 
         let circles = state.visible_workspaces();
@@ -663,8 +652,23 @@ impl Chrome {
         mark.set_attribute("title", "connected guis")?;
         head.append_child(&mark)?;
         head.append_child(text_el(&doc, "span", "brand-name", "seance")?.unchecked_ref())?;
-        let new_ws = text_el(&doc, "button", "brand-new", "◈+")?;
-        new_ws.set_attribute("title", "new empty workspace (name it immediately)")?;
+        let new_space = text_el(&doc, "button", "brand-new", "+ space")?;
+        new_space.set_attribute("title", "new space")?;
+        head.append_child(&new_space)?;
+        {
+            let actions = self.actions.clone();
+            bind_click(&new_space, &mut self.structural, move |ev| {
+                ev.stop_propagation();
+                if let Some(name) = prompt_text("new space", "") {
+                    actions.rail(RailOp::NewSpace(name));
+                }
+            })?;
+        }
+        let new_ws = text_el(&doc, "button", "brand-new", "+ circle")?;
+        new_ws.set_attribute(
+            "title",
+            "new empty circle in this space (name it immediately)",
+        )?;
         head.append_child(&new_ws)?;
         self.sidebar.append_child(&head)?;
 

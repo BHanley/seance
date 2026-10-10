@@ -769,32 +769,6 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    fn render_new_space_row(&self, cx: &Context<Self>) -> gpui::AnyElement {
-        div()
-            .id("space-new")
-            .drag_over::<DraggedSpace>(|style, _, _, _| style.bg(SeancePalette::violet_dim()))
-            .on_drop(cx.listener(|this, drag: &DraggedSpace, _, cx| {
-                if this.subs_pref.spaces.reorder(&drag.id, None) {
-                    this.save_arrangement();
-                }
-                cx.notify();
-            }))
-            .h(px(22.))
-            .pl(px(8. + GLYPH_W))
-            .flex()
-            .items_center()
-            .text_xs()
-            .cursor_pointer()
-            .text_color(SeancePalette::text_faint())
-            .hover(|s| s.text_color(SeancePalette::flame()))
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.create_space(window, cx);
-                cx.notify();
-            }))
-            .child("+ space")
-            .into_any_element()
-    }
-
     /// The rail's lower tier: the current space's circles, or every match
     /// for an active filter.
     fn render_circle_list(&self, cx: &Context<Self>) -> Vec<gpui::AnyElement> {
@@ -1198,14 +1172,23 @@ impl SeanceApp {
             .iter()
             .map(|sp| self.render_space_row(sp, !filtered && sp.id == current, cx))
             .collect();
-        rail_rows.push(self.render_new_space_row(cx));
+        // The divider doubles as "drop here to move a space to the end".
         rail_rows.push(
             div()
+                .id("space-end")
                 .flex_none()
-                .my(px(4.))
-                .h(px(1.))
+                .h(px(9.))
                 .w_full()
-                .bg(SeancePalette::border())
+                .flex()
+                .items_center()
+                .drag_over::<DraggedSpace>(|style, _, _, _| style.bg(SeancePalette::violet_dim()))
+                .on_drop(cx.listener(|this, drag: &DraggedSpace, _, cx| {
+                    if this.subs_pref.spaces.reorder(&drag.id, None) {
+                        this.save_arrangement();
+                    }
+                    cx.notify();
+                }))
+                .child(div().h(px(1.)).w_full().bg(SeancePalette::border()))
                 .into_any_element(),
         );
         rail_rows.extend(self.render_circle_list(cx));
@@ -1263,6 +1246,23 @@ impl SeanceApp {
                     )
                     .child(
                         div()
+                            .id("new-space")
+                            .flex_none()
+                            .px_1p5()
+                            .rounded_md()
+                            .text_xs()
+                            .text_color(SeancePalette::violet_dim())
+                            .hover(|s| s.text_color(SeancePalette::violet()).bg(SeancePalette::surface()))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.create_space(window, cx);
+                                cx.notify();
+                            }))
+                            .tooltip(tip("new space (name it immediately)"))
+                            .child("+ space"),
+                    )
+                    .child(
+                        div()
                             .id("new-workspace")
                             .flex_none()
                             .px_1p5()
@@ -1274,8 +1274,8 @@ impl SeanceApp {
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.create_workspace(window, cx);
                             }))
-                            .tooltip(tip("new empty workspace (name it immediately)"))
-                            .child("◈+"),
+                            .tooltip(tip("new empty circle in this space (name it immediately)"))
+                            .child("+ circle"),
                     ),
             )
             .child(self.render_rail_chips(cx))
