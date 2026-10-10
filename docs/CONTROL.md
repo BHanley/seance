@@ -250,6 +250,8 @@ accepted but delivery not confirmed.
 | `whoami` | principal + session + active `task_id` |
 | `doctor` / `skill` / `help` | profiles + agent contract |
 | `pr-link` | `seance ctl pr-link add WORKSPACE URL` · `pr-link clear WORKSPACE [URL]` |
+| `space` | `seance ctl space [list]` · `space new NAME` · `space rename SPACE NAME` · `space rm SPACE` · `space default SPACE` — the rail's spaces (0.27) |
+| `move` | `seance ctl move [CIRCLE] SPACE` — put a circle in a space by hand (sticky); omit CIRCLE inside a pane for your own |
 
 Notes:
 

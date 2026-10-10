@@ -221,6 +221,11 @@ impl SeanceApp {
             .iter()
             .map(|ws| (ws.clone(), self.workspace_label(ws)))
             .collect();
+        // Freeze the view once: a fresh circle is selected before it has a
+        // space, and following the selection then would send it to the default.
+        if self.rail_space.is_none() {
+            self.rail_space = Some(self.current_space());
+        }
         let focused = self.current_space();
         if self.subs_pref.spaces.reconcile(&circles, Some(&focused)) {
             if self.rail_loaded {
@@ -413,7 +418,8 @@ impl SeanceApp {
     /// Called on every select, so ctrl+page cycling, a jump, and a host menu
     /// creating a circle all land the same way.
     pub(super) fn reveal_workspace_row(&mut self, workspace: &str) {
-        if !self.visible_workspaces().iter().any(|w| w == workspace) {
+        let assigned = self.subs_pref.spaces.of.contains_key(workspace);
+        if assigned && !self.visible_workspaces().iter().any(|w| w == workspace) {
             self.rail_filter = RailFilter::All;
             self.rail_space = Some(self.subs_pref.spaces.space_of(workspace).to_string());
         }

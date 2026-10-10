@@ -17,7 +17,53 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.27.0] — 2026-10-10
+
 ### Added
+
+- **Spaces: the rail's top tier.** The rail lists spaces first, one line
+  each with a spinner or dot for anything happening inside and a count. Below
+  them it lists the circles of the space on screen. Click a space to show it.
+  Drag a circle's row onto a space to move it. The web and phone clients do
+  the same from the row menu and the circle sheet ("move to space"). Spaces
+  live in the shared rail arrangement (`subscriptions.json` → `spaces`), so
+  every window agrees. The model is `seance-core/src/spaces.rs`:
+  - One space is the **default** (`general` at first). It can be renamed,
+    never deleted, and it catches anything without a better home. Deleting a
+    space sends its circles there.
+  - A label prefix still routes circles: a space whose prefix matches catches
+    them, and a prefix that ≥2 circles share mints an **auto** space. Generated
+    names like `claude-49` never count. A circle you move by hand stays put;
+    a prefix never moves it again. An auto space disappears when it empties.
+    Renaming one keeps it and keeps its prefix as an alias (rename `mtg` to
+    "meetings" and `mtg-*` circles still land there).
+  - New circles land in the space on screen.
+  - Upgrading guesses nothing. Existing ≥2-prefix clusters become auto spaces,
+    and everything else goes to `general`.
+- **Filter chips** over the rail: all · needs · ★ · one per host circle mode
+  (AFK, slack). A filter narrows the list across every space and never moves
+  a circle. **Right-click a mode chip** to turn the mode off for every circle
+  in it, e.g. "i'm back" to all AFK circles at once.
+- `ctl space [list]`, `ctl space new|rename|rm|default`, and `ctl move
+  [CIRCLE] SPACE` edit the same arrangement and push it to every window.
+- Host circle modes can be **off-only**: set just `off_label` + `off_prompt`
+  on a host-owned mode to offer the way out without offering the way in
+  (docs/HOST.md).
+
+### Changed
+
+- **Pins are stars.** The pinned band is gone. ★ (ctrl+shift+p, the row
+  menu, the phone sheet) only marks a circle for the ★ filter and doesn't
+  move it. Existing pins carry over as stars.
+- Prefix clusters and their folds are gone; spaces replaced them.
+- Host modes no longer get bands above the rail, so `top` is ignored. Their
+  circles show under their chip.
+- Quicklaunch and host-menu circles no longer arrive pinned. They land in the
+  space on screen. A host menu result can still say `"pin": true`.
+- ctrl+page, ctrl+shift+1…9 and ctrl+shift+home walk the rail's list: the
+  space on screen, or the active filter.
+
+### Added (earlier, unreleased until now)
 
 - **codex and grok panes come back on their own conversation** after a daemon
   crash, an OOM, or a sleep/wake, the way claude panes already did. grok gets

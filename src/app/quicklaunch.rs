@@ -606,11 +606,6 @@ impl SeanceApp {
                     },
                     cx,
                 );
-                // Launched circles arrive PINNED. You pressed a button to
-                // start this thing; it belongs at the top of the rail until
-                // you say otherwise, not sorted in among circles you last
-                // touched days ago. (Host-menu chips already work this way.)
-                this.pin_workspace(&ws);
             }))
             .context_menu(move |menu, _, _| {
                 menu.menu("edit…", Box::new(ActQuickLaunchEdit(menu_name.clone())))

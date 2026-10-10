@@ -1051,14 +1051,18 @@ pub(super) fn render_help() -> gpui::AnyElement {
             "rename selected workspace (enter commits, focus returns to pane)",
         ))
         .child(row("ctrl+shift+s", "flip notes on the active pane / flip back"))
-        .child(row("ctrl+shift+p", "pin / unpin the selected workspace"))
+        .child(row("ctrl+shift+p", "★ star / unstar the selected circle"))
         .child(row(
             "ctrl+shift+home",
-            "jump to the top of the rail (first pinned, else top of active)",
+            "jump to the first circle in the rail's list",
         ))
         .child(row(
             "ctrl+shift+1 … 9",
-            "jump to the nth circle down the rail (1 = the top row)",
+            "jump to the nth circle in the rail's list (the space on screen, or the filter)",
+        ))
+        .child(row(
+            "rail",
+            "spaces on top, their circles below · drag a circle onto a space to move it · chips filter",
         ))
         .child(row("ctrl+shift+o", "pop active pane out / return to the circle"))
         .child(row("ctrl+shift+k", "precanned prompt palette"))

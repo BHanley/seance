@@ -113,8 +113,8 @@ already grouped.
 | `ok: false` | treated as failure even on exit 0; `error` is the toast |
 | `error` | failure text (falls back to the command's stderr) |
 | `message` | success toast (defaults to the item's label) |
-| `workspace` | **menus only**: seance pins and selects this circle — how a host that just spawned one gets the rail to follow |
-| `pin` | **menus only**: `false` to land the circle in the normal band instead of pinned (default is pinned) |
+| `workspace` | **menus only**: seance selects this circle — how a host that just spawned one gets the rail to follow. It lands in the space on screen unless its label prefix routes it |
+| `pin` | **menus only**: `true` also stars it (★). Default off since 0.27 |
 
 A non-zero exit, or `ok:false`, keeps the dropdown open with the reason under
 it, so the human can read it and pick again.
@@ -156,8 +156,9 @@ terminal; a `ctl lead` override does not apply), turning it off sends
 `off_prompt`. Both go through the message queue, so they wait out a busy
 turn rather than interleaving with it. The daemon persists which circles are
 in which mode (`state.json`, survives upgrade); clients show a badge with
-`label`, a violet edge, and — for `top: true` — a band above everything else,
-pins included.
+`label`, a violet edge, and a filter chip at the top of the rail. Right-click
+the chip to send `off_label`/`off_prompt` to every circle in the mode at once
+("i'm back" to all AFK circles).
 
 ```json
 "circle_modes": [
@@ -190,19 +191,24 @@ put.
 
 A mode whose state only the host can change is **display-only**: leave out
 all four toggle fields (`on_label`, `off_label`, `on_prompt`, `off_prompt`)
-and give it a `state_cmd`. It gets a badge and its own band, but no menu
-entry. vita's slack one:
+and give it a `state_cmd`. It gets a badge and a chip, but no menu entry.
+
+**Off-only** (0.27): a host-owned mode can still offer the way out — set just
+`off_label` + `off_prompt`. The row menu and the chip then offer "turn off",
+never "turn on". vita's slack one:
 
 ```json
-{"id": "slack", "label": "slack", "top": true, "poll_secs": 20,
+{"id": "slack", "label": "slack", "poll_secs": 20,
+ "off_label": "disconnect slack thread",
+ "off_prompt": "disconnect from the cadence slack thread",
  "state_cmd": "python3 /home/zack/work/vita/scripts/seance_host_slack.py list"}
 ```
 
 That script pairs `cadence slack status` (active claims) with running
 `cadence slack await` processes, whose `$SEANCE_SESSION` names the pane.
 
-Each `top` mode gets its own band, in host.json order, above the pins. A
-circle in two top modes sits in the first one's band.
+`top` is accepted and ignored since 0.27: modes are filter chips now, and a
+filter never moves a circle.
 
 An entry with no id or label is dropped, and so is one with only some of
 the toggle fields, unless it has a `state_cmd`. With no `circle_modes`, there's

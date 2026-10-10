@@ -377,10 +377,9 @@ impl SeanceApp {
                                 cx,
                             );
                             if let Some(ws) = res.workspace.filter(|w| !w.is_empty()) {
-                                // Pin before select: the circle is already in
-                                // its band when the selection lands on it, so
-                                // the rail doesn't visibly reshuffle underneath.
-                                if res.pin.unwrap_or(true) {
+                                // `pin: true` stars it; it lands in the
+                                // focused space either way.
+                                if res.pin == Some(true) {
                                     app.pin_workspace(&ws);
                                 }
                                 app.select_workspace(&ws, window, cx);

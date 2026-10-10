@@ -23,8 +23,7 @@ pub enum ChromeCommand {
     ToggleHelp,
     ToggleActivity,
     ToggleProbe,
-    /// Jump to the rail's top row — first pinned circle if any, else the top
-    /// of active, and so on down the bands.
+    /// Jump to the first circle in the rail's list.
     SelectTopWorkspace,
     /// Jump to rail row N (0-based; ctrl+shift+1..9).
     SelectNthWorkspace(usize),

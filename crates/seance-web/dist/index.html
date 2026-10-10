@@ -56,6 +56,8 @@
         seance_mobile_banish_workspace,
         seance_mobile_circle_modes,
         seance_mobile_set_circle_mode,
+        seance_mobile_spaces,
+        seance_mobile_move_to_space,
       } from './seance_web.js';
       await init();
       // The phone chrome below is plain JS and can't reach the websocket —
@@ -73,6 +75,8 @@
         banish: seance_mobile_banish_workspace,
         circleModes: seance_mobile_circle_modes,
         setCircleMode: seance_mobile_set_circle_mode,
+        spaces: seance_mobile_spaces,
+        moveToSpace: seance_mobile_move_to_space,
       };
       window.dispatchEvent(new Event('seance-ready'));
     </script>
@@ -246,15 +250,16 @@
         nameSave.type = 'button';
         menuName.appendChild(nameInput);
         menuName.appendChild(nameSave);
-        // Pin: the desktop's is a right-click on a rail row, which a finger
-        // has no spelling for — so a circle launched from the phone (they
-        // launch pinned) could never be put back once it slipped.
+        // Star + space moves: the desktop's are a right-click on a rail row,
+        // which a finger has no spelling for.
         var menuRailHead = mk('div', null, 'm-menu-sec', 'rail');
-        var pinBtn = mk('button', 'm-menu-pin', 'm-sheet-btn', 'pin to top');
+        var pinBtn = mk('button', 'm-menu-pin', 'm-sheet-btn', '★ star');
         pinBtn.type = 'button';
         // Host circle modes (AFK) — one toggle each, only when host.json
         // defines any. The daemon prompts the circle's first pane.
         var modeBtns = mk('div', 'm-menu-modes');
+        var menuSpacesHead = mk('div', null, 'm-menu-sec', 'move to space');
+        var spaceBtns = mk('div', 'm-menu-spaces');
         var menuPrsHead = mk('div', null, 'm-menu-sec', 'pull requests');
         var menuPrs = mk('div', 'm-menu-prs');
         var menuConnHead = mk('div', null, 'm-menu-sec', 'connection');
@@ -274,6 +279,8 @@
           menuRailHead,
           pinBtn,
           modeBtns,
+          menuSpacesHead,
+          spaceBtns,
           menuPrsHead,
           menuPrs,
           menuConnHead,
@@ -332,9 +339,31 @@
           // rather than showing one that does nothing.
           pinBtn.hidden = on === undefined;
           menuRailHead.hidden = on === undefined;
-          pinBtn.textContent = on ? 'unpin' : 'pin to top';
+          pinBtn.textContent = on ? 'unstar' : '★ star';
           pinBtn.classList.toggle('on', !!on);
           paintModes();
+          paintSpaces();
+        }
+        function paintSpaces() {
+          spaceBtns.textContent = '';
+          var spaces = [];
+          try {
+            spaces = window.seanceMobile ? JSON.parse(window.seanceMobile.spaces()) : [];
+          } catch (_) {}
+          var others = spaces.filter(function (s) { return !s.here; });
+          menuSpacesHead.hidden = others.length === 0;
+          others.forEach(function (s) {
+            var b = mk('button', null, 'm-sheet-btn', s.name);
+            b.type = 'button';
+            b.addEventListener('click', function (e) {
+              e.preventDefault();
+              if (window.seanceMobile && window.seanceMobile.moveToSpace(s.id)) {
+                paintSpaces();
+                toast('moved to ' + s.name);
+              }
+            });
+            spaceBtns.appendChild(b);
+          });
         }
         function paintModes() {
           modeBtns.textContent = '';
@@ -365,7 +394,7 @@
           if (was === undefined) return;
           var now = window.seanceMobile.setPinned(!was);
           paintPin();
-          toast(now ? 'pinned to the top' : 'unpinned');
+          toast(now ? 'starred' : 'unstarred');
         });
         nameSave.addEventListener('click', function (e) {
           e.preventDefault();

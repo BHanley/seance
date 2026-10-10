@@ -2423,3 +2423,11 @@ body.m-kb-open #m-bar {
 .space-new:hover {
   color: var(--flame);
 }
+#m-menu-spaces {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+#m-menu-spaces:empty {
+  display: none;
+}

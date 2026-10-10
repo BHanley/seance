@@ -1325,20 +1325,14 @@ impl Actions for AppActions {
             file: None,
             tiled: true,
         });
-        // Land in the fresh circle when its pane arrives, PINNED: you pressed
-        // a button to start this thing, so it belongs at the top of the rail
-        // until you say otherwise (pin implies active — native twin does the
-        // same in app/quicklaunch.rs).
+        // Land in the fresh circle when its pane arrives; it joins the space
+        // on screen (reconcile's focused space), so hold the view there.
         {
             let mut st = self.0.state.borrow_mut();
-            st.subs.pin(&ws);
+            let here = st.current_space();
+            st.rail_space = Some(here);
             st.selected_workspace = Some(ws);
         }
-        // Through the daemon, like any other pin: a circle launched from the
-        // phone should be pinned at the desk too. The pin references a circle
-        // the daemon hasn't minted yet — `settle_absent` is what stops the
-        // next `State` from pruning it straight back off.
-        self.0.save_arrangement();
         self.0.need_rebuild.set(true);
     }
 
@@ -1863,7 +1857,13 @@ pub fn seance_mobile_circle_modes() -> String {
         let rows: Vec<serde_json::Value> = st
             .circle_mode_defs
             .iter()
-            .filter(|d| !d.on_label.is_empty())
+            .filter(|d| {
+                if on.contains(&d.id) {
+                    !d.off_label.is_empty()
+                } else {
+                    !d.on_label.is_empty()
+                }
+            })
             .map(|d| {
                 serde_json::json!({
                     "id": d.id,
@@ -1877,6 +1877,48 @@ pub fn seance_mobile_circle_modes() -> String {
         serde_json::Value::Array(rows).to_string()
     })
     .unwrap_or_else(|| "[]".to_string())
+}
+
+/// Spaces for the phone sheet's "move to" row: `[{id, name, here}]`.
+#[wasm_bindgen]
+pub fn seance_mobile_spaces() -> String {
+    with_mobile_app(|app| {
+        let st = app.state.borrow();
+        let here = app
+            .selected_workspace()
+            .map(|ws| st.subs.spaces.space_of(&ws).to_string());
+        let rows: Vec<serde_json::Value> = st
+            .subs
+            .spaces
+            .list
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "id": s.id,
+                    "name": s.name,
+                    "here": here.as_deref() == Some(s.id.as_str()),
+                })
+            })
+            .collect();
+        serde_json::Value::Array(rows).to_string()
+    })
+    .unwrap_or_else(|| "[]".to_string())
+}
+
+/// Move the selected circle to a space.
+#[wasm_bindgen]
+pub fn seance_mobile_move_to_space(space: &str) -> bool {
+    with_mobile_app(|app| {
+        let Some(ws) = app.selected_workspace() else {
+            return false;
+        };
+        app.rail(app_api::RailOp::MoveToSpace {
+            ws,
+            space: space.to_string(),
+        });
+        true
+    })
+    .unwrap_or(false)
 }
 
 /// Turn a host circle mode on/off for the selected circle.

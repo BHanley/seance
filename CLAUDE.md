@@ -43,6 +43,9 @@ crates/seance-core/    sans-io shared crate — MUST compile native AND wasm32:
                        links.rs (the URL under a cell — OSC-8 span, else a
                        bare http(s) run stitched across hard wraps; native
                        ctrl+click and the web's tap/ctrl+click share it).
+                       spaces.rs (the rail's spaces model — default space,
+                       prefix routing, sticky hand moves; native, web and
+                       `ctl space` all edit it inside the rail blob).
                        util.rs also holds the rail's shared rules:
                        settle_absent (pins for circles the daemon hasn't
                        confirmed) + rail_prefs_is_foreign (own-echo guard)
@@ -67,8 +70,8 @@ src/app/               the GPUI app, split by surface:
   chrome.rs            render_pane, help overlay, asks/activity/stage strips
   pads.rs              scratchpad drawer + phone-bind path for status bridge
   overview.rs          ctrl+shift+space live map
-  sidebar.rs           left rail: pinned rows above a rule, everything else below,
-                       context menus, host list
+  sidebar.rs           left rail: filter chips, spaces, then the circles of the
+                       space on screen; context menus, host list
   tiles.rs             tile grid + sashes + zoom
   palette.rs           command palette
   quicklaunch.rs       launch strip: quicklaunch chips + create/edit modal
@@ -107,7 +110,7 @@ src/mdfold.rs          markdown section folding — a PURE model over the source
                        (path-keyed folds, `seance-h` fences the pane renders
                        itself). Deliberately not a fork of gpui-component's
                        markdown stack; see docs/FILE-PANES.md
-src/subscriptions_pref.rs  rail arrangement (pins/seen/folds) — DAEMON-owned
+src/subscriptions_pref.rs  rail arrangement (stars/seen/spaces) — DAEMON-owned
                        since 0.23 via FsOp::SubsLoad/SubsSave; the local
                        ~/.config/seance/subscriptions.json is only the Attach
                        seed cache. Changes broadcast as GuiEvent::RailPrefs

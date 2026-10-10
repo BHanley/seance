@@ -1,4 +1,4 @@
-//! Pinned/seen/folds rail arrangement — the shape of this module, not its
+//! Stars/seen/spaces rail arrangement — the shape of this module, not its
 //! storage. **The daemon owns the arrangement** (`FsOp::SubsLoad/SubsSave`,
 //! beside `layout.json` in its state dir), so the circles you keep in front of
 //! you follow you to any window: desk, mac thin client, browser. Changing it
@@ -12,17 +12,10 @@
 //! and its park verb were removed in 0.26: every window subscribes to every
 //! circle, so an `active` key in an older blob parses and is discarded.
 //!
-//! Shape: `{ "seen": [...], "pinned": [...], "collapsed": [...],
-//! "flipped": "slug" }`.
-//! - `seen` — every workspace this GUI has selected at least once (plus
-//!   everything that already existed on first run). One that appears without
-//!   ever being selected badges `needs` — that's a ctl-spawned circle you
-//!   haven't looked at.
-//! - `pinned` — rendered in its own section at the very top of the rail, above
-//!   a divider. Same internal sort as every other band.
-//! - `collapsed` — folded rail nodes; this is the whole organization story now
-//!   that park is gone. Fold a band or a prefix cluster to get it out of the
-//!   way.
+//! Shape: `{ "seen": [...], "pinned": [...], "spaces": {...}, "flipped":
+//! "slug" }`. `pinned` is the ★ set (0.27; the pinned band is gone), `spaces`
+//! is `seance_core::spaces::Spaces`. `seen` marks circles this GUI has
+//! selected; one that appears without ever being selected badges `needs`.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;

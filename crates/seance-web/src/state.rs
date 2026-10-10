@@ -811,6 +811,9 @@ impl ClientState {
                         (ws, label)
                     })
                     .collect();
+                if self.rail_space.is_none() {
+                    self.rail_space = Some(self.current_space());
+                }
                 let focused = self.current_space();
                 self.spaces_dirty |= self.subs.spaces.reconcile(&circles, Some(&focused));
                 self.structure_rev += 1;
