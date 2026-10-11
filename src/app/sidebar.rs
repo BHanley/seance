@@ -564,6 +564,10 @@ impl SeanceApp {
                 })
             })
             .collect();
+        // "all" alone filters nothing; give the rail its row back.
+        if els.len() <= 1 {
+            return div().into_any_element();
+        }
         div()
             .flex_none()
             .px_2()

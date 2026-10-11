@@ -1002,9 +1002,17 @@ impl Chrome {
     /// mode chip to turn the mode off for every circle in it.
     fn build_rail_chips(&mut self, state: &ClientState) -> Result<(), JsValue> {
         let doc = self.doc.clone();
+        let ordered = state.workspaces();
+        // "all" alone filters nothing; give the rail its row back.
+        let shown = state.rail_filter != RailFilter::All
+            || ordered.iter().any(|w| {
+                state.subs.is_pinned(w) || state.circle_modes.get(w).is_some_and(|m| !m.is_empty())
+            });
+        if !shown {
+            return Ok(());
+        }
         let bar = mk(&doc, "div", "rail-chips")?;
         self.sidebar.append_child(&bar)?;
-        let ordered = state.workspaces();
         let mut chips: Vec<(RailFilter, String, String)> = vec![
             (RailFilter::All, "all".into(), String::new()),
             (RailFilter::Starred, "pins".into(), String::new()),
