@@ -53,7 +53,7 @@ the keyboard). Point `--command` at whatever agent CLI you use.
 ## Features
 
 - **Live multi-pane terminals** — real PTYs, selection, scrollback; weighted tile grid with drag sashes (n≥2)
-- **Workspaces** — keep circles of work apart; resize the desktop sidebar by dragging its right edge. Right-click a prefix group → rename group (e.g. `paceline-*` → `pl-*`), preserving suffixes and running sessions.
+- **Spaces** — the rail lists spaces, then the circles in the one you're looking at. Drag a circle onto a space to move it; drag spaces to reorder them. A label prefix shared by two circles (`mtg-ai`, `mtg-carl`) makes a space on its own; a circle you move by hand stays put. One space is the default and catches everything else. Filter chips (pins, AFK, slack…) narrow the list across spaces without moving anything. `ctl space` / `ctl move` do the same from scripts.
 - **Notes on the back of every pane** — shared markdown (`$SEANCE_SCRATCHPAD`)
 - **Pad drawer** — stage chip / ▤ shows task inject body + pad tail (live-refreshes)
 - **Stage strip** — urgency-sorted roster chips (click focus+pad, double-click zoom)
@@ -168,9 +168,9 @@ attention routing free.
 | ctrl+shift+n | new pane (shell by default) |
 | ctrl+shift+w | banish (kill) active pane |
 | ctrl+shift+s | flip notes ↔ face |
-| ctrl+shift+p | pin / unpin selected workspace |
-| ctrl+shift+home | jump to top of the rail (first pinned, else top active) |
-| ctrl+shift+1 … 9 | jump to the nth circle down the rail |
+| ctrl+shift+p | pin / unpin selected circle (shows under the pins chip) |
+| ctrl+shift+home | jump to the first circle in the rail's list |
+| ctrl+shift+1 … 9 | jump to the nth circle in the rail's list |
 | ctrl+shift+o | pop pane to its own window |
 | ctrl+shift+k | precanned prompt palette |
 | ctrl+shift+j | fuzzy jump (workspace) |
@@ -178,7 +178,7 @@ attention routing free.
 | ctrl+shift+space | overview (live map) |
 | ctrl+shift+r | rename selected workspace |
 | ctrl+shift+f | last failed shell command |
-| ctrl+pageup / pagedown | cycle workspaces |
+| ctrl+pageup / pagedown | cycle circles in the rail's list |
 | ctrl+shift+pageup / pagedown | cycle panes in this workspace |
 | ctrl+shift+v | paste |
 | ctrl+click / middle-click | open OSC-8 / URL in the default browser |
@@ -188,7 +188,11 @@ attention routing free.
 | ⚡ | arm agent (`ctl skill` orientation) |
 | ▤ | pad drawer |
 | sidebar right-edge drag | resize sidebar (width persists) |
-| group right-click → rename group | replace the prefix across pinned and unpinned workspaces |
+| click a space | show it and select its first circle |
+| drag a circle onto a space | move it there (sticky) |
+| drag a space onto another | reorder spaces (onto the divider = to the end) |
+| space right-click | rename · make default · banish all · delete |
+| chip right-click | pins: unpin all · a host mode: turn it off for every circle in it |
 | sash drag | resize 2-pane ratio or multi-pane weights |
 
 ## Architecture (short)

@@ -119,9 +119,9 @@ the neutral backfill on boot deliberately do not.
 same idiom as the host-widget poller), merges verdicts onto URLs it already
 scraped — never adding new ones — and pushes state when something actually
 changed. Malformed entries are dropped individually, so a poller bug can't
-blank every chip. `attention: "needs"` folds into the normal workspace
-attention machinery (a folded-away circle lights its band dot); `done` reads as
-resolved. Config seam, quicklaunch-style: swap the poller, keep the daemon.
+blank every chip. `attention: "needs"` colors the PR chips and the PR board
+(the rail has no needs state since 0.27); `done` lights the circle's row and
+its space as finished. Config seam, quicklaunch-style: swap the poller, keep the daemon.
 
 ## Layout on disk
 

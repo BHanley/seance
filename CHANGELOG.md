@@ -17,7 +17,7 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
-## [0.27.0] — 2026-10-10
+## [0.27.0] — 2026-10-11
 
 ### Added
 
@@ -39,7 +39,8 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
     "meetings" and `mtg-*` circles still land there).
   - New circles land in the space on screen.
   - Clicking a space selects its first circle.
-  - Drag a space onto another to reorder (drop on "+ space" for the end).
+  - Drag a space onto another to reorder (drop on the divider under the
+    spaces to send it to the end).
     Spaces never auto-sort; only circles do, inside a space. The web uses
     move up/down instead.
   - Right-click a space → **banish all** kills every circle in it, after a
@@ -48,9 +49,10 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
     and everything else goes to `general`.
 - **Filter chips** over the rail: all · pins · one per host circle mode
   (AFK, slack). A filter narrows the list across every space and never moves
-  a circle. A chip with nothing in it doesn't show. Right-click **pins** to
-  unpin everything. **Right-click a mode chip** to turn the mode off for every circle
-  in it, e.g. "i'm back" to all AFK circles at once.
+  a circle. A chip with nothing in it doesn't show, and the bar disappears
+  when "all" would be the only chip. Right-click **pins** to unpin
+  everything. **Right-click a mode chip** to turn the mode off for every
+  circle in it, e.g. "i'm back" to all AFK circles at once.
 - `ctl space [list]`, `ctl space new|rename|rm|default`, and `ctl move
   [CIRCLE] SPACE` edit the same arrangement and push it to every window.
 - Host circle modes can be **off-only**: set just `off_label` + `off_prompt`
@@ -72,6 +74,7 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   instead of replacing it.
 - Host modes no longer get bands above the rail, so `top` is ignored. Their
   circles show under their chip.
+- The header's `◈+` is now **`+ space` `+ circle`**.
 - Quicklaunch and host-menu circles no longer arrive pinned. They land in the
   space on screen. A host menu result can still say `"pin": true`.
 - ctrl+page, ctrl+shift+1…9 and ctrl+shift+home walk the rail's list: the

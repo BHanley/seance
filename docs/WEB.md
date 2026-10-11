@@ -49,10 +49,10 @@ browser (wasm)                      native
   nothing per frame.
 - **Windows**: a web attach is a normal second GUI window. Nothing is owned,
   and the browser subscribes to every circle, so the same circle can be live in
-  the browser and on the desktop at once. The rail arrangement — pins, folds,
+  the browser and on the desktop at once. The rail arrangement — spaces, pins,
   which circles this browser has looked at — persists in
-  `localStorage["seance_active"]` (`{seen, pinned, collapsed}`), with the
-  daemon's copy winning on connect. Membership (`seen` / `pinned`) is written
+  `localStorage["seance_active"]` (`{seen, pinned, spaces}`), with the
+  daemon's copy winning on connect. Membership (`seen` / `pinned` / `spaces`) is written
   back through `FsOp::SubsSave` on a deliberate change, exactly like native, so
   a pin made on the phone reaches the desk; incidental churn (a prune, marking
   a circle seen) stays local until a deliberate change carries it. The push
@@ -111,8 +111,8 @@ error (by design).
 
 The native chrome is replicated sincerely: auto-sorted workspace lister
 (working band + touch recency, attention badges, inline rename, banish ×,
-pinned rows above a rule with pin / unpin row menus),
-◈+ create-workspace, quicklaunch strip (daemon-side json via the fs bridge,
+spaces over the circle list, filter chips, pin / unpin and "move to → space"
+row menus), `+ space` / `+ circle`, quicklaunch strip (daemon-side json via the fs bridge,
 chips, editor modal, right-click), the claude-accounts host strip, footer
 (+ summon / ≋ activity / ? grimoire), per-row and per-tile context menus,
 zoom, and the native chord table — every ctrl+shift chord also binds its
@@ -148,9 +148,12 @@ finger cannot:
   above the PR list, committing through `seance_mobile_rename_workspace` into
   the same `RenameWorkspace` request the rail's double-click sends. Label
   only; the slug is the circle.
-- **Pin / unpin** — same menu, under `rail`
-  (`seance_mobile_is_pinned` / `seance_mobile_set_pinned`). The desktop's is a
-  right-click on a rail row, which a finger has no spelling for.
+- **Pin / unpin and move to space** — same menu, under `rail` and `move to
+  space` (`seance_mobile_set_pinned`, `seance_mobile_spaces` /
+  `seance_mobile_move_to_space`). The desktop's are a right-click or a drag on
+  a rail row, which a finger has no spelling for.
+- **No drag** — circles move via the row menu; spaces reorder via move up /
+  move down in the space menu. Banish-all asks through `confirm()`.
 - **Banish** — bottom of the same menu, under `danger`
   (`seance_mobile_banish_workspace`), arming on the first tap and firing on
   the second like the rail row's `×`. The row's × is on the phone too, but it
