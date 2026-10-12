@@ -7,6 +7,7 @@ use gpui_component::{
     input::Input, menu::ContextMenuExt as _, Colorize as _, StyledExt as _, WindowExt as _,
 };
 
+use crate::pane::PaneBody;
 use crate::runtime::protocol::GuiRequest;
 use crate::theme::SeancePalette;
 use seance_core::grouping::{Section, SectionRow};
@@ -992,12 +993,20 @@ impl SeanceApp {
 
     /// The selected circle's panes, one row each under its header: glyph,
     /// name, and a hover × that arms on the first click and kills on the
-    /// second. Hovering a row rings that pane's tile.
+    /// second. Hovering a row rings that pane's tile. File panes come last,
+    /// under a faint "files" label.
     fn render_pane_rows(&self, workspace: &str, cx: &Context<Self>) -> Vec<gpui::AnyElement> {
         let active = self.active_slug.as_deref();
-        self.panes
+        let (files, others): (Vec<_>, Vec<_>) = self
+            .panes
             .iter()
             .filter(|p| p.workspace == workspace)
+            .partition(|p| matches!(p.body, PaneBody::File { .. }));
+        let first_file = others.len();
+        let has_files = !files.is_empty();
+        let mut rows: Vec<gpui::AnyElement> = others
+            .into_iter()
+            .chain(files)
             .map(|pane| {
                 let slug = pane.slug.clone();
                 let is_active = active == Some(slug.as_str());
@@ -1112,7 +1121,23 @@ impl SeanceApp {
                     )
                     .into_any_element()
             })
-            .collect()
+            .collect();
+        if has_files {
+            rows.insert(
+                first_file,
+                div()
+                    .h(px(PANE_ROW_H))
+                    .pl(px(3. + 5. + GLYPH_W + 6. + GLYPH_W + 6.))
+                    .flex()
+                    .items_end()
+                    .pb(px(2.))
+                    .text_xs()
+                    .text_color(SeancePalette::text_faint())
+                    .child("files")
+                    .into_any_element(),
+            );
+        }
+        rows
     }
 
     pub(super) fn render_sidebar(

@@ -2181,9 +2181,15 @@ impl SeanceApp {
         let list: Vec<String> = if tiled.len() >= 2 {
             tiled
         } else {
-            self.panes
+            // Sidebar order: agents and shells, then file panes.
+            let (files, others): (Vec<_>, Vec<_>) = self
+                .panes
                 .iter()
                 .filter(|p| p.workspace == ws && p.popped.is_none() && !self.is_docked(p))
+                .partition(|p| matches!(p.body, PaneBody::File { .. }));
+            others
+                .into_iter()
+                .chain(files)
                 .map(|p| p.slug.clone())
                 .collect()
         };
