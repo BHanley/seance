@@ -63,10 +63,15 @@ pub(crate) fn run_phone(
         .cloned()
         .unwrap_or_default();
 
-    let focus_row = panes_arr.iter().find(|p| {
-        p.get("slug").and_then(|s| s.as_str()) == Some(pane.as_str())
-            || p.get("name").and_then(|s| s.as_str()) == Some(pane.as_str())
-    });
+    let focus_row = panes_arr.iter().find(|p| super::pane_row_matches(p, &pane));
+    if pane.starts_with("id:") && focus_row.is_none() {
+        eprintln!("seance ctl phone: no pane '{pane}' in scope");
+        return 1;
+    }
+    let pane = focus_row
+        .and_then(|p| p["slug"].as_str())
+        .unwrap_or(&pane)
+        .to_string();
     let name = focus_row
         .and_then(|p| p.get("name").and_then(|s| s.as_str()))
         .unwrap_or(pane.as_str())

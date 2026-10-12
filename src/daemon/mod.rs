@@ -351,7 +351,7 @@ fn serve_ctl(
 /// Stream events matching filters as JSON lines after an initial ack.
 fn serve_watch(
     mut writer: UnixStream,
-    _engine: SharedEngine,
+    engine: SharedEngine,
     since_seq: u64,
     kinds: Option<Vec<String>>,
     pane: Option<String>,
@@ -360,6 +360,27 @@ fn serve_watch(
     catch_up: bool,
 ) -> Result<()> {
     use crate::events;
+
+    // Watch bypasses handle_control, but its pane filter accepts the same
+    // explicit lifetime IDs as the one-shot commands.
+    let pane = if let Some(key) = pane.as_ref().filter(|p| p.starts_with("id:")) {
+        let resp = engine
+            .lock()
+            .map_err(|_| anyhow::anyhow!("engine lock poisoned"))?
+            .handle_control(ControlRequest::Status {
+                pane: key.clone(),
+                scope: scope.clone(),
+                from: None,
+            });
+        if !resp.ok {
+            writeln!(writer, "{}", serde_json::to_string(&resp)?)?;
+            return Ok(());
+        }
+        resp.data
+            .and_then(|row| row["slug"].as_str().map(str::to_string))
+    } else {
+        pane
+    };
 
     let (rx, cursor) = events::subscribe();
     let ack = ControlResponse::ok(serde_json::json!({

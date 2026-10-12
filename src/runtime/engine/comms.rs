@@ -99,6 +99,13 @@ impl Engine {
     /// circle's pane, which is how a reply went to the wrong session.
     pub(crate) fn resolve_target(&self, key: &str) -> Result<Target, String> {
         let key = key.trim();
+        if key.starts_with("id:") {
+            return Ok(Target {
+                pane: self.pane_slug_from_id(key)?,
+                circle: None,
+                note: None,
+            });
+        }
         let circle_target = |slug: String, renamed: Option<String>| -> Result<Target, String> {
             let label = self.workspace_label(&slug);
             let lead = self

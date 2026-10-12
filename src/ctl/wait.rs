@@ -236,21 +236,14 @@ pub(crate) fn run_wait(
         // Keep a filtered diagnostic snapshot of panes we care about.
         last_rows = rows
             .iter()
-            .filter(|p| {
-                let slug = p.get("slug").and_then(|s| s.as_str()).unwrap_or("");
-                let name = p.get("name").and_then(|s| s.as_str()).unwrap_or("");
-                panes.iter().any(|want| want == slug || want == name)
-            })
+            .filter(|p| panes.iter().any(|want| super::pane_row_matches(p, want)))
             .cloned()
             .collect();
 
         let mut satisfied: Vec<String> = Vec::new();
 
         for pane in &panes {
-            let row = rows.iter().find(|p| {
-                p.get("slug").and_then(|s| s.as_str()) == Some(pane.as_str())
-                    || p.get("name").and_then(|s| s.as_str()) == Some(pane.as_str())
-            });
+            let row = rows.iter().find(|p| super::pane_row_matches(p, pane));
             let art = artifact.as_deref().is_some_and(artifact_ok);
             let Some(row) = row else {
                 if art {

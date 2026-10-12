@@ -216,9 +216,17 @@ attention routing free.
 | events | `~/.local/share/seance/events.jsonl` |
 | socket | `$XDG_RUNTIME_DIR/seance.sock` |
 
-Injected into every pane: `SEANCE_SESSION`, `SEANCE_WORKSPACE`,
-`SEANCE_SCRATCHPAD`, `SEANCE_SOCKET`. Workspace scoping is automatic inside a
-pane — agents only see their circle unless you pass `--all`.
+Injected into every pane: `SEANCE_SESSION`, `SEANCE_PANE_ID`,
+`SEANCE_WORKSPACE`, `SEANCE_WORKSPACE_ID`, `SEANCE_WORKSPACE_NAME`,
+`SEANCE_SCRATCHPAD`, `SEANCE_SOCKET`. The two `_ID` vars are lifetime UUIDv4s:
+saved with the pane/circle, preserved through rename, sleep/wake and restore,
+never reused after deletion. Use them for durable integrations; slugs can be
+reused. `ctl list --all --json` and `ctl whoami --json` expose `pane_id` and
+`workspace_id`; pane targets accept `id:<pane_id>`. Legacy state gains IDs
+on load and saves them immediately. Existing processes retained by a live
+upgrade get the env vars on their next wake/restore; ctl has the IDs immediately.
+Workspace scoping is automatic inside a pane — agents only see their circle
+unless you pass `--all`. See [CONTROL.md](docs/CONTROL.md#session-environment).
 
 ## Docs
 

@@ -40,7 +40,9 @@ pub(crate) fn print_ok_human(sub: &str, response: &ControlResponse) {
                 for k in [
                     "principal",
                     "session",
+                    "pane_id",
                     "workspace",
+                    "workspace_id",
                     "policy",
                     "task_id",
                     "task_status",

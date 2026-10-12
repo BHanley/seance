@@ -17,6 +17,16 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+### Added
+
+- Lifetime UUIDv4 identities for panes and circles: `SEANCE_PANE_ID` and
+  `SEANCE_WORKSPACE_ID` in launched processes, `pane_id` and `workspace_id`
+  in ctl pane rows and `whoami`, and `id:<pane_id>` pane addressing. IDs
+  survive renames, sleep/wake, cold restore and daemon upgrades; deleted
+  panes/circles and handoff successors never reuse them. Legacy state and
+  upgrade bundles gain IDs and save them immediately. Processes retained
+  by a live upgrade receive the env vars on their next wake/restore.
+
 ## [0.27.0] — 2026-10-11
 
 ### Added

@@ -33,6 +33,22 @@ impl Engine {
         let ok = |data: serde_json::Value| ControlResponse::ok(data);
         let err = |m: String| ControlResponse::err(m);
         let find = |eng: &Engine, key: &str, scope: &Option<String>| -> Result<usize, String> {
+            if let Some(id) = key.strip_prefix("id:") {
+                let idx = eng
+                    .panes
+                    .iter()
+                    .position(|p| p.pane_id == id)
+                    .ok_or_else(|| format!("no pane '{key}'"))?;
+                if scope
+                    .as_ref()
+                    .is_some_and(|ws| *ws != eng.panes[idx].workspace)
+                {
+                    return Err(format!(
+                        "pane '{key}' is outside your workspace (use --all to cross)"
+                    ));
+                }
+                return Ok(idx);
+            }
             // `@circle` → the circle's lead pane; `pane:slug` forces a pane.
             let in_scope_ws = |ws: &str| scope.as_ref().is_none_or(|s| s == ws);
             if let Some(name) = key.strip_prefix('@') {
@@ -224,6 +240,8 @@ impl Engine {
                         self.push_state_to_all();
                         ok(json!({
                             "slug": slug,
+                            "pane_id": info.pane_id,
+                            "workspace_id": info.workspace_id,
                             "name": pname,
                             "workspace": ws,
                             "scratchpad": scratch,
@@ -383,6 +401,10 @@ impl Engine {
                     None => None,
                 };
                 let pane = pane.or(if circle.is_none() { from } else { None });
+                let pane = match pane.map(|p| self.pane_slug_from_id(&p)).transpose() {
+                    Ok(p) => p,
+                    Err(e) => return err(e),
+                };
                 let hit = |m: &MessageRecord| match (&pane, &circle) {
                     (Some(p), _) => &m.to_pane == p || m.from_pane.as_ref() == Some(p),
                     (None, Some(c)) => {
@@ -420,6 +442,10 @@ impl Engine {
                     return err(format!("no circle '{circle}'"));
                 };
                 if let Some(p) = pane {
+                    let p = match self.pane_slug_from_id(&p) {
+                        Ok(p) => p,
+                        Err(e) => return err(e),
+                    };
                     let p = p.strip_prefix("pane:").unwrap_or(&p).to_string();
                     if !self
                         .panes
@@ -459,6 +485,10 @@ impl Engine {
             Contacts { pane, from, .. } => {
                 let Some(p) = pane.or(from) else {
                     return err("contacts: which pane? (name it, or run inside a pane)".into());
+                };
+                let p = match self.pane_slug_from_id(&p) {
+                    Ok(p) => p,
+                    Err(e) => return err(e),
                 };
                 let rows: Vec<serde_json::Value> = self
                     .comms
@@ -995,9 +1025,16 @@ impl Engine {
                     .map(|p| p.workspace.clone())
                     .or_else(|| scope.clone());
                 let ws_label = ws_slug.as_deref().map(|s| self.workspace_label(s));
+                let pane_id = session
+                    .as_ref()
+                    .and_then(|slug| self.panes.iter().find(|p| p.slug == *slug))
+                    .map(|p| &p.pane_id);
+                let workspace_id = ws_slug.as_ref().and_then(|ws| self.workspace_ids.get(ws));
                 ok(json!({
                     "principal": principal,
                     "session": session,
+                    "pane_id": pane_id,
+                    "workspace_id": workspace_id,
                     "workspace": ws_slug,
                     "workspace_name": ws_label,
                     "policy": policy.as_str(),

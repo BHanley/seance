@@ -1,4 +1,5 @@
-//! Workspace identity: a stable **slug** and a mutable **label**.
+//! Workspace identity: a lifetime **UUID**, a stable **slug**, and a mutable **label**.
+//! Slugs can be reused after deletion; UUIDs are persisted and never reused.
 //!
 //! Panes have had this split since the beginning — `slug` is the id, `name` is
 //! what you read — and it is why renaming a pane costs nothing. Circles did
@@ -20,9 +21,30 @@
 //! same reason — a slug is unique, a label is not.
 
 use super::Engine;
-use crate::state::{slugify, unique_slug};
+use crate::state::{new_identity_uuid, slugify, unique_slug};
 
 impl Engine {
+    /// Resolve an explicit lifetime ID without ever falling back to a reused
+    /// slug/name. Non-ID addresses retain the caller's existing resolution.
+    pub(super) fn pane_slug_from_id(&self, key: &str) -> Result<String, String> {
+        match key.strip_prefix("id:") {
+            Some(id) => self
+                .panes
+                .iter()
+                .find(|p| p.pane_id == id)
+                .map(|p| p.slug.clone())
+                .ok_or_else(|| format!("no pane '{key}'")),
+            None => Ok(key.to_string()),
+        }
+    }
+
+    pub(super) fn ensure_workspace_id(&mut self, slug: &str) {
+        let id = self.workspace_ids.entry(slug.to_string()).or_default();
+        if id.is_empty() {
+            *id = new_identity_uuid();
+        }
+    }
+
     /// Every known circle slug: pane-bearing, empty-but-created, and ordered.
     pub(super) fn known_workspace_slugs(&self) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
@@ -101,6 +123,7 @@ impl Engine {
         let known = self.known_workspace_slugs();
         let taken: Vec<&str> = known.iter().map(|s| s.as_str()).collect();
         let slug = unique_slug(name, &taken);
+        self.ensure_workspace_id(&slug);
         if !name.is_empty() && name != slug {
             self.workspace_names.insert(slug.clone(), name.to_string());
         }
@@ -136,9 +159,10 @@ impl Engine {
         Some(slug)
     }
 
-    /// Drop a circle's label when the circle itself is gone.
+    /// Retire a circle's identity and label when the circle itself is gone.
     pub(super) fn forget_workspace_label(&mut self, slug: &str) {
         self.workspace_names.remove(slug);
+        self.workspace_ids.remove(slug);
     }
 
     /// Resolve every `scope` / `workspace` field in a request — control-plane

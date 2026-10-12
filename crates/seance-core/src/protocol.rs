@@ -459,6 +459,11 @@ pub enum GuiEvent {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PaneInfo {
+    /// Lifetime UUIDs. Empty only when reading a pre-ID daemon's wire data.
+    #[serde(default)]
+    pub pane_id: String,
+    #[serde(default)]
+    pub workspace_id: String,
     pub kind: String,
     pub name: String,
     pub slug: String,
@@ -527,6 +532,8 @@ pub struct StatusInfo {
 /// between windows, and `seance upgrade` — the clients are mirrors.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct WorkspaceMeta {
+    #[serde(default)]
+    pub workspace_id: String,
     /// The circle's stable **slug** — its identity. Minted once at creation
     /// and never rewritten, so anything holding it (a pane's environment, a
     /// client's rail prefs, a path on disk) survives a rename.
@@ -751,6 +758,7 @@ mod workspace_meta_tests {
         assert!(old.pr_links.is_empty());
 
         let meta = WorkspaceMeta {
+            workspace_id: String::new(),
             workspace: "lab".into(),
             name: None,
             last_output_ms: 1,

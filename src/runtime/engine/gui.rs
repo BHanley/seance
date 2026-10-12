@@ -400,6 +400,7 @@ impl Engine {
         let workspace_meta: Vec<WorkspaceMeta> = meta_names
             .into_iter()
             .map(|ws| WorkspaceMeta {
+                workspace_id: self.workspace_ids.get(&ws).cloned().unwrap_or_default(),
                 modes: self
                     .comms
                     .modes
@@ -884,6 +885,8 @@ impl Engine {
         };
         json!({
             "kind": p.kind,
+            "pane_id": p.pane_id,
+            "workspace_id": self.workspace_ids.get(&p.workspace),
             "name": p.name,
             "slug": p.slug,
             "workspace": p.workspace,
@@ -930,6 +933,8 @@ impl Engine {
                 };
                 let w = p.agency.to_wire();
                 PaneInfo {
+                    pane_id: p.pane_id.clone(),
+                    workspace_id: self.workspace_ids[&p.workspace].clone(),
                     kind: p.kind.clone(),
                     name: p.name.clone(),
                     slug: p.slug.clone(),

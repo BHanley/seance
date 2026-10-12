@@ -15,6 +15,8 @@ mod workspaces;
 #[cfg(test)]
 mod gui_tests;
 #[cfg(test)]
+mod identity_tests;
+#[cfg(test)]
 mod tests;
 
 // Re-export helpers used by sibling modules / tests.
@@ -23,7 +25,7 @@ pub use sleep::AUTO_SLEEP_IDLE_MS;
 
 use gui::{GuiConn, LastGridFrame};
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Instant;
@@ -37,7 +39,7 @@ use super::pty_session::{AdoptedPty, PtySession, SessionEvent};
 use super::snapshot::GridSnapshot;
 use crate::cmdlog::CommandLog;
 use crate::scratchpad::ScratchpadStore;
-use crate::state::{AppState, PersistedPane};
+use crate::state::{new_identity_uuid, AppState, PersistedPane};
 
 const DEFAULT_COMMAND: &str = "bash -l";
 const DEFAULT_WORKSPACE: &str = "main";
@@ -54,6 +56,7 @@ pub struct SpawnSpec {
 
 /// One pane record in the engine.
 pub struct EnginePane {
+    pub pane_id: String,
     pub kind: String, // "terminal" | "file"
     pub name: String,
     pub slug: String,
@@ -88,11 +91,12 @@ pub struct Engine {
     pub focused_pane: Option<String>,
     pub extra_workspaces: Vec<String>,
     pub workspace_order: Vec<String>,
-    /// slug → display label. A circle's **slug is its identity** (minted once,
-    /// never rewritten); this is the mutable label a rename changes. Absent =
+    /// slug → display label. Slugs stay fixed while a circle exists, but can
+    /// be reused after deletion; workspace_ids holds lifetime identity. Absent =
     /// the label is the slug. See `workspaces.rs` in the app for the display
     /// side and `resolve_workspace` for addressing by either.
     pub workspace_names: HashMap<String, String>,
+    pub workspace_ids: BTreeMap<String, String>,
     pub store: ScratchpadStore,
     pub cmd_log: CommandLog,
     pub asks: Vec<PendingAsk>,
@@ -182,6 +186,7 @@ impl Engine {
             extra_workspaces: Vec::new(),
             workspace_order: vec![DEFAULT_WORKSPACE.into()],
             workspace_names: HashMap::new(),
+            workspace_ids: BTreeMap::from([(DEFAULT_WORKSPACE.into(), new_identity_uuid())]),
             store,
             cmd_log: CommandLog::default(),
             asks: Vec::new(),
@@ -223,7 +228,9 @@ impl Engine {
         let taken: Vec<&str> = self.panes.iter().map(|p| p.slug.as_str()).collect();
         let slug = crate::state::unique_slug(name, &taken);
         let scratch_path = self.store.path_for(&slug);
+        self.ensure_workspace_id(workspace);
         self.panes.push(EnginePane {
+            pane_id: new_identity_uuid(),
             kind: "terminal".into(),
             name: name.into(),
             slug: slug.clone(),
@@ -245,7 +252,7 @@ impl Engine {
     pub fn new() -> Result<(Self, Receiver<SessionEvent>)> {
         let store = ScratchpadStore::new()?;
         let (event_tx, event_rx) = mpsc::channel();
-        let state = AppState::load();
+        let state = AppState::load_with_ids()?;
 
         let mut eng = Self {
             panes: Vec::new(),
@@ -254,6 +261,7 @@ impl Engine {
             extra_workspaces: state.extra_workspaces.clone(),
             workspace_order: state.workspace_order.clone(),
             workspace_names: state.workspace_names.iter().cloned().collect(),
+            workspace_ids: state.workspace_ids.clone(),
             store,
             cmd_log: state.cmd_log.clone(),
             asks: Vec::new(),
@@ -349,6 +357,7 @@ impl Engine {
             eng.selected_workspace = eng.panes.first().map(|p| p.workspace.clone());
         }
 
+        eng.save_state()?;
         Ok((eng, event_rx))
     }
 
@@ -366,6 +375,7 @@ impl Engine {
             extra_workspaces: bundle.extra_workspaces,
             workspace_order: bundle.workspace_order,
             workspace_names: bundle.workspace_names.into_iter().collect(),
+            workspace_ids: bundle.workspace_ids,
             store,
             cmd_log: bundle.cmd_log.clone(),
             asks: bundle
@@ -436,7 +446,11 @@ impl Engine {
         let mut fd_map: HashMap<usize, OwnedFd> =
             adopted.into_iter().map(|(i, o)| (i, o.fd)).collect();
 
-        for hp in bundle.panes {
+        for mut hp in bundle.panes {
+            if hp.pane_id.is_empty() {
+                hp.pane_id = new_identity_uuid();
+            }
+            eng.ensure_workspace_id(&hp.workspace);
             let agency = hp
                 .agency
                 .as_ref()
@@ -449,6 +463,7 @@ impl Engine {
             let scratch_path = eng.store.path_for(&hp.slug);
             if hp.kind == "file" {
                 eng.panes.push(EnginePane {
+                    pane_id: hp.pane_id,
                     kind: "file".into(),
                     name: hp.name,
                     slug: hp.slug,
@@ -512,6 +527,7 @@ impl Engine {
                 None
             };
             eng.panes.push(EnginePane {
+                pane_id: hp.pane_id,
                 kind: "terminal".into(),
                 name: hp.name,
                 slug: hp.slug,
@@ -528,7 +544,11 @@ impl Engine {
                 agency,
             });
         }
+        for slug in eng.known_workspace_slugs() {
+            eng.ensure_workspace_id(&slug);
+        }
         eng.load_frozen_grids();
+        eng.save_state()?;
         Ok((eng, event_rx))
     }
 
@@ -546,6 +566,12 @@ impl Engine {
     }
 
     pub fn persist(&self) {
+        if let Err(e) = self.save_state() {
+            eprintln!("[seance] saving state: {e:#}");
+        }
+    }
+
+    fn save_state(&self) -> Result<()> {
         let state = AppState {
             panes: self
                 .panes
@@ -558,6 +584,7 @@ impl Engine {
                         .map(|(s, n)| (Some(s.clone()), n.clone()))
                         .unwrap_or((None, None));
                     PersistedPane {
+                        pane_id: p.pane_id.clone(),
                         kind: p.kind.clone(),
                         name: p.name.clone(),
                         slug: p.slug.clone(),
@@ -588,6 +615,7 @@ impl Engine {
             extra_workspaces: self.extra_workspaces.clone(),
             workspace_order: self.workspace_order.clone(),
             workspace_names: self.sorted_workspace_names(),
+            workspace_ids: self.workspace_ids.clone(),
             window_size: None,
             // Keep open + recently finished tasks (cap body size already at create).
             tasks: self.tasks.values().cloned().collect(),
@@ -628,7 +656,7 @@ impl Engine {
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
         };
-        let _ = state.save();
+        state.save()
     }
 
     pub fn prepare_upgrade(&mut self) -> Result<(HandoffBundle, Vec<std::os::fd::OwnedFd>)> {
@@ -641,6 +669,7 @@ impl Engine {
                 continue;
             }
             let mut hp = HandoffPane {
+                pane_id: p.pane_id.clone(),
                 name: p.name.clone(),
                 slug: p.slug.clone(),
                 workspace: p.workspace.clone(),
@@ -729,6 +758,7 @@ impl Engine {
             extra_workspaces: self.extra_workspaces.clone(),
             workspace_order: self.workspace_order.clone(),
             workspace_names: self.sorted_workspace_names(),
+            workspace_ids: self.workspace_ids.clone(),
             proposal_counter: self.proposal_counter,
             ask_counter: self.ask_counter,
             statuses,

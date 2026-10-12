@@ -697,7 +697,7 @@ pub(super) fn run_handoff(args: Vec<String>, ctx: &Ctx) -> i32 {
     let workspace = row["workspace"].as_str().unwrap_or_default().to_string();
     let old_name = row["name"].as_str().unwrap_or(&old).to_string();
     let task = match ctx.call(ControlRequest::Task {
-        pane: Some(old.clone()),
+        pane: Some(pane.clone()),
         id: None,
         scope: None,
         from: None,
@@ -743,7 +743,7 @@ pub(super) fn run_handoff(args: Vec<String>, ctx: &Ctx) -> i32 {
     }
     if !keep {
         if let Err(code) = ctx.call(ControlRequest::Kill {
-            pane: old.clone(),
+            pane: pane.clone(),
             scope: None,
             from: None,
         }) {
@@ -769,6 +769,8 @@ pub(super) fn run_handoff(args: Vec<String>, ctx: &Ctx) -> i32 {
         "old_killed": !keep,
         "from_task": task_id,
         "slug": new,
+        "pane_id": spawned["pane_id"].clone(),
+        "workspace_id": spawned["workspace_id"].clone(),
         "name": spawned["name"].clone(),
         "workspace": workspace,
         "cwd": cwd,
@@ -840,7 +842,18 @@ pub(super) fn roster_keep(f: &RosterFilter, row: &Value) -> bool {
     }
 }
 
-pub(super) fn run_roster(filter: RosterFilter, ctx: &Ctx) -> i32 {
+pub(super) fn run_roster(mut filter: RosterFilter, ctx: &Ctx) -> i32 {
+    if let Some(id) = filter.parent.as_ref().filter(|p| p.starts_with("id:")) {
+        let parent = match ctx.call(ControlRequest::Status {
+            pane: id.clone(),
+            scope: None,
+            from: None,
+        }) {
+            Ok(row) => row,
+            Err(code) => return code,
+        };
+        filter.parent = parent["slug"].as_str().map(str::to_string);
+    }
     let mut data = match ctx.call(ControlRequest::Roster {
         scope: None,
         from: None,

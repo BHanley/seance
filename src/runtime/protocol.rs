@@ -19,6 +19,8 @@ pub fn hello_line(role: &str) -> String {
 /// Handoff message (old daemon → new) — FDs travel out-of-band via SCM_RIGHTS.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HandoffPane {
+    #[serde(default)]
+    pub pane_id: String,
     pub name: String,
     pub slug: String,
     pub workspace: String,
@@ -49,6 +51,8 @@ pub struct HandoffPane {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HandoffBundle {
+    #[serde(default)]
+    pub workspace_ids: std::collections::BTreeMap<String, String>,
     pub panes: Vec<HandoffPane>,
     pub selected_workspace: Option<String>,
     pub focused_pane: Option<String>,

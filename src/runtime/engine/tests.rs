@@ -905,6 +905,7 @@ fn dismissals_survive_persist_reload_and_handoff() {
             extra_workspaces: vec![],
             workspace_order: vec![],
             workspace_names: vec![],
+            workspace_ids: Default::default(),
             proposal_counter: 0,
             ask_counter: 0,
             statuses: vec![],

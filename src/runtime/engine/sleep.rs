@@ -164,7 +164,8 @@ impl Engine {
             Some(id) => launch_with_session(&command, &cwd, id),
             None => command.clone(),
         };
-        let session = self.spawn_terminal_session(slug, &launch, &cwd, &workspace, false)?;
+        let session =
+            self.spawn_terminal_session(slug, &launch, &cwd, &workspace, &self.panes[idx].pane_id)?;
         // A fresh session counts frames from 1, but clients drop anything that
         // isn't newer than the last frame they painted — and while this pane
         // slept, the only frame served for it was the frozen one, at the rev
