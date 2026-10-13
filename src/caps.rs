@@ -312,8 +312,6 @@ pub fn op_name(req: &crate::control::ControlRequest) -> &'static str {
         Finish { .. } => "finish",
         Roster { .. } => "roster",
         Task { .. } => "task",
-        PrLinkAdd { .. } => "pr_link_add",
-        PrLinkClear { .. } => "pr_link_clear",
         Space { .. } => "space",
     }
 }

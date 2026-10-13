@@ -449,7 +449,6 @@ fn run_local(args: Vec<String>) -> i32 {
         "grant" => parse_grant(sub_args),
         "revoke" => parse_revoke(sub_args),
         "policy" => parse_policy(sub_args),
-        "pr-link" | "pr-links" => parse_pr_link(sub_args),
         "rename-circle" | "rename-workspace" => parse_rename_circle(sub_args),
         "space" | "spaces" => {
             let mut it = sub_args.into_iter();

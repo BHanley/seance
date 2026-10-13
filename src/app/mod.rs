@@ -35,8 +35,6 @@ mod menus;
 mod overview;
 mod pads;
 mod palette;
-mod prboard;
-mod prlinks;
 mod quicklaunch;
 mod sidebar;
 mod tiles;
@@ -295,17 +293,6 @@ pub struct SeanceApp {
     host_menu_token: u64,
     /// `✦` popover: census of the GUI windows attached to this daemon.
     gui_menu_open: bool,
-    /// Daemon-scraped PR links per workspace (most-recently-seen LAST) —
-    /// a pure mirror of `WorkspaceMeta.pr_links`, rebuilt on every State.
-    pr_links: std::collections::HashMap<String, Vec<seance_core::protocol::PrLink>>,
-    /// URL of the PR chip whose details popover is showing (hover-driven,
-    /// zero delay). `None` = no popover.
-    pr_tip: Option<String>,
-    /// The popover is pinned open because that chip's context menu is up —
-    /// hover-out must not close it while the menu is being used.
-    pr_tip_pinned: bool,
-    /// Full-content PR board overlay (sidebar `PRs (N)` button).
-    pr_board: bool,
     /// Render-safe cache of daemon-side files (pad sidecars, phone binds,
     /// prompt library) — refreshed by a ~2s background loop.
     remote_cache: Arc<crate::remote_cache::RemoteCache>,
@@ -509,10 +496,6 @@ impl SeanceApp {
             host_menu: None,
             host_menu_token: 0,
             gui_menu_open: false,
-            pr_links: std::collections::HashMap::new(),
-            pr_tip: None,
-            pr_tip_pinned: false,
-            pr_board: false,
             remote_cache,
             daemon_error: None,
             render_probe: RenderProbe::default(),
@@ -877,9 +860,6 @@ impl SeanceApp {
                 // Daemon-owned activity clocks are the durable copy: seed the
                 // local mirrors with a MAX merge (both are unix ms, so they
                 // compare directly). Local stamping stays for instant feedback.
-                // pr_links arrive for every known workspace: rebuild the
-                // mirror wholesale so cleared/renamed circles drop out.
-                let mut links = std::collections::HashMap::new();
                 // Labels arrive for every known circle, so rebuild wholesale:
                 // a circle renamed back to its slug must lose its entry.
                 let mut names = std::collections::HashMap::new();
@@ -890,9 +870,6 @@ impl SeanceApp {
                     }
                     if let Some(n) = m.name.clone() {
                         names.insert(m.workspace.clone(), n);
-                    }
-                    if !m.pr_links.is_empty() {
-                        links.insert(m.workspace.clone(), m.pr_links.clone());
                     }
                     if m.last_output_ms > 0 {
                         let cur = self
@@ -912,7 +889,6 @@ impl SeanceApp {
                         }
                     }
                 }
-                self.pr_links = links;
                 self.workspace_names = names;
                 self.circle_modes = modes;
                 self.circle_mode_defs = circle_modes;
@@ -1603,11 +1579,6 @@ impl SeanceApp {
             }
             if self.overview {
                 self.set_overview(false, cx);
-                cx.stop_propagation();
-                return;
-            }
-            if self.pr_board {
-                self.set_pr_board(false, cx);
                 cx.stop_propagation();
                 return;
             }
@@ -2714,7 +2685,6 @@ impl Render for SeanceApp {
         let stage_el = self.render_stage_strip(active, cx).into_any_element();
         let awaken_el = self.render_awaken_bar(cx);
         let daemon_err_el = self.render_daemon_error_bar(cx);
-        let pr_el = self.render_pr_chip(cx);
         let t2 = std::time::Instant::now();
         let tiles_el = self.render_tiles(active, cx).into_any_element();
         let t3 = std::time::Instant::now();
@@ -2836,15 +2806,6 @@ impl Render for SeanceApp {
             .on_action(cx.listener(|_this, act: &ActShareReplay, _, _cx| {
                 share_replay_open(&act.0);
             }))
-            .on_action(cx.listener(|_this, act: &ActOpenPrLink, _, _cx| {
-                crate::sysopen::open_detached(&act.0);
-            }))
-            .on_action(cx.listener(|this, act: &ActRemovePrLink, _, cx| {
-                this.remove_pr_link(&act.workspace.clone(), &act.url.clone(), cx);
-            }))
-            .on_action(cx.listener(|this, act: &ActClearPrLinks, _, cx| {
-                this.clear_pr_links(&act.0.clone(), cx);
-            }))
             .on_action(cx.listener(|this, act: &ActSleepWorkspace, _, cx| {
                 let _ = this.client.sleep_workspace(&act.0.clone());
                 cx.notify();
@@ -2884,7 +2845,7 @@ impl Render for SeanceApp {
             // root so they work over a terminal, the rail, anywhere — the
             // terminal forwards no button events to the PTY, so nothing
             // downstream wants them. A modal overlay that `occlude()`s
-            // (menus, the PR board, the overview) swallows them, which is the
+            // (menus, the overview) swallows them, which is the
             // right answer: navigate the thing in front of you first.
             .on_mouse_down(
                 gpui::MouseButton::Navigate(gpui::NavigationDirection::Back),
@@ -2992,7 +2953,6 @@ impl Render for SeanceApp {
                     .child(daemon_err_el)
                     .children(asks_el)
                     .child(shelf_el)
-                    .child(pr_el)
                     .child(stage_el)
                     .child(awaken_el)
                     .child(tiles_el),
@@ -3000,10 +2960,6 @@ impl Render for SeanceApp {
             .children(
                 self.overview
                     .then(|| self.render_overview(cx).into_any_element()),
-            )
-            .children(
-                (self.pr_board && !self.overview)
-                    .then(|| self.render_pr_board(cx).into_any_element()),
             )
             // Below the (deferred) menu dropdown, above everything else — the
             // click-away catcher for an open host menu.

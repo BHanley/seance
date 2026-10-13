@@ -165,13 +165,6 @@ pub struct AppState {
     /// Cross-session comms: leads, former labels, contacts, messages.
     #[serde(default)]
     pub comms: crate::runtime::protocol::CommsState,
-    /// workspace → scraped PR links (0.13 — survive upgrade).
-    #[serde(default)]
-    pub pr_links: Vec<(String, Vec<crate::runtime::protocol::PrLink>)>,
-    /// workspace → PR urls the human cleared (0.14.1). Persisted because the
-    /// scraper would otherwise re-add a cleared url from the next repaint.
-    #[serde(default)]
-    pub pr_dismissed: Vec<(String, Vec<String>)>,
 }
 
 fn default_split_ratio() -> f32 {
@@ -542,18 +535,6 @@ mod tests {
             workspace_touch_ms: vec![("main".to_string(), 1_700_000_000_500)],
             pane_parents: vec![],
             comms: Default::default(),
-            pr_links: vec![(
-                "main".to_string(),
-                vec![crate::runtime::protocol::PrLink {
-                    url: "https://github.com/o/r/pull/5".into(),
-                    status: None,
-                    seen_ms: 1_700_000_000_900,
-                }],
-            )],
-            pr_dismissed: vec![(
-                "main".to_string(),
-                vec!["https://github.com/o/r/pull/4".into()],
-            )],
         };
 
         state.save().expect("save should succeed");
@@ -565,16 +546,6 @@ mod tests {
         assert_eq!(
             loaded.workspace_touch_ms,
             vec![("main".to_string(), 1_700_000_000_500)]
-        );
-        assert_eq!(loaded.pr_links.len(), 1);
-        assert_eq!(loaded.pr_links[0].0, "main");
-        assert_eq!(loaded.pr_links[0].1[0].url, "https://github.com/o/r/pull/5");
-        assert_eq!(
-            loaded.pr_dismissed,
-            vec![(
-                "main".to_string(),
-                vec!["https://github.com/o/r/pull/4".to_string()]
-            )]
         );
 
         assert_eq!(loaded.panes.len(), 2);

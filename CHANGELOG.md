@@ -27,6 +27,14 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   upgrade bundles gain IDs and save them immediately. Processes retained
   by a live upgrade receive the env vars on their next wake/restore.
 
+### Removed
+
+- PR links, gone everywhere: the PTY scraper, the per-circle link list and
+  its dismissals, the `pr_watch.json` watcher, `ctl pr-link`, the header PR
+  chips and the `PRs (N)` board in both GUIs (and the phone circle menu).
+  Saved state and upgrade bundles that still carry `pr_links` /
+  `pr_dismissed` load fine, and those fields are dropped.
+
 ## [0.27.0] — 2026-10-11
 
 ### Added

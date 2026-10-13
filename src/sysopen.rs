@@ -10,8 +10,7 @@ pub fn opener() -> &'static str {
 }
 
 /// Open a link off the calling thread. **This is the seam every click in the
-/// GUI goes through** — a terminal's ctrl/middle-click, a PR chip, a pad link,
-/// the PR board.
+/// GUI goes through** — a terminal's ctrl/middle-click, a pad link.
 ///
 /// Off-thread because of the `wait()` below, and every caller here is a click
 /// listener on the render thread.

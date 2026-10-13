@@ -221,14 +221,10 @@
         }, true); // capture: ql-chip's wasm handler stops propagation
 
         // ── circle menu ───────────────────────────────────────────────────
-        // The topbar packs title + PR chips + connection + probe into 390px,
+        // The topbar packs title + connection + probe into 390px,
         // and the title lost — "free-premium-rp" wrapped to three lines and
         // shoved the terminal down. On mobile the title gets the whole bar and
         // everything else moves in here, reached by tapping the title.
-        //
-        // The chips are wasm-bound buttons (their click opens the PR), so this
-        // MOVES the live #pr-chips node in rather than cloning it — a clone
-        // would look right and do nothing.
         var menu = mk('div', 'm-menu');
         menu.hidden = true;
         var menuTitle = mk('div', 'm-menu-title', null, '');
@@ -260,8 +256,6 @@
         var modeBtns = mk('div', 'm-menu-modes');
         var menuSpacesHead = mk('div', null, 'm-menu-sec', 'move to space');
         var spaceBtns = mk('div', 'm-menu-spaces');
-        var menuPrsHead = mk('div', null, 'm-menu-sec', 'pull requests');
-        var menuPrs = mk('div', 'm-menu-prs');
         var menuConnHead = mk('div', null, 'm-menu-sec', 'connection');
         var menuConn = mk('div', 'm-menu-conn', null, '');
         // Destructive, so it sits at the bottom, away from the controls you
@@ -281,8 +275,6 @@
           modeBtns,
           menuSpacesHead,
           spaceBtns,
-          menuPrsHead,
-          menuPrs,
           menuConnHead,
           menuConn,
           menuDangerHead,
@@ -423,21 +415,11 @@
           }
         });
 
-        function chipsNode() {
-          return document.getElementById('pr-chips');
-        }
         function openMenu() {
           var t = document.querySelector('.tb-title');
           menuTitle.textContent = t ? t.textContent : '';
           nameInput.value = menuTitle.textContent;
           paintPin();
-          var chips = chipsNode();
-          menuPrs.textContent = '';
-          if (chips && chips.children.length) {
-            menuPrs.appendChild(chips); // live move, handlers intact
-          } else {
-            menuPrs.appendChild(mk('div', null, 'm-menu-empty', 'no open PRs'));
-          }
           var lbl = document.getElementById('conn-label');
           var dot = document.getElementById('conn-dot');
           menuConn.textContent = (lbl && lbl.textContent) || 'unknown';
@@ -447,14 +429,6 @@
         }
         function closeMenu() {
           disarmBanish();
-          var chips = menuPrs.querySelector('.pr-chips');
-          if (chips) {
-            // A re-render while we were open will have built a fresh row in
-            // the topbar; putting ours back would duplicate the id.
-            var tb = document.getElementById('topbar');
-            if (tb && !tb.querySelector('.pr-chips')) tb.appendChild(chips);
-            else chips.remove();
-          }
           menu.hidden = true;
           body.classList.remove('m-menu-open');
         }

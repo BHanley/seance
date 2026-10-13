@@ -390,7 +390,6 @@ impl Engine {
             .workspace_output
             .keys()
             .chain(self.workspace_touch_ms.keys())
-            .chain(self.pr_links.keys())
             .cloned()
         {
             if !meta_names.iter().any(|m| *m == ws) {
@@ -409,7 +408,6 @@ impl Engine {
                     .unwrap_or_default(),
                 last_output_ms: self.workspace_output.get(&ws).copied().unwrap_or(0),
                 last_touch_ms: self.workspace_touch_ms.get(&ws).copied().unwrap_or(0),
-                pr_links: self.pr_links.get(&ws).cloned().unwrap_or_default(),
                 name: self.workspace_names.get(&ws).cloned(),
                 workspace: ws,
             })
@@ -731,10 +729,6 @@ impl Engine {
                         });
                     }
                 }
-            }
-            SessionEvent::PrLinkSeen { slug, url } => {
-                let (slug, url) = (slug.clone(), url.clone());
-                self.on_pr_link_seen(&slug, &url);
             }
             SessionEvent::Title { slug, title } => {
                 self.record_event(

@@ -17,20 +17,6 @@ daemon; the window is disposable.
 
 Release notes: [`CHANGELOG.md`](CHANGELOG.md).
 
-**New in 0.14**: **the PR board** — one **PRs (N)** button in the sidebar opens
-a circle-first sweep of every PR the daemon knows: needs-first sections, each
-row `repo#N` with draft / CI / review glyphs, age, last review or comment, and
-a *push or close* mark once it's gone quiet. Click a row to open the PR, a
-section header to jump to that circle. Hover a row — in the board or the chip
-popover — and a **✕** drops that one ref for good: the removal is remembered
-per circle, so the next pane repaint can't scrape it back. The watcher now supplies structured
-state (draft, CI pass/fail/running, review required/approved/changes,
-open/review/comment times) instead of one label string, a verdict *change*
-bumps the circle's recency clock, and chips lead with the repo name.
-(0.13: **PR links** — GitHub PR URLs scraped straight out of pane output,
-mapped onto circle attention by an external watcher (`pr_watch.json`).
-See [docs/CONTROL.md](docs/CONTROL.md), [docs/DAEMON.md](docs/DAEMON.md).)
-
 ## Why it exists
 
 Most agent tooling optimizes for *the agent alone*. Seance optimizes for

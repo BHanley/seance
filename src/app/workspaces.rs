@@ -142,8 +142,6 @@ pub(super) enum RailFilter {
 pub(super) enum WorkspaceAttention {
     /// Observed live-busy (TUI title spinner / agent actively driving).
     Working,
-    /// Blocked or needs-human.
-    NeedsHuman,
     /// Finished work while the human was elsewhere — sticky until select.
     Done,
 }
@@ -152,20 +150,17 @@ impl WorkspaceAttention {
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Working => "working",
-            Self::NeedsHuman => "needs",
             Self::Done => "done",
         }
     }
     pub(super) fn color(self) -> gpui::Hsla {
         match self {
             Self::Working => crate::theme::SeancePalette::flame(),
-            Self::NeedsHuman => crate::theme::SeancePalette::violet(),
             Self::Done => crate::theme::SeancePalette::success(),
         }
     }
     pub(super) fn priority(self) -> u8 {
         match self {
-            Self::NeedsHuman => 3,
             Self::Working => 2,
             Self::Done => 1,
         }
@@ -793,10 +788,7 @@ impl SeanceApp {
         if self.workspace_has_working_agent(workspace) {
             return Some(WorkspaceAttention::Working);
         }
-        // PR `needs` colors the PR chips, not the rail.
-        let pr = super::prlinks::pr_attention(self.pr_links_for(workspace))
-            .filter(|a| *a == WorkspaceAttention::Done);
-        self.workspace_unread.get(workspace).copied().or(pr)
+        self.workspace_unread.get(workspace).copied()
     }
 
     /// Sidebar right-edge label: relative time since the last pane output in

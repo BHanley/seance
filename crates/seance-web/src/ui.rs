@@ -102,8 +102,7 @@ use wasm_bindgen::prelude::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{Document, Element, HtmlInputElement, KeyboardEvent, MouseEvent, Window};
 
-use seance_core::control::ControlRequest;
-use seance_core::protocol::{FsOp, GuiRequest, PaneInfo, PrLink};
+use seance_core::protocol::{FsOp, GuiRequest, PaneInfo};
 
 use crate::app_api::{Actions, RailOp};
 use crate::menus::{close_menu, open_menu, MenuEntry};
@@ -447,7 +446,6 @@ impl Chrome {
         // from the frame loop, never from inside a listener, so a direct clear
         // is safe here.
         let _ = close_menu();
-        close_pr_tip();
         self.structural.clear();
         self.rename.keys.borrow_mut().clear();
         *self.rename.open.borrow_mut() = None;
@@ -487,9 +485,6 @@ impl Chrome {
             .unwrap_or_else(|| "no workspace".to_string());
         let title = text_el(&doc, "div", "tb-title", &title_txt)?;
         self.topbar.append_child(&title)?;
-        if let Some(ws) = selected {
-            self.build_pr_chip(state, ws)?;
-        }
         self.topbar
             .append_child(mk(&doc, "div", "tb-spacer")?.unchecked_ref())?;
 
@@ -515,69 +510,6 @@ impl Chrome {
         // Re-apply the last known connection status to the fresh nodes.
         let (label, ok) = self.conn.clone();
         self.paint_conn(&label, ok);
-        Ok(())
-    }
-
-    /// One chip per PR link of the selected circle, MOST RECENT FIRST, inside
-    /// a horizontally scrollable `#pr-chips` row. Left-click opens the PR,
-    /// hover raises a `.pr-tip` details popover, right-click opens the
-    /// per-chip context menu (open / remove this ref / clear all).
-    fn build_pr_chip(&mut self, state: &ClientState, ws: &str) -> Result<(), JsValue> {
-        let links: Vec<PrLink> = pr_chip_order(state.pr_links(ws));
-        if links.is_empty() {
-            return Ok(());
-        }
-        let doc = self.doc.clone();
-        let show_org = crate::pr_board::org_span_multi(state);
-        let now = self.now_ms() + state.clock_offset_ms;
-
-        let row = mk(&doc, "div", "pr-chips")?;
-        row.set_id("pr-chips");
-        self.topbar.append_child(&row)?;
-
-        for (i, link) in links.iter().enumerate() {
-            let att = link
-                .status
-                .as_ref()
-                .and_then(|s| s.attention.as_deref())
-                .unwrap_or("");
-            let class = match att {
-                "needs" => "pr-chip needs",
-                "done" => "pr-chip done",
-                _ => "pr-chip",
-            };
-            let chip = text_el(&doc, "button", class, &pr_chip_text(link, show_org))?;
-            if i == 0 {
-                // Compat: the first (most recent) chip keeps the old id.
-                chip.set_id("pr-chip");
-            }
-            row.append_child(&chip)?;
-            {
-                let url = link.url.clone();
-                bind_click(&chip, &mut self.structural, move |_| open_url(&url))?;
-            }
-            {
-                let one = link.clone();
-                let actions = self.actions.clone();
-                let w = ws.to_string();
-                bind_ctx(&chip, &mut self.structural, move |ev| {
-                    ev.prevent_default();
-                    // Tip stays up through a right-click (owner decision) —
-                    // only mouseleave hides it.
-                    open_pr_chip_menu(&actions, &w, &one, &ev);
-                })?;
-            }
-            {
-                let lines = pr_tip_lines(link, now);
-                let anchor = chip.clone();
-                bind(&chip, "mouseenter", &mut self.structural, move |_| {
-                    open_pr_tip(&anchor, &lines)
-                })?;
-            }
-            bind(&chip, "mouseleave", &mut self.structural, |_| {
-                close_pr_tip()
-            })?;
-        }
         Ok(())
     }
 
@@ -639,7 +571,7 @@ impl Chrome {
 
         self.build_quicklaunch()?;
         self.build_host()?;
-        self.build_footer(state)?;
+        self.build_footer()?;
         Ok(())
     }
 
@@ -1349,22 +1281,8 @@ impl Chrome {
 
     // ── footer ──────────────────────────────────────────────────────────
 
-    fn build_footer(&mut self, state: &ClientState) -> Result<(), JsValue> {
+    fn build_footer(&mut self) -> Result<(), JsValue> {
         let doc = self.doc.clone();
-
-        // Sweep affordance: one visible button over every circle's PR links.
-        // Hidden entirely when there is nothing open — no zero-state noise.
-        let open_prs = crate::pr_board::open_count(state);
-        if open_prs > 0 {
-            let board_btn = text_el(&doc, "button", "foot-prs", &format!("PRs ({open_prs})"))?;
-            board_btn.set_id("pr-board-btn");
-            board_btn.set_attribute("title", "PR board — every circle's open PRs")?;
-            self.sidebar.append_child(&board_btn)?;
-            let actions = self.actions.clone();
-            bind_click(&board_btn, &mut self.structural, move |_| {
-                actions.toggle_pr_board()
-            })?;
-        }
 
         let footer = mk(&doc, "div", "side-footer")?;
 
@@ -2889,142 +2807,11 @@ fn need(doc: &Document, id: &str) -> Result<Element, JsValue> {
         .ok_or_else(|| JsValue::from_str(&format!("missing #{id} in index.html")))
 }
 
-/// `#123 approved ✓` (label omitted when the poller hasn't spoken yet).
-/// `repo#123 label` — the org prefix (`org/repo#123`) appears only when this
-/// client's links span more than one org (`show_org`), so the common
-/// single-org case stays short.
-fn pr_chip_text(link: &PrLink, show_org: bool) -> String {
-    let head = crate::pr_board::pr_head(&link.url, show_org);
-    let label = link.status.as_ref().map(|s| s.label.trim()).unwrap_or("");
-    if label.is_empty() {
-        head
-    } else {
-        format!("{head} {label}")
-    }
-}
-
 /// New tab, never navigating away from a live session.
 pub(crate) fn open_url(url: &str) {
     if let Some(win) = web_sys::window() {
         let _ = win.open_with_url_and_target(url, "_blank");
     }
-}
-
-/// Most recent PR link FIRST — the wire list is append-ordered, so the chip
-/// row is simply its reverse.
-fn pr_chip_order(links: &[PrLink]) -> Vec<PrLink> {
-    links.iter().rev().cloned().collect()
-}
-
-/// The hover popover's body, one line per row. Pure so it is testable without
-/// a document; reuses the board's `age_label` clock domain (daemon unix ms).
-fn pr_tip_lines(link: &PrLink, now_unix_ms: f64) -> Vec<String> {
-    let mut out = vec![link.url.clone()];
-    let Some(st) = link.status.as_ref() else {
-        out.push("no poller status yet".into());
-        return out;
-    };
-    let state = if st.state.trim().is_empty() {
-        "unknown".to_string()
-    } else {
-        st.state.trim().to_string()
-    };
-    let state = if st.is_draft {
-        format!("{state} · draft")
-    } else {
-        state
-    };
-    out.push(format!("state: {state}"));
-    out.push(format!("ci: {}", st.ci.as_deref().unwrap_or("—")));
-    out.push(format!("review: {}", st.review.as_deref().unwrap_or("—")));
-    if st.opened_ms > 0 {
-        out.push(format!(
-            "age: {}",
-            crate::pr_board::age_label(now_unix_ms - st.opened_ms as f64)
-        ));
-    }
-    if st.last_review_ms > 0 {
-        out.push(format!(
-            "last review: {}",
-            crate::pr_board::age_label(now_unix_ms - st.last_review_ms as f64)
-        ));
-    }
-    if st.last_comment_ms > 0 {
-        out.push(format!(
-            "last comment: {}",
-            crate::pr_board::age_label(now_unix_ms - st.last_comment_ms as f64)
-        ));
-    }
-    out
-}
-
-/// Remove any open hover popover (idempotent).
-pub(crate) fn close_pr_tip() {
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        if let Ok(Some(el)) = doc.query_selector(".pr-tip") {
-            el.remove();
-        }
-    }
-}
-
-/// Absolutely-positioned details popover under `anchor`. `pointer-events:none`
-/// (in css) keeps it out of the hover path, so it cannot flicker.
-fn open_pr_tip(anchor: &Element, lines: &[String]) {
-    close_pr_tip();
-    let Some(win) = web_sys::window() else { return };
-    let Some(doc) = win.document() else { return };
-    let Some(body) = doc.body() else { return };
-    let Ok(tip) = doc.create_element("div") else {
-        return;
-    };
-    tip.set_class_name("pr-tip");
-    for (i, line) in lines.iter().enumerate() {
-        let Ok(row) = doc.create_element("div") else {
-            return;
-        };
-        if i == 0 {
-            row.set_class_name("pr-tip-url");
-        }
-        row.set_text_content(Some(line));
-        let _ = tip.append_child(&row);
-    }
-    let r = anchor.get_bounding_client_rect();
-    let _ = tip.set_attribute(
-        "style",
-        &format!("left:{:.0}px;top:{:.0}px", r.left(), r.bottom() + 4.0),
-    );
-    let _ = body.append_child(&tip);
-}
-
-/// Right-click on one chip: open it, drop just this ref, or clear them all.
-fn open_pr_chip_menu(actions: &Rc<dyn Actions>, ws: &str, link: &PrLink, ev: &MouseEvent) {
-    let mut entries: Vec<MenuEntry> = Vec::new();
-    {
-        let url = link.url.clone();
-        entries.push(MenuEntry::item("open PR", move || open_url(&url)));
-    }
-    {
-        let a = actions.clone();
-        let w = ws.to_string();
-        let url = link.url.clone();
-        entries.push(MenuEntry::item("remove this PR ref", move || {
-            a.remove_pr_link(&w, &url)
-        }));
-    }
-    entries.push(MenuEntry::Separator);
-    {
-        let a = actions.clone();
-        let w = ws.to_string();
-        entries.push(MenuEntry::danger("clear all PR refs", move || {
-            a.send(GuiRequest::Ctl(ControlRequest::PrLinkClear {
-                url: None,
-                workspace: Some(w),
-                scope: None,
-                from: Some("web".into()),
-            }))
-        }));
-    }
-    open_menu(ev.client_x() as f64, ev.client_y() as f64, entries);
 }
 
 fn mk(doc: &Document, tag: &str, class: &str) -> Result<Element, JsValue> {
@@ -3261,7 +3048,6 @@ fn log(what: &str, err: &JsValue) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use seance_core::protocol::PrStatus;
 
     fn entry(name: &str) -> QlEntry {
         QlEntry {
@@ -3350,68 +3136,5 @@ mod tests {
         assert_eq!(ws_att(Some(Attention::Working), false).0, "");
         assert_eq!(ws_att(Some(Attention::NeedsHuman), false).0, "needs");
         assert_eq!(ws_att(Some(Attention::Done), false).0, "done");
-    }
-
-    fn link(url: &str, status: Option<PrStatus>) -> PrLink {
-        PrLink {
-            url: url.into(),
-            status,
-            seen_ms: 0,
-        }
-    }
-
-    #[test]
-    fn chip_row_is_most_recent_first() {
-        let links = vec![
-            link("https://github.com/o/r/pull/1", None),
-            link("https://github.com/o/r/pull/2", None),
-            link("https://github.com/o/r/pull/3", None),
-        ];
-        let ordered = pr_chip_order(&links);
-        let urls: Vec<&str> = ordered.iter().map(|l| l.url.as_str()).collect();
-        assert_eq!(
-            urls,
-            [
-                "https://github.com/o/r/pull/3",
-                "https://github.com/o/r/pull/2",
-                "https://github.com/o/r/pull/1",
-            ]
-        );
-        assert!(pr_chip_order(&[]).is_empty());
-    }
-
-    #[test]
-    fn tip_lines_cover_state_ci_review_and_ages() {
-        let now = 1_000_000_000.0;
-        let st = PrStatus {
-            state: "open".into(),
-            attention: Some("needs".into()),
-            label: "CI ✗".into(),
-            updated_ms: 0,
-            is_draft: true,
-            ci: Some("fail".into()),
-            review: Some("changes".into()),
-            opened_ms: (now - 3.0 * 86_400_000.0) as u64,
-            last_review_ms: (now - 7_200_000.0) as u64,
-            last_comment_ms: 0,
-        };
-        let lines = pr_tip_lines(&link("https://github.com/o/r/pull/7", Some(st)), now);
-        assert_eq!(lines[0], "https://github.com/o/r/pull/7");
-        assert_eq!(lines[1], "state: open · draft");
-        assert_eq!(lines[2], "ci: fail");
-        assert_eq!(lines[3], "review: changes");
-        assert_eq!(lines[4], "age: 3d");
-        assert_eq!(lines[5], "last review: 2h");
-        // Unknown comment stamp renders no row at all (never a fake "0").
-        assert_eq!(lines.len(), 6);
-    }
-
-    #[test]
-    fn tip_lines_without_poller_status_say_so() {
-        let lines = pr_tip_lines(&link("https://github.com/o/r/pull/9", None), 0.0);
-        assert_eq!(
-            lines,
-            ["https://github.com/o/r/pull/9", "no poller status yet"]
-        );
     }
 }

@@ -304,65 +304,6 @@ input:focus {
   color: var(--text-dim);
   padding-right: 4px;
 }
-/* PR chip: selected circle's most recent scraped PR, colored by the poller's
-   attention verdict (same palette as the sidebar `.ws-att` badges). */
-.pr-chips {
-  flex: 0 1 auto;
-  display: flex;
-  gap: 4px;
-  min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-}
-.pr-chips::-webkit-scrollbar {
-  display: none;
-}
-.pr-chip {
-  flex: 0 0 auto;
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  padding: 0 6px;
-  font: inherit;
-  font-size: var(--fs-xs);
-  line-height: 18px;
-  white-space: nowrap;
-  color: var(--text-dim);
-  cursor: pointer;
-}
-.pr-chip:hover {
-  color: var(--text);
-}
-.pr-chip.needs {
-  color: var(--violet);
-  border-color: var(--violet);
-}
-.pr-chip.done {
-  color: var(--success);
-  border-color: var(--success);
-}
-/* Hover details popover. pointer-events:none — it can never steal the hover,
-   so the chip's mouseleave is the only thing that closes it (no flicker). */
-.pr-tip {
-  position: fixed;
-  z-index: 1100;
-  pointer-events: none;
-  max-width: 420px;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  background: var(--bg-elevated);
-  color: var(--text-dim);
-  font-size: var(--fs-xs);
-  line-height: 16px;
-  white-space: nowrap;
-}
-.pr-tip-url {
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 .tb-btn.active {
   color: var(--flame);
   border-color: var(--flame-dim);
@@ -1457,187 +1398,6 @@ input:focus {
   }
 }
 
-/* ── PR board: the circle-first sweep over every circle's PR links ──────
-   Opener sits just above the sidebar footer (`#pr-board-btn`, hidden when
-   nothing is open); the overlay itself is the grimoire pattern — dimmed
-   viewport, one centered card, backdrop/✕/escape all close. */
-#pr-board-btn {
-  flex: 0 0 auto;
-  margin: 0 8px 6px;
-  padding: 5px 10px;
-  border-radius: var(--r);
-  font-size: var(--fs-row);
-  text-align: left;
-  color: var(--flame);
-  background: var(--surface);
-  border: 1px solid transparent;
-  cursor: pointer;
-}
-#pr-board-btn:hover {
-  background: var(--border);
-  border-color: var(--flame-dim);
-}
-#pr-board {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.55);
-}
-#pr-board-card {
-  display: flex;
-  flex-direction: column;
-  width: min(820px, 92vw);
-  max-height: 82vh;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--r);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
-  font-size: var(--fs-xs);
-  color: var(--text-dim);
-}
-#pr-board-head {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
-}
-#pr-board-head .prb-title {
-  color: var(--text);
-  font-weight: 600;
-}
-#pr-board-counts {
-  color: var(--text-faint);
-}
-#pr-board-head .prb-hspacer {
-  flex: 1 1 auto;
-}
-#pr-board-close {
-  cursor: pointer;
-  user-select: none;
-  padding: 0 4px;
-  border-radius: var(--r-sm);
-  color: var(--text-faint);
-}
-#pr-board-close:hover {
-  color: var(--flame);
-  background: var(--surface);
-}
-#pr-board-list {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 6px 0 12px;
-}
-.prb-circle {
-  padding: 2px 0 6px;
-}
-.prb-circle-head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 6px 12px 3px;
-  cursor: pointer;
-}
-.prb-circle-head:hover .prb-circle-name {
-  color: var(--flame);
-}
-.prb-circle-name {
-  color: var(--text);
-  font-weight: 600;
-}
-.prb-circle-needs {
-  color: var(--violet);
-}
-.prb-circle-state {
-  color: var(--text-faint);
-}
-.prb-row {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 3px 12px 3px 22px;
-  cursor: pointer;
-}
-.prb-row:hover {
-  background: var(--surface);
-}
-.prb-head {
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-}
-.prb-row.prb-needs .prb-head {
-  color: var(--violet);
-}
-.prb-row.prb-done-att .prb-head {
-  color: var(--success);
-}
-.prb-row.prb-muted {
-  opacity: 0.55;
-}
-.prb-draft,
-.prb-state,
-.prb-label,
-.prb-also,
-.prb-last,
-.prb-age {
-  color: var(--text-faint);
-}
-.prb-ci-pass {
-  color: var(--success);
-}
-.prb-ci-fail {
-  color: var(--danger, #E06C6C);
-}
-.prb-ci-running {
-  color: var(--text-dim);
-}
-.prb-review-approved {
-  color: var(--success);
-}
-.prb-review-changes {
-  color: var(--danger, #E06C6C);
-}
-.prb-review-required {
-  color: var(--text-dim);
-}
-.prb-spacer {
-  flex: 1 1 auto;
-}
-.prb-stale-mark {
-  color: var(--flame);
-  border: 1px solid var(--flame-dim);
-  border-radius: var(--r-sm);
-  padding: 0 4px;
-}
-.prb-age {
-  font-variant-numeric: tabular-nums;
-  min-width: 28px;
-  text-align: right;
-}
-.prb-x {
-  flex: 0 0 auto;
-  color: var(--text-faint);
-  opacity: 0;
-  padding: 0 2px;
-  border-radius: var(--r-sm);
-}
-.prb-row:hover .prb-x {
-  opacity: 0.6;
-}
-.prb-x:hover {
-  opacity: 1;
-  color: var(--danger, #e06c6c);
-}
-.prb-empty {
-  padding: 16px 14px;
-  color: var(--text-faint);
-}
-
 /* ── mobile drawer ──────────────────────────────────────────────────── */
 /* The sidebar is a fixed 232px. On a 390px phone that is 60% of the screen
    spent on navigation, leaving the terminals it navigates unreadable. Under
@@ -1656,12 +1416,8 @@ input:focus {
 }
 
 @media (max-width: 820px), (pointer: coarse) and (hover: none) {
-  /* minmax(0,1fr), not 1fr: a `1fr` track still floors at the widest item's
-     min-content, and #topbar's min-width is auto — so the PR chip strip (one
-     chip per open PR) was sizing the whole column to 888px on a 390px screen
-     and dragging #tiles out with it. The terminal rendered 880px wide and you
-     saw the left 44% of it. .pr-chips already scrolls; it just needed to be
-     allowed to. */
+  /* minmax(0,1fr), not 1fr: a `1fr` track floors at the widest item's
+     min-content, and one wide topbar child drags #tiles past the screen. */
   #app {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
@@ -2229,7 +1985,6 @@ body.m-kb-open #m-bar {
     content: " ⋯";
     color: var(--text-faint);
   }
-  #topbar .pr-chips,
   #topbar #conn-label,
   #topbar .tb-btn {
     display: none;
@@ -2266,27 +2021,6 @@ body.m-kb-open #m-bar {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   margin-top: 6px;
-}
-/* Inside the menu the chip row stops being a horizontal strip and becomes a
-   list of full-width touch targets. */
-#m-menu-prs .pr-chips {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  overflow: visible;
-}
-#m-menu-prs .pr-chip {
-  width: 100%;
-  text-align: left;
-  padding: 12px;
-  font-size: 14px;
-  line-height: 1.3;
-  border-radius: 8px;
-  white-space: normal;
-}
-.m-menu-empty {
-  color: var(--text-faint);
-  font-size: 13px;
 }
 #m-menu-conn {
   color: var(--success);

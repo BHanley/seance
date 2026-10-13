@@ -14,7 +14,6 @@ use anyhow::{bail, Context as _, Result};
 pub mod agentsessions;
 pub mod fsbridge;
 pub mod modewatch;
-pub mod prwatch;
 pub mod sleepsweep;
 
 use crate::control::{self, ControlRequest, ControlResponse};
@@ -156,8 +155,6 @@ fn run_daemon_inner(args: Vec<String>) -> Result<()> {
     // Daemon-side host widget poller (thin clients see this machine's chips).
     fsbridge::start_host_poller(Arc::clone(&engine));
 
-    // External PR-watcher ingest (pr_watch.json → PrLink.status).
-    prwatch::start_pr_watch_poller(Arc::clone(&engine));
     // Host circle modes (AFK) the host owns: poll its state_cmd.
     modewatch::start_mode_poller(Arc::clone(&engine));
     // Idle circles stop holding RAM (12h; restorable circles only).

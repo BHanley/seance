@@ -344,7 +344,7 @@ impl Engine {
                 self.focused_pane = self.panes.first().map(|p| p.slug.clone());
             }
             // Last pane gone and nobody created this circle on purpose → drop
-            // the row (order/clocks/pr_links/subscriptions) instead of leaving
+            // the row (order/clocks/subscriptions) instead of leaving
             // an empty one in both sidebars.
             // Before the prune: notices name the circle by its label.
             self.on_pane_closed(slug, &circle, was_lead);

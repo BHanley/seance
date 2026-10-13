@@ -109,23 +109,6 @@ pub(crate) fn print_ok_human(sub: &str, response: &ControlResponse) {
                 }
             }
         }
-        "pr-link" | "pr-links" => {
-            if let Some(n) = data.get("removed").and_then(|v| v.as_u64()) {
-                let ws = data
-                    .get("workspace")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("?");
-                println!("cleared {n} link(s) on {ws}");
-            } else {
-                let ws = data
-                    .get("workspace")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("?");
-                let url = data.get("url").and_then(|v| v.as_str()).unwrap_or("?");
-                let n = data.get("links").and_then(|v| v.as_u64()).unwrap_or(0);
-                println!("{ws}: {url} ({n} link(s))");
-            }
-        }
         "status" => print_status(data),
         "read" => print_read(data),
         "scratchpad" | "pad" => print_scratchpad(data),
@@ -399,8 +382,6 @@ COMMANDS:
     move [CIRCLE] SPACE           put a circle in a space (sticky; prefixes stop routing it)
     sleep [WS]                    sleep a circle (frees its RAM; wakes on resume)
     wake [WS]                     wake a sleeping circle
-    pr-link add WS URL            seed a PR link on a workspace
-    pr-link clear WS [URL]        drop one link (or all) from a workspace
     whoami / caps / grant / revoke / policy
     seize / release / drive PANE  co-presence ownership
     wait PANE [opts]              block until condition

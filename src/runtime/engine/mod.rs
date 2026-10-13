@@ -5,7 +5,6 @@ mod comms;
 mod control;
 mod gui;
 pub(crate) mod helpers;
-mod pr_links;
 pub mod queue;
 mod sleep;
 mod spaces;
@@ -154,14 +153,6 @@ pub struct Engine {
     pub pane_parents: HashMap<String, String>,
     /// Cross-session comms (comms.rs): leads, aliases, contacts, messages.
     pub comms: CommsState,
-    /// workspace → PR links scraped from pane output (most recent LAST).
-    /// Statuses are merged in from the external watcher; see `pr_links.rs`.
-    pub pr_links: HashMap<String, Vec<PrLink>>,
-    /// workspace → PR urls the human explicitly cleared, oldest FIRST.
-    /// The scraper must not re-add these to that workspace: a TUI repaints
-    /// the same PR url every few seconds, so without a tombstone the clear
-    /// undoes itself. `pr-link add` un-dismisses (explicit add always wins).
-    pub pr_dismissed: HashMap<String, Vec<String>>,
     /// `send --queue` pump state (in-flight confirmations); see queue.rs.
     pub(crate) send_queue: queue::SendQueueState,
     /// Test-only: panes `record_grid_tap` was entered for, in order. Recording
@@ -214,8 +205,6 @@ impl Engine {
             workspace_touch_ms: HashMap::new(),
             pane_parents: HashMap::new(),
             comms: CommsState::default(),
-            pr_links: HashMap::new(),
-            pr_dismissed: HashMap::new(),
             send_queue: Default::default(),
             record_tap_log: Vec::new(),
         };
@@ -289,8 +278,6 @@ impl Engine {
             workspace_touch_ms: HashMap::new(),
             pane_parents: HashMap::new(),
             comms: CommsState::default(),
-            pr_links: HashMap::new(),
-            pr_dismissed: HashMap::new(),
             send_queue: Default::default(),
             #[cfg(test)]
             record_tap_log: Vec::new(),
@@ -300,8 +287,6 @@ impl Engine {
         eng.workspace_touch_ms = state.workspace_touch_ms.iter().cloned().collect();
         eng.pane_parents = state.pane_parents.iter().cloned().collect();
         eng.comms = state.comms.clone();
-        eng.pr_links = state.pr_links.iter().cloned().collect();
-        eng.pr_dismissed = state.pr_dismissed.iter().cloned().collect();
 
         for t in state.tasks {
             eng.tasks.insert(t.id.clone(), t);
@@ -436,8 +421,6 @@ impl Engine {
             workspace_touch_ms: bundle.workspace_touch_ms.into_iter().collect(),
             pane_parents: bundle.pane_parents.into_iter().collect(),
             comms: bundle.comms,
-            pr_links: bundle.pr_links.into_iter().collect(),
-            pr_dismissed: bundle.pr_dismissed.into_iter().collect(),
             send_queue: Default::default(),
             #[cfg(test)]
             record_tap_log: Vec::new(),
@@ -645,16 +628,6 @@ impl Engine {
                 .iter()
                 .map(|(k, v)| (k.clone(), *v))
                 .collect(),
-            pr_links: self
-                .pr_links
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-            pr_dismissed: self
-                .pr_dismissed
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
         };
         state.save()
     }
@@ -784,16 +757,6 @@ impl Engine {
                 .workspace_touch_ms
                 .iter()
                 .map(|(k, v)| (k.clone(), *v))
-                .collect(),
-            pr_links: self
-                .pr_links
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-            pr_dismissed: self
-                .pr_dismissed
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
         };
         Ok((bundle, fds))

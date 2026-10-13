@@ -137,8 +137,33 @@ impl Engine {
         slug
     }
 
+    /// Drop a workspace's row when its last pane dies and it was never
+    /// explicitly created (`extra_workspaces`). An empty circle nobody asked
+    /// for is dead chrome in both sidebars.
+    pub(crate) fn prune_workspace_if_empty(&mut self, workspace: &str) {
+        if workspace.is_empty()
+            || self.extra_workspaces.iter().any(|w| w == workspace)
+            || self.panes.iter().any(|p| p.workspace == workspace)
+        {
+            return;
+        }
+        self.forget_workspace(workspace);
+    }
+
+    /// Remove every trace of a workspace: order, clocks, label, subscriptions.
+    pub(crate) fn forget_workspace(&mut self, workspace: &str) {
+        self.workspace_order.retain(|w| w != workspace);
+        self.workspace_output.remove(workspace);
+        self.workspace_touch_ms.remove(workspace);
+        self.forget_workspace_label(workspace);
+        if self.selected_workspace.as_deref() == Some(workspace) {
+            self.selected_workspace = self.panes.first().map(|p| p.workspace.clone());
+        }
+        self.drop_workspace_subs(workspace);
+    }
+
     /// Rename = set the label. The slug does not move, so nothing keyed by it
-    /// needs migrating: panes, activity clocks, PR links, dismissals,
+    /// needs migrating: panes, activity clocks,
     /// subscriptions, selections, client rail prefs and every running
     /// pane's `SEANCE_WORKSPACE` all keep pointing at the same circle.
     ///
