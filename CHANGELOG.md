@@ -34,6 +34,12 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   chips and the `PRs (N)` board in both GUIs (and the phone circle menu).
   Saved state and upgrade bundles that still carry `pr_links` /
   `pr_dismissed` load fine, and those fields are dropped.
+- Prefix auto-spaces. A label like `mtg-ai` no longer routes a circle or
+  mints a space, and rows no longer dim a prefix their space names. Circles
+  move only by hand; a new one lands in the space on screen. Existing auto
+  spaces load as ordinary spaces and keep their circles (`prefix` / `auto` /
+  `placed` are ignored and drop on the next save). `seance-core`'s unused
+  `grouping.rs` went with it.
 
 ## [0.27.0] — 2026-10-11
 

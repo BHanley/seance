@@ -790,32 +790,13 @@ impl SeanceApp {
                 .child(msg)
                 .into_any_element()];
         }
-        let space_prefix = (self.rail_filter == RailFilter::All)
-            .then(|| {
-                self.subs_pref
-                    .spaces
-                    .get(&self.current_space())
-                    .and_then(|s| s.prefix.clone())
-            })
-            .flatten();
         circles
             .into_iter()
-            .map(|ws| {
-                let dim = space_prefix.is_some()
-                    && seance_core::spaces::space_prefix(&self.workspace_label(&ws))
-                        == space_prefix;
-                self.render_workspace_row(ws, dim, cx)
-            })
+            .map(|ws| self.render_workspace_row(ws, cx))
             .collect()
     }
 
-    /// `in_cluster` dims a prefix the row's space already names.
-    fn render_workspace_row(
-        &self,
-        workspace: String,
-        in_cluster: bool,
-        cx: &Context<Self>,
-    ) -> gpui::AnyElement {
+    fn render_workspace_row(&self, workspace: String, cx: &Context<Self>) -> gpui::AnyElement {
         let selected = self.selected_workspace.as_deref() == Some(workspace.as_str());
         // Drives the menu verb only — the pinned *section* is composed by
         // `render_sidebar`, so the row itself needs no other special-casing.
@@ -1007,19 +988,10 @@ impl SeanceApp {
                         .child(glyph)
                 })
                 .child({
-                    // A prefix the space already names recedes.
-                    let label = self.workspace_label(&workspace);
                     let name_color = if selected {
                         SeancePalette::flame()
                     } else {
                         SeancePalette::text_dim()
-                    };
-                    let (head, tail) = match in_cluster {
-                        true => match label.split_once('-') {
-                            Some((h, t)) => (format!("{h}-"), t.to_string()),
-                            None => (String::new(), label.clone()),
-                        },
-                        false => (String::new(), label.clone()),
                     };
                     div()
                         .flex_1()
@@ -1027,20 +999,12 @@ impl SeanceApp {
                         .flex()
                         .items_center()
                         .text_sm()
-                        .when(!head.is_empty(), |d| {
-                            d.child(
-                                div()
-                                    .flex_none()
-                                    .text_color(SeancePalette::text_faint())
-                                    .child(head),
-                            )
-                        })
                         .child(
                             div()
                                 .min_w_0()
                                 .truncate()
                                 .text_color(name_color)
-                                .child(tail),
+                                .child(self.workspace_label(&workspace)),
                         )
                 })
                 .children(modes_on.iter().map(|d| {

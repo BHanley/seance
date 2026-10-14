@@ -379,7 +379,7 @@ COMMANDS:
     rename-circle [WS] NAME       set a circle's label (its slug never moves)
     space [list]                  spaces and the circles in each
     space new NAME · rename SPACE NAME · rm SPACE · default SPACE
-    move [CIRCLE] SPACE           put a circle in a space (sticky; prefixes stop routing it)
+    move [CIRCLE] SPACE           put a circle in a space
     sleep [WS]                    sleep a circle (frees its RAM; wakes on resume)
     wake [WS]                     wake a sleeping circle
     whoami / caps / grant / revoke / policy
@@ -426,12 +426,6 @@ fn print_spaces(data: &serde_json::Value) {
         let mut head = format!("{} [{}]", s("name"), s("id"));
         if flag("default") {
             head.push_str(" (default)");
-        }
-        if flag("auto") {
-            head.push_str(" (auto)");
-        }
-        if let Some(p) = row.get("prefix").and_then(|v| v.as_str()) {
-            head.push_str(&format!(" catches {p}-"));
         }
         println!("{head}");
         for c in circles.into_iter().flatten() {

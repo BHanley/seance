@@ -44,7 +44,7 @@ crates/seance-core/    sans-io shared crate — MUST compile native AND wasm32:
                        bare http(s) run stitched across hard wraps; native
                        ctrl+click and the web's tap/ctrl+click share it).
                        spaces.rs (the rail's spaces model — default space,
-                       prefix routing, sticky hand moves; native, web and
+                       hand-placed circles only; native, web and
                        `ctl space` all edit it inside the rail blob).
                        util.rs also holds the rail's shared rules:
                        settle_absent (pins for circles the daemon hasn't

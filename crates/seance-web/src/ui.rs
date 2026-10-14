@@ -550,19 +550,8 @@ impl Chrome {
             };
             list.append_child(text_el(&doc, "div", "empty-hint", msg)?.unchecked_ref())?;
         }
-        let space_prefix = if filtered {
-            None
-        } else {
-            state
-                .subs
-                .spaces
-                .get(&current)
-                .and_then(|s| s.prefix.clone())
-        };
         for ws in &circles {
-            let dim = space_prefix.is_some()
-                && seance_core::spaces::space_prefix(&state.workspace_label(ws)) == space_prefix;
-            self.build_ws_row(&list, state, ws, selected, dim)?;
+            self.build_ws_row(&list, state, ws, selected)?;
         }
 
         // Flex filler below the rows.
@@ -682,7 +671,6 @@ impl Chrome {
         state: &ClientState,
         ws: &str,
         selected: Option<&str>,
-        in_cluster: bool,
     ) -> Result<(), JsValue> {
         let doc = self.doc.clone();
         let is_selected = Some(ws) == selected;
@@ -734,13 +722,7 @@ impl Chrome {
         )?;
         let label = state.workspace_label(ws);
         self.ws_labels.insert(ws.to_string(), label.clone());
-        // A prefix the row's space already names recedes.
-        let (head_txt, tail_txt) = match in_cluster.then(|| label.split_once('-')).flatten() {
-            Some((h, t)) => (format!("{h}-"), t.to_string()),
-            None => (String::new(), label.clone()),
-        };
-        let prefix_el = text_el(&doc, "span", "ws-prefix", &head_txt)?;
-        let name = text_el(&doc, "span", "ws-name", &tail_txt)?;
+        let name = text_el(&doc, "span", "ws-name", &label)?;
         // Text badges only for needs/done — working is the left-hand glyph.
         let (att_text, att_class) = ws_att(att, is_selected);
         let att_el = text_el(&doc, "span", att_class, att_text)?;
@@ -749,12 +731,7 @@ impl Chrome {
         let count_el = text_el(&doc, "span", "ws-count", &activity)?;
 
         main.append_child(&glyph)?;
-        // Prefix + name share one container so the row's gap does not open a
-        // hole in the middle of a name (`cadence- mint`).
         let label_box = mk(&doc, "div", "ws-label")?;
-        if !head_txt.is_empty() {
-            label_box.append_child(&prefix_el)?;
-        }
         label_box.append_child(&name)?;
         main.append_child(&label_box)?;
         for m in &modes_on {

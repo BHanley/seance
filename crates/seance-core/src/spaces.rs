@@ -10,16 +10,12 @@
 //! Rules (decided 2026-10-10):
 //! - One space is the **default** (`general` on first run). It can be renamed,
 //!   never deleted; it catches everything without a better home.
-//! - A circle's label prefix (text before the first `-`) routes it until the
-//!   human moves it by hand (`placed`). A space whose `prefix` matches catches
-//!   it; otherwise a prefix shared by ≥2 unplaced circles mints an **auto**
-//!   space. Generated names (`claude-49`) never count as a prefix.
-//! - An auto space disappears when it empties; renaming it makes it permanent
-//!   and keeps its prefix as an alias.
+//! - Circles move only by hand. A new circle lands in the space on screen.
+//!   Labels never route anything.
 //! - No other space is special.
 //!
-//! Every step is deterministic in its inputs (sorted, ids derived from
-//! prefixes) because two windows may reconcile the same new circle at once.
+//! Reconcile is deterministic in its inputs because two windows may reconcile
+//! the same new circle at once.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -32,14 +28,6 @@ pub const DEFAULT_NAME: &str = "general";
 pub struct Space {
     pub id: String,
     pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prefix: Option<String>,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub auto: bool,
-}
-
-fn is_false(b: &bool) -> bool {
-    !*b
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,22 +40,6 @@ pub struct Spaces {
     /// Circle slug → space id.
     #[serde(default)]
     pub of: BTreeMap<String, String>,
-    /// Circles the human put somewhere by hand; prefixes no longer move them.
-    #[serde(default)]
-    pub placed: BTreeSet<String>,
-}
-
-/// The routing prefix of a label, lowercased. `None` without a hyphen, and for
-/// generated names (`claude-49`, `codex-3`: a word and a number), which would
-/// otherwise mint a space out of every unnamed agent.
-pub fn space_prefix(label: &str) -> Option<String> {
-    let p = crate::grouping::prefix_of(label)?;
-    let (_, tail) = label.split_once('-')?;
-    let tail = tail.trim();
-    if !tail.is_empty() && tail.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    Some(p)
 }
 
 impl Spaces {
@@ -141,15 +113,9 @@ impl Spaces {
 
     /// Bring the model in line with the live circles. `circles` is
     /// (slug, label); `focused` is the space the human is looking at, where a
-    /// brand-new circle with no prefix home lands. Returns whether it changed.
+    /// brand-new circle lands. Returns whether it changed.
     pub fn reconcile(&mut self, circles: &[(String, String)], focused: Option<&str>) -> bool {
         let before = self.clone();
-        let mut circles: Vec<(String, String)> = circles.to_vec();
-        circles.sort();
-
-        if self.list.is_empty() {
-            self.migrate(&circles);
-        }
         if !self.has(&self.default) {
             if !self.has(DEFAULT_ID) {
                 self.list.insert(
@@ -157,8 +123,6 @@ impl Spaces {
                     Space {
                         id: DEFAULT_ID.into(),
                         name: DEFAULT_NAME.into(),
-                        prefix: None,
-                        auto: false,
                     },
                 );
             }
@@ -167,98 +131,17 @@ impl Spaces {
 
         let live: BTreeSet<&str> = circles.iter().map(|(s, _)| s.as_str()).collect();
         self.of.retain(|c, _| live.contains(c.as_str()));
-        self.placed.retain(|c| live.contains(c.as_str()));
 
-        let mut unplaced_count: BTreeMap<String, usize> = BTreeMap::new();
-        for (slug, label) in &circles {
-            if !self.placed.contains(slug) {
-                if let Some(p) = space_prefix(label) {
-                    *unplaced_count.entry(p).or_default() += 1;
-                }
+        let landing = focused
+            .filter(|f| self.has(f))
+            .unwrap_or_else(|| self.default_id())
+            .to_string();
+        for (slug, _) in circles {
+            if !self.of.get(slug).is_some_and(|id| self.has(id)) {
+                self.of.insert(slug.clone(), landing.clone());
             }
         }
-
-        let focused = focused.filter(|f| self.has(f)).map(str::to_string);
-        for (slug, label) in &circles {
-            let current = self.of.get(slug).filter(|id| self.has(id)).cloned();
-            if self.placed.contains(slug) {
-                if current.is_none() {
-                    let d = self.default_id().to_string();
-                    self.of.insert(slug.clone(), d);
-                }
-                continue;
-            }
-            let prefix = space_prefix(label);
-            let home = match prefix.as_deref() {
-                Some(p) => match self.list.iter().find(|s| s.prefix.as_deref() == Some(p)) {
-                    Some(s) => Some(s.id.clone()),
-                    None if unplaced_count.get(p).copied().unwrap_or(0) >= 2 => {
-                        Some(self.mint_auto(p))
-                    }
-                    None => None,
-                },
-                None => None,
-            };
-            let target = match (home, current) {
-                (Some(h), _) => h,
-                // Renamed out of the prefix its auto space was built on.
-                (None, Some(cur))
-                    if self.get(&cur).is_some_and(|s| s.auto && s.prefix != prefix) =>
-                {
-                    self.default_id().to_string()
-                }
-                (None, Some(cur)) => cur,
-                (None, None) => focused
-                    .clone()
-                    .unwrap_or_else(|| self.default_id().to_string()),
-            };
-            self.of.insert(slug.clone(), target);
-        }
-
-        let used: BTreeSet<String> = self.of.values().cloned().collect();
-        self.list.retain(|s| !s.auto || used.contains(&s.id));
         *self != before
-    }
-
-    /// First run: the default space plus one auto space per prefix ≥2 circles
-    /// share (the clusters the rail already drew). Nothing else is guessed.
-    fn migrate(&mut self, circles: &[(String, String)]) {
-        self.list.push(Space {
-            id: DEFAULT_ID.into(),
-            name: DEFAULT_NAME.into(),
-            prefix: None,
-            auto: false,
-        });
-        self.default = DEFAULT_ID.into();
-        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-        for (_, label) in circles {
-            if let Some(p) = space_prefix(label) {
-                *counts.entry(p).or_default() += 1;
-            }
-        }
-        for (p, n) in counts {
-            if n >= 2 {
-                self.mint_auto(&p);
-            }
-        }
-    }
-
-    fn mint_auto(&mut self, prefix: &str) -> String {
-        if let Some(s) = self
-            .list
-            .iter()
-            .find(|s| s.prefix.as_deref() == Some(prefix))
-        {
-            return s.id.clone();
-        }
-        let id = self.fresh_id(prefix);
-        self.list.push(Space {
-            id: id.clone(),
-            name: prefix.to_string(),
-            prefix: Some(prefix.to_string()),
-            auto: true,
-        });
-        id
     }
 
     pub fn create(&mut self, name: &str) -> String {
@@ -266,52 +149,44 @@ impl Spaces {
         self.list.push(Space {
             id: id.clone(),
             name: name.trim().to_string(),
-            prefix: None,
-            auto: false,
         });
         id
     }
 
-    /// Renaming makes an auto space permanent; its prefix stays as an alias.
     pub fn rename(&mut self, id: &str, name: &str) -> bool {
         let name = name.trim();
         match self.list.iter_mut().find(|s| s.id == id) {
-            Some(s) if !name.is_empty() && (s.name != name || s.auto) => {
+            Some(s) if !name.is_empty() && s.name != name => {
                 s.name = name.to_string();
-                s.auto = false;
                 true
             }
             _ => false,
         }
     }
 
-    /// The default can't be deleted. Its circles move to the default and stay
-    /// there (placed), so a prefix doesn't immediately carry them off again.
+    /// The default can't be deleted. Its circles move to the default.
     pub fn delete(&mut self, id: &str) -> bool {
         if id == self.default_id() || !self.has(id) {
             return false;
         }
         let d = self.default_id().to_string();
-        for (c, s) in self.of.iter_mut() {
+        for s in self.of.values_mut() {
             if s == id {
                 *s = d.clone();
-                self.placed.insert(c.clone());
             }
         }
         self.list.retain(|s| s.id != id);
         true
     }
 
-    /// A move by hand: sticky from here on.
     pub fn move_circle(&mut self, circle: &str, id: &str) -> bool {
         if !self.has(id) {
             return false;
         }
-        let changed =
-            self.of.get(circle).map(String::as_str) != Some(id) || !self.placed.contains(circle);
-        self.of.insert(circle.to_string(), id.to_string());
-        self.placed.insert(circle.to_string());
-        changed
+        self.of
+            .insert(circle.to_string(), id.to_string())
+            .as_deref()
+            != Some(id)
     }
 
     /// Move space `id` to sit before `before` (end when `None`).
@@ -355,32 +230,12 @@ mod tests {
     }
 
     #[test]
-    fn first_run_is_general_plus_existing_clusters_only() {
+    fn first_run_is_just_the_default() {
         let mut sp = Spaces::default();
-        let circles = c(&[
-            "paceline-planning",
-            "paceline-weekend",
-            "mtg-roadmap",
-            "wander",
-            "ui-a",
-            "ui-b",
-            "claude-49",
-            "claude-50",
-        ]);
+        let circles = c(&["paceline-a", "paceline-b", "ui-a", "ui-b", "wander"]);
         assert!(sp.reconcile(&circles, None));
-        assert_eq!(ids(&sp), vec!["general", "paceline", "ui"]);
-        assert_eq!(
-            sp.space_of("mtg-roadmap"),
-            "general",
-            "one circle is not a cluster"
-        );
-        assert_eq!(
-            sp.space_of("claude-49"),
-            "general",
-            "generated names never route"
-        );
-        assert_eq!(sp.space_of("ui-b"), "ui");
-        assert!(sp.placed.is_empty());
+        assert_eq!(ids(&sp), vec!["general"]);
+        assert_eq!(sp.space_of("ui-b"), "general", "labels never route");
         assert!(!sp.reconcile(&circles, None), "idempotent");
     }
 
@@ -396,72 +251,40 @@ mod tests {
     }
 
     #[test]
-    fn a_new_circle_lands_in_the_focused_space_unless_a_prefix_claims_it() {
+    fn a_new_circle_lands_in_the_focused_space() {
         let mut sp = Spaces::default();
         sp.reconcile(&c(&["a"]), None);
         let w = sp.create("work");
-        sp.reconcile(&c(&["a", "b"]), Some(&w));
-        assert_eq!(sp.space_of("b"), w);
-        sp.reconcile(&c(&["a", "b", "ui-1x", "ui-2y"]), Some(&w));
-        assert_eq!(sp.space_of("ui-1x"), "ui", "≥2 shared prefix mints a space");
+        sp.reconcile(&c(&["a", "ui-1x", "ui-2y"]), Some(&w));
+        assert_eq!(sp.space_of("ui-1x"), w);
+        assert_eq!(sp.space_of("a"), "general", "existing circles stay put");
+        assert_eq!(ids(&sp), vec!["general", w.as_str()]);
     }
 
     #[test]
-    fn second_circle_with_a_prefix_mints_the_space_and_pulls_the_first() {
-        let mut sp = Spaces::default();
-        sp.reconcile(&c(&["mtg-a", "other"]), None);
-        assert_eq!(sp.space_of("mtg-a"), "general");
-        sp.reconcile(&c(&["mtg-a", "mtg-b", "other"]), None);
-        assert_eq!(sp.space_of("mtg-a"), "mtg");
-        assert_eq!(sp.space_of("mtg-b"), "mtg");
-    }
-
-    #[test]
-    fn a_hand_move_is_sticky_against_prefix_routing() {
+    fn a_moved_circle_stays_and_an_empty_space_survives() {
         let mut sp = Spaces::default();
         let circles = c(&["ui-a", "ui-b"]);
         sp.reconcile(&circles, None);
         let later = sp.create("later");
         assert!(sp.move_circle("ui-a", &later));
+        assert!(!sp.move_circle("ui-a", &later));
         sp.reconcile(&circles, None);
         assert_eq!(sp.space_of("ui-a"), later);
-        // ui-b alone is no longer ≥2 unplaced, but its space already exists.
-        assert_eq!(sp.space_of("ui-b"), "ui");
+        sp.reconcile(&c(&["ui-b"]), None);
+        assert!(sp.get(&later).is_some());
     }
 
     #[test]
-    fn a_space_carrying_the_prefix_catches_new_circles_even_after_rename() {
-        let mut sp = Spaces::default();
-        sp.reconcile(&c(&["mtg-a", "mtg-b"]), None);
-        assert!(sp.rename("mtg", "meetings"));
-        assert!(!sp.get("mtg").unwrap().auto, "renaming makes it permanent");
-        sp.reconcile(&c(&["mtg-a", "mtg-b", "mtg-c"]), None);
-        assert_eq!(sp.space_of("mtg-c"), "mtg");
-        assert_eq!(sp.get("mtg").unwrap().name, "meetings");
-    }
-
-    #[test]
-    fn an_auto_space_vanishes_when_it_empties_a_named_one_does_not() {
-        let mut sp = Spaces::default();
-        sp.reconcile(&c(&["ui-a", "ui-b", "x"]), None);
-        sp.reconcile(&c(&["x"]), None);
-        assert_eq!(ids(&sp), vec!["general"]);
-        let k = sp.create("keep");
-        sp.reconcile(&c(&["x"]), None);
-        assert!(sp.get(&k).is_some());
-    }
-
-    #[test]
-    fn renaming_out_of_an_auto_prefix_returns_to_general() {
-        let mut sp = Spaces::default();
-        sp.reconcile(&c(&["ui-a", "ui-b", "ui-c"]), None);
-        let renamed = vec![
-            ("ui-a".to_string(), "fresh".to_string()),
-            ("ui-b".to_string(), "ui-b".to_string()),
-            ("ui-c".to_string(), "ui-c".to_string()),
-        ];
-        sp.reconcile(&renamed, None);
-        assert_eq!(sp.space_of("ui-a"), "general");
+    fn legacy_prefix_fields_load_as_plain_spaces() {
+        let sp: Spaces = serde_json::from_str(
+            r#"{"list":[{"id":"general","name":"general"},
+                {"id":"ui","name":"ui","prefix":"ui","auto":true}],
+                "default":"general","of":{"ui-a":"ui"},"placed":["ui-a"]}"#,
+        )
+        .unwrap();
+        assert_eq!(sp.space_of("ui-a"), "ui");
+        assert!(serde_json::to_string(&sp).unwrap().find("prefix").is_none());
     }
 
     #[test]
@@ -525,16 +348,6 @@ mod tests {
         sp.move_circle("b", "general");
         sp.reconcile(&c(&["a"]), None);
         assert!(!sp.of.contains_key("b"));
-        assert!(!sp.placed.contains("b"));
-    }
-
-    #[test]
-    fn generated_names_are_not_prefixes() {
-        assert_eq!(space_prefix("claude-49"), None);
-        assert_eq!(space_prefix("codex-3"), None);
-        assert_eq!(space_prefix("ui-6726-free-rp").as_deref(), Some("ui"));
-        assert_eq!(space_prefix("mtg-ai").as_deref(), Some("mtg"));
-        assert_eq!(space_prefix("solo"), None);
     }
 
     #[test]

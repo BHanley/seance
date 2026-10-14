@@ -588,14 +588,6 @@ input:focus {
 .ws-row.needs .ws-name {
   color: var(--violet);
 }
-/* The cluster header above already says the prefix; repeating it at full
-   strength makes you re-read it on every row. */
-.ws-prefix {
-  flex: 0 0 auto;
-  font-size: var(--fs-row);
-  color: var(--text-faint);
-}
-/* No gap here: the prefix and the rest of the name are one word. */
 .ws-label {
   flex: 1 1 auto;
   min-width: 0;

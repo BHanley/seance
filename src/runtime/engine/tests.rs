@@ -998,7 +998,7 @@ fn space_ops_edit_the_rail_blob_and_keep_its_other_keys() {
             .iter()
             .map(|s| s["id"].as_str().unwrap())
             .collect();
-        assert_eq!(ids, vec!["general", "ui"]);
+        assert_eq!(ids, vec!["general"]);
 
         eng.space_op("new", &["later".into()], None).unwrap();
         eng.space_op("move", &["ui-a".into(), "later".into()], None)

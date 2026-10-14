@@ -66,8 +66,6 @@ impl Engine {
                         json!({
                             "id": s.id,
                             "name": s.name,
-                            "prefix": s.prefix,
-                            "auto": s.auto,
                             "default": spaces.default_id() == s.id,
                             "circles": members,
                         })

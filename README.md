@@ -39,7 +39,7 @@ the keyboard). Point `--command` at whatever agent CLI you use.
 ## Features
 
 - **Live multi-pane terminals** — real PTYs, selection, scrollback; weighted tile grid with drag sashes (n≥2)
-- **Spaces** — the rail lists spaces, then the circles in the one you're looking at. Drag a circle onto a space to move it; drag spaces to reorder them. A label prefix shared by two circles (`mtg-ai`, `mtg-carl`) makes a space on its own; a circle you move by hand stays put. One space is the default and catches everything else. Filter chips (pins, AFK, slack…) narrow the list across spaces without moving anything. `ctl space` / `ctl move` do the same from scripts.
+- **Spaces** — the rail lists spaces, then the circles in the one you're looking at. Drag a circle onto a space to move it; drag spaces to reorder them. A circle stays where you put it; a new one lands in the space on screen. One space is the default and catches everything else. Filter chips (pins, AFK, slack…) narrow the list across spaces without moving anything. `ctl space` / `ctl move` do the same from scripts.
 - **Notes on the back of every pane** — shared markdown (`$SEANCE_SCRATCHPAD`)
 - **Pad drawer** — stage chip / ▤ shows task inject body + pad tail (live-refreshes)
 - **Stage strip** — urgency-sorted roster chips (click focus+pad, double-click zoom)
