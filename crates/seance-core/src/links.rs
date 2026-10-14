@@ -10,7 +10,7 @@ use crate::snapshot::GridSnapshot;
 /// snapshot carries no WRAPPED flag, so continuation is inferred (see
 /// [`continues`]); the cap bounds a screen of box-drawing from being glued
 /// into one line.
-const STITCH_MAX: u16 = 6;
+const STITCH_MAX: u16 = 32;
 
 fn is_url_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || "-._~:/?#[]@!$&'()*+,;=%".contains(c)
@@ -60,6 +60,11 @@ fn row_chars(snap: &GridSnapshot, r: u16) -> &[crate::snapshot::CellSnap] {
 /// joins, `…/x` + `tra text` does not. Only the URL covering the hit is ever
 /// returned, so a join elsewhere on the row is harmless.
 fn continues(snap: &GridSnapshot, r: u16) -> Option<Wrap> {
+    continues_within(snap, r, STITCH_MAX)
+}
+
+/// [`continues`], looking back at most `depth` rows for a run of pieces.
+fn continues_within(snap: &GridSnapshot, r: u16, depth: u16) -> Option<Wrap> {
     let rows = (snap.cells.len() / snap.cols.max(1) as usize) as u16;
     if r + 1 >= rows {
         return None;
@@ -70,10 +75,24 @@ fn continues(snap: &GridSnapshot, r: u16) -> Option<Wrap> {
     }
     let text: String = this.iter().map(|c| c.c).collect();
     let last = text.trim_end().rsplit(' ').next().unwrap_or("");
+    // A row holding nothing but one URL-character token is a middle piece of
+    // a long URL even with no `/` or `.` in it: an OAuth link wrapped into
+    // `…&code_challenge=8Ab1…` rows was cut short there (2026-10-14). Only
+    // when the row above runs into it and both end at the same column (the
+    // program's wrap width); a shorter row is the URL's tail, and gluing the
+    // next row's `(expires …` onto it would open the wrong address. A tail
+    // that happens to end exactly at the wrap width still looks like a piece;
+    // the text cannot tell them apart.
+    let end_col = |t: &str| t.trim_end().chars().count();
+    let sole_piece = last == text.trim() && depth > 0 && r > 0 && {
+        let above: String = row_chars(snap, r - 1).iter().map(|c| c.c).collect();
+        end_col(&above) == end_col(&text)
+            && continues_within(snap, r - 1, depth - 1) == Some(Wrap::Hard)
+    };
     let ends_mid_url = !last.is_empty()
         && last.chars().all(is_url_char)
         && !last.ends_with(['.', ',', ';', ':', ')', ']', '!', '?', '\''])
-        && (last.contains("://") || last.contains('/') || last.contains('.'));
+        && (last.contains("://") || last.contains('/') || last.contains('.') || sole_piece);
     if !ends_mid_url {
         return None;
     }
@@ -83,18 +102,34 @@ fn continues(snap: &GridSnapshot, r: u16) -> Option<Wrap> {
     // "…?item=289" over "- #259 club rides" opened `…item=289-` (2026-10-03).
     // Numbered: 1–3 digits + `.`/`)` with the item's text after it — so a
     // wrapped `…p179026479900` + `6399)` is still a continuation.
-    let numbered = (2..=4).contains(&first.len())
+    let numbered = first.is_ascii()
+        && (2..=4).contains(&first.len())
         && first[..first.len() - 1].chars().all(|c| c.is_ascii_digit())
         && first.ends_with(['.', ')'])
         && !next.trim_start()[first.len()..].trim().is_empty();
     let bullet = matches!(first, "-" | "*" | "+" | "•") || numbered;
     let continuation = !first.is_empty()
         && !bullet
-        && next.starts_with(' ') == text.starts_with(' ')
+        && next.starts_with(' ') == indented(&text)
         && first.chars().all(is_url_char)
         && first.chars().any(|c| c.is_ascii_alphanumeric())
-        && !first.chars().all(|c| c.is_ascii_alphabetic());
+        && !first.chars().all(|c| c.is_ascii_alphabetic())
+        // One URL per row in an unbulleted list: the next is its own link.
+        && !first.starts_with("http://")
+        && !first.starts_with("https://");
     continuation.then_some(Wrap::Hard)
+}
+
+/// Does the row's text sit in from the left edge? Claude's reply marker
+/// (`● ` / `⏺ `) or a bullet counts as indent: the reply's first row starts
+/// at column 0 while its wrapped rows start with spaces.
+fn indented(text: &str) -> bool {
+    let mut cs = text.chars();
+    match (cs.next(), cs.next()) {
+        (Some(' '), _) => true,
+        (Some(c), Some(' ')) => !c.is_alphanumeric(),
+        _ => false,
+    }
 }
 
 /// The wrapped run of rows containing `row`, as one string, plus where `col`
@@ -318,6 +353,95 @@ mod tests {
             url_at_cell(&snap, 0, 30).as_deref(),
             Some("https://rwgps.slack.com/archives/C05RT3C611P/p1790264799006399")
         );
+    }
+
+    /// Real frames from 2026-10-14. A long OAuth link wraps into rows that
+    /// hold only query string (no `/` or `.`), and runs past six rows; a URL
+    /// on the first row of a Claude reply sits after the `●` marker while
+    /// the rest is indented.
+    #[test]
+    fn long_and_reply_marker_urls_are_stitched_whole() {
+        let snap = grid_of(
+            62,
+            &[
+                "  1. Open this link and approve: https://www.figma.com/oauth",
+                "     /mcp?response_type=code&client_id=7TMfnUEIBxoSzzOD5LzcT",
+                "     i&code_challenge=8Ab1EFexbQD_im4i3VeuVCus4TOgmSM3xgnxGW",
+                "     AieFc&code_challenge_method=S256&redirect_uri=http%3A%2",
+                "     F%2Flocalhost%3A51344%2Fcallback&state=MI0goXog_g_bgwyx",
+                "     _59lrNZs3Ce4SDolodhMFfyf8sg&scope=mcp%3Aconnect&resourc",
+                "     e=https%3A%2F%2Fmcp.figma.com%2Fmcp",
+                "  2. If the page that loads after you approve shows an",
+            ],
+        );
+        let want = Some(
+            "https://www.figma.com/oauth/mcp?response_type=code&client_id=7TMfnUEIBxoSzzOD5LzcT\
+             i&code_challenge=8Ab1EFexbQD_im4i3VeuVCus4TOgmSM3xgnxGWAieFc&code_challenge_method=\
+             S256&redirect_uri=http%3A%2F%2Flocalhost%3A51344%2Fcallback&state=MI0goXog_g_bgwyx\
+             _59lrNZs3Ce4SDolodhMFfyf8sg&scope=mcp%3Aconnect&resource=https%3A%2F%2Fmcp.figma.com%2Fmcp",
+        );
+        for row in 0..7 {
+            let col = if row == 0 { 40 } else { 8 };
+            assert_eq!(url_at_cell(&snap, row, col).as_deref(), want, "row {row}");
+        }
+        assert_eq!(url_at_cell(&snap, 7, 8), None);
+
+        let snap = grid_of(
+            70,
+            &[
+                "● Filed it under the epic: https://github.com/ridewithgps/ri",
+                "  dewithgps/issues/24265 and set the roadmap fields.",
+            ],
+        );
+        let want = Some("https://github.com/ridewithgps/ridewithgps/issues/24265");
+        assert_eq!(url_at_cell(&snap, 0, 40).as_deref(), want);
+        assert_eq!(url_at_cell(&snap, 1, 4).as_deref(), want);
+    }
+
+    /// Review cases (2026-10-14): a URL's short tail row does not swallow the
+    /// prose under it, a URL list without bullets stays separate, a glyph
+    /// opening the next row does not panic, and a phone-width OAuth link of
+    /// 18 rows opens whole from any row.
+    #[test]
+    fn url_tails_lists_and_long_phone_urls() {
+        let snap = grid_of(
+            50,
+            &[
+                "  Open: https://acc.example.com/o?client=1",
+                "  234&state=abcXYZ123",
+                "  (expires in 10 minutes)",
+            ],
+        );
+        let want = Some("https://acc.example.com/o?client=1234&state=abcXYZ123");
+        assert_eq!(url_at_cell(&snap, 0, 12).as_deref(), want);
+
+        let snap = grid_of(40, &["  https://a.com/x", "  https://b.com/y"]);
+        assert_eq!(url_at_cell(&snap, 0, 4).as_deref(), Some("https://a.com/x"));
+
+        let snap = grid_of(40, &["  see https://x.example.com/a/b", "  ⎿  done"]);
+        assert_eq!(
+            url_at_cell(&snap, 0, 8).as_deref(),
+            Some("https://x.example.com/a/b")
+        );
+
+        let url: String = "https://auth.example.com/oauth/authorize?"
+            .chars()
+            .chain((0..600).map(|i| if i % 9 == 0 { '&' } else { 'a' }))
+            .collect();
+        let chars: Vec<char> = url.chars().collect();
+        let rows: Vec<String> = chars
+            .chunks(38)
+            .map(|c| format!("  {}", c.iter().collect::<String>()))
+            .collect();
+        let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
+        let snap = grid_of(45, &refs);
+        for row in 0..refs.len() as u16 {
+            assert_eq!(
+                url_at_cell(&snap, row, 4).as_deref(),
+                Some(url.as_str()),
+                "row {row}"
+            );
+        }
     }
 
     /// A markdown list of URLs, one per line (2026-10-03): the next item's
