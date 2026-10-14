@@ -845,6 +845,13 @@ impl SeanceApp {
                     .filter(|p| p.busy)
                     .map(|p| p.slug.clone())
                     .collect();
+                // A pane already working when this window (re)connects still
+                // earns its done banner and ✓; time counts from now.
+                let now = std::time::Instant::now();
+                for slug in &self.busy_panes {
+                    self.busy_since.entry(slug.clone()).or_insert(now);
+                }
+                self.busy_since.retain(|s, _| self.busy_panes.contains(s));
 
                 self.selected_workspace = selected_workspace;
                 self.active_slug = focused_pane;
@@ -1074,11 +1081,10 @@ impl SeanceApp {
                         .insert(pane.clone(), std::time::Instant::now());
                 } else if let Some(t) = self.busy_since.remove(&pane) {
                     let took = t.elapsed().as_secs();
-                    let claude = self
-                        .panes
-                        .iter()
-                        .any(|p| p.slug == pane && workspaces::runs_claude(&p.command));
-                    if claude && took >= 5 {
+                    // Busy only ever comes from an agent's spinner title, so
+                    // no command check: most panes start Claude from a shell
+                    // (`bash -l`), and those never got a banner or a ✓.
+                    if took >= 5 {
                         // Decide a moment later: sleeping a pane also clears
                         // busy (its `asleep` lands with the next State), and a
                         // spinner that comes straight back wasn't done.
