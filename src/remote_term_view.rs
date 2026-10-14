@@ -1161,6 +1161,7 @@ fn shape_run_cached(
     let mut h = std::collections::hash_map::DefaultHasher::new();
     b.text.hash(&mut h);
     b.style.bold.hash(&mut h);
+    b.style.underline.hash(&mut h);
     // Hsla isn't Hash; bit-hash the components.
     let c = b.style.fg;
     for f in [c.h, c.s, c.l, c.a, f32::from(cell_w), f32::from(font_size)] {
@@ -1185,7 +1186,11 @@ fn shape_run_cached(
             font,
             color: b.style.fg,
             background_color: None,
-            underline: None,
+            underline: b.style.underline.then(|| gpui::UnderlineStyle {
+                thickness: px(1.),
+                color: Some(b.style.fg),
+                wavy: false,
+            }),
             strikethrough: None,
         }],
         Some(cell_w),
@@ -1480,6 +1485,7 @@ struct Style {
     fg: Hsla,
     bg: Option<Hsla>,
     bold: bool,
+    underline: bool,
 }
 
 fn cell_style(c: &CellSnap) -> Style {
@@ -1495,6 +1501,8 @@ fn cell_style(c: &CellSnap) -> Style {
         fg,
         bg,
         bold: c.bold,
+        // pty_session sets this on OSC-8 link cells too, so links read as links.
+        underline: c.underline,
     }
 }
 
