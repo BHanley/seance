@@ -3,6 +3,7 @@
 //! when you aren't looking at that pane. Sound and the command rule come from
 //! `~/.config/seance/terminal.conf` (see `term_config`).
 
+use super::workspaces::WorkspaceAttention;
 use super::SeanceApp;
 use crate::desktop_notify;
 use crate::term_config::CommandFinishNotify;
@@ -53,6 +54,34 @@ impl SeanceApp {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// A Claude pane finished out of sight: ✓ on its row, and the circle's
+    /// "done" mark when the human is in another circle (so the alert says
+    /// where to look, not just that something happened).
+    pub(super) fn mark_done_unseen(&mut self, pane: &str) {
+        let watching = self.window_active && self.active_slug.as_deref() == Some(pane);
+        if watching {
+            return;
+        }
+        self.done_unseen.insert(pane.to_string());
+        let Some(ws) = self
+            .panes
+            .iter()
+            .find(|p| p.slug == pane)
+            .map(|p| p.workspace.clone())
+        else {
+            return;
+        };
+        if self.selected_workspace.as_deref() == Some(ws.as_str()) {
+            return;
+        }
+        // Done replaces a leftover `working` mark (which never draws); only
+        // `needs` outranks it.
+        let cur = self.workspace_unread.get(&ws).copied();
+        if !matches!(cur, Some(WorkspaceAttention::NeedsHuman)) {
+            self.workspace_unread.insert(ws, WorkspaceAttention::Done);
         }
     }
 

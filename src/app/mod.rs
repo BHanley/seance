@@ -264,6 +264,9 @@ pub struct SeanceApp {
     busy_panes: std::collections::HashSet<String>,
     /// When each busy pane went busy, for the "done" alert on its falling edge.
     busy_since: std::collections::HashMap<String, std::time::Instant>,
+    /// Claude panes that finished while the human wasn't looking at them:
+    /// a ✓ on their sidebar row until the pane is next focused.
+    done_unseen: std::collections::HashSet<String>,
     /// Workspaces that currently have a live-working agent (for falling-edge
     /// touch when work finishes → top of the non-working band).
     workspace_was_working: std::collections::HashSet<String>,
@@ -502,6 +505,7 @@ impl SeanceApp {
             resize_settle: std::collections::HashMap::new(),
             busy_panes: std::collections::HashSet::new(),
             busy_since: std::collections::HashMap::new(),
+            done_unseen: std::collections::HashSet::new(),
             workspace_was_working: std::collections::HashSet::new(),
             workspace_names: std::collections::HashMap::new(),
             circle_mode_defs: Vec::new(),
@@ -1084,10 +1088,12 @@ impl SeanceApp {
                                 .timer(Duration::from_millis(1500))
                                 .await;
                             let Some(this) = this.upgrade() else { return };
-                            this.update(cx, |app: &mut SeanceApp, _| {
+                            this.update(cx, |app: &mut SeanceApp, cx| {
                                 let idle = !app.busy_panes.contains(&pane)
                                     && app.panes.iter().any(|p| p.slug == pane && !p.asleep);
                                 if idle {
+                                    app.mark_done_unseen(&pane);
+                                    cx.notify();
                                     let body = if took >= 60 {
                                         format!("finished after {}m {}s", took / 60, took % 60)
                                     } else {
@@ -1120,6 +1126,7 @@ impl SeanceApp {
                 }
                 self.busy_panes.remove(&slug);
                 self.busy_since.remove(&slug);
+                self.done_unseen.remove(&slug);
                 self.statuses.remove(&slug);
                 self.workspace_focus.retain(|_, s| s != &slug);
                 // A row that vanishes never reports the pointer leaving it.
@@ -2800,6 +2807,12 @@ impl Render for SeanceApp {
         // stderr (gui.stderr.log). Measures element construction only — gpui
         // layout/paint happen outside this fn — but the RATE is exact.
         self.render_probe.tick();
+        // Looking at a finished pane is reading it: drop its ✓.
+        if self.window_active {
+            if let Some(slug) = self.active_slug.as_deref() {
+                self.done_unseen.remove(slug);
+            }
+        }
         crate::latency_probe::complete("g_kick", "app", "gui kick→render");
         // Stamp render entry; paint_grid records "gui render→paint" against it
         // — locates frame cost between element construction and canvas paint

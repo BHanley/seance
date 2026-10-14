@@ -1021,6 +1021,9 @@ impl SeanceApp {
                     Some(WorkspaceAttention::Working) => {
                         (working_spinner_glyph(), SeancePalette::flame())
                     }
+                    _ if self.done_unseen.contains(&slug) => {
+                        ("✓", WorkspaceAttention::Done.color())
+                    }
                     _ => ("", SeancePalette::text_faint()),
                 };
                 div()
