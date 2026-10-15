@@ -5,6 +5,7 @@ mod comms;
 mod control;
 mod gui;
 pub(crate) mod helpers;
+mod lifetime;
 pub mod queue;
 mod sleep;
 mod spaces;
@@ -342,6 +343,7 @@ impl Engine {
             eng.selected_workspace = eng.panes.first().map(|p| p.workspace.clone());
         }
 
+        eng.prune_inherited_tasks();
         eng.save_state()?;
         Ok((eng, event_rx))
     }
@@ -531,6 +533,7 @@ impl Engine {
             eng.ensure_workspace_id(&slug);
         }
         eng.load_frozen_grids();
+        eng.prune_inherited_tasks();
         eng.save_state()?;
         Ok((eng, event_rx))
     }

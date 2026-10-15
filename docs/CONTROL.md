@@ -195,7 +195,9 @@ single screen and that the human can watch update in real time.
 
 Spawned sessions get these env vars so the agent inside knows it's under seance:
 
-- `SEANCE_SESSION` — the pane's human-readable slug (can be reused after deletion),
+- `SEANCE_SESSION` — the pane's human-readable slug (can be reused after deletion;
+  a reused slug starts with no task, pad or messages — the old pane's pad files
+  move to `scratch/archive/<pane_id>.*`),
 - `SEANCE_PANE_ID` — the pane's lifetime UUIDv4, never reused,
 - `SEANCE_WORKSPACE_ID` — its circle's lifetime UUIDv4, never reused,
 - `SEANCE_WORKSPACE` — its circle's **slug** (what makes scoping automatic).

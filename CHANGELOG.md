@@ -27,6 +27,19 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   upgrade bundles gain IDs and save them immediately. Processes retained
   by a live upgrade receive the env vars on their next wake/restore.
 
+### Fixed
+
+- A new pane that is given a dead pane's slug no longer inherits its task,
+  scratchpad, sidecars (`.taskid` / `.task.json` / `.telegram.json`),
+  messages, asks or pad revs. Closing a pane retires its slug-keyed state
+  and moves its pad files to `scratch/archive/<pane_id>.*`; task and message
+  history stays in the stores but is hidden from a later owner of the slug
+  (records older than the pane's birth). On load, active tasks whose pane is
+  gone or predates the live pane's birth are marked `orphaned`. Pads of
+  panes already running are left alone (their `$SEANCE_SCRATCHPAD` points
+  there); leftover pads under a free slug are archived as
+  `orphan-<slug>-<ms>.*` when the slug is next used.
+
 ### Removed
 
 - PR links, gone everywhere: the PTY scraper, the per-circle link list and

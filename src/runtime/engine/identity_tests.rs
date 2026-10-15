@@ -293,3 +293,124 @@ fn terminal_environment_keeps_ids_on_wake_and_cold_restore() {
         assert_eq!(identities(&eng), ids);
     });
 }
+
+/// A fresh pane that is handed a dead pane's slug inherits nothing: not its
+/// task, its pad, its sidecars, its messages. The dead pane's pad is kept
+/// under its UUID in scratch/archive/.
+#[test]
+fn reused_slug_inherits_no_task_pad_or_inbox() {
+    with_test_state_dir("slug-reuse", || {
+        let mut eng = engine();
+        let slug = eng.spawn(file_spec("claude", "lab")).unwrap();
+        let old_id = eng.panes[0].pane_id.clone();
+        let tid = eng.begin_task(&slug, "build the Wander workspace");
+        let pad = eng.panes[0].scratch_path.clone();
+        std::fs::write(&pad, "Kevin Weekly agenda — finish note\n").unwrap();
+        eng.post_message(crate::runtime::protocol::MessageRecord {
+            kind: "tell".into(),
+            to_pane: slug.clone(),
+            text: "for the old pane".into(),
+            status: "delivered".into(),
+            ..Default::default()
+        });
+        // Records were made in an earlier millisecond than the successor's birth.
+        for t in eng.tasks.values_mut() {
+            t.created_ms -= 1_000;
+        }
+        for m in eng.comms.messages.iter_mut() {
+            m.created_ms -= 1_000;
+        }
+
+        eng.kill_pane(&slug);
+        let reused = eng.spawn(file_spec("claude", "lab")).unwrap();
+        assert_eq!(reused, slug);
+        let idx = eng.panes.iter().position(|p| p.slug == slug).unwrap();
+        assert_ne!(eng.panes[idx].pane_id, old_id);
+        let fresh_pad = eng.panes[idx].scratch_path.clone();
+
+        let task = eng.handle_control(ControlRequest::Task {
+            pane: Some(slug.clone()),
+            id: None,
+            scope: None,
+            from: None,
+        });
+        assert!(!task.ok, "inherited a task: {:?}", task.data);
+        let me = eng.handle_control(ControlRequest::Whoami {
+            scope: None,
+            from: Some(slug.clone()),
+        });
+        assert_eq!(me.data.as_ref().unwrap()["task_id"], Value::Null);
+        let row = eng.pane_summary_json(&eng.panes[idx]);
+        assert_eq!(row["task_id"], Value::Null);
+        let inbox = eng.handle_control(ControlRequest::MsgList {
+            pane: Some(slug.clone()),
+            circle: None,
+            limit: None,
+            scope: None,
+            from: None,
+        });
+        assert_eq!(inbox.data.unwrap()["messages"], json!([]));
+
+        let body = std::fs::read_to_string(&fresh_pad).unwrap();
+        assert!(!body.contains("Kevin"), "inherited the pad: {body}");
+        assert!(!pad.with_extension("taskid").exists());
+        assert!(!pad.with_extension("task.json").exists());
+        let archive = pad.parent().unwrap().join("archive");
+        let kept = std::fs::read_to_string(archive.join(format!("{old_id}.md"))).unwrap();
+        assert!(kept.contains("Kevin Weekly agenda"));
+        let kept_id = std::fs::read_to_string(archive.join(format!("{old_id}.taskid"))).unwrap();
+        assert_eq!(kept_id.trim(), tid);
+        assert_eq!(eng.tasks[&tid].status, "orphaned");
+        // The task itself is still addressable by id.
+        let by_id = eng.handle_control(ControlRequest::Task {
+            pane: None,
+            id: Some(tid.clone()),
+            scope: None,
+            from: None,
+        });
+        assert!(by_id.ok);
+    });
+}
+
+/// State written before close retired slug state: a pad and an active task
+/// left behind under a dead slug. A new pane taking the slug sweeps the pad
+/// aside; a restart drops active tasks that no live pane owns, while a live
+/// pane keeps its own.
+#[test]
+fn leftovers_from_before_the_fix_are_cleared() {
+    with_test_state_dir("slug-reuse-legacy", || {
+        let mut eng = engine();
+        let keeper = eng.spawn(file_spec("keeper", "lab")).unwrap();
+        let own = eng.begin_task(&keeper, "keeper's own task");
+        let gone = eng.spawn(file_spec("gone", "lab")).unwrap();
+        let leaked = eng.begin_task(&gone, "assignment for a dead pane");
+        let pad = eng.panes[1].scratch_path.clone();
+        std::fs::write(&pad, "old notes\n").unwrap();
+        eng.tasks.get_mut(&leaked).unwrap().created_ms -= 1_000;
+        // Old close path: pane removed, slug state left in place.
+        eng.panes.retain(|p| p.slug != gone);
+        eng.comms.born.remove(&gone);
+        eng.persist();
+        drop(eng);
+
+        let (mut eng, _) = Engine::new().unwrap();
+        assert_eq!(eng.active_tasks.get(&keeper), Some(&own));
+        assert!(!eng.active_tasks.contains_key(&gone));
+        assert_eq!(eng.tasks[&leaked].status, "orphaned");
+        assert!(pad.exists(), "load must not move pad files");
+
+        let reused = eng.spawn(file_spec("gone", "lab")).unwrap();
+        assert_eq!(reused, gone);
+        assert!(!std::fs::read_to_string(&pad).unwrap().contains("old notes"));
+        let archived: Vec<String> = std::fs::read_dir(pad.parent().unwrap().join("archive"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            archived
+                .iter()
+                .any(|n| n.starts_with(&format!("orphan-{gone}-")) && n.ends_with(".md")),
+            "{archived:?}"
+        );
+    });
+}

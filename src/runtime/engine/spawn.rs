@@ -35,6 +35,9 @@ impl Engine {
         };
         let taken: Vec<&str> = self.panes.iter().map(|p| p.slug.as_str()).collect();
         let slug = unique_slug(&name, &taken);
+        // The slug may have belonged to a pane that is gone; nothing of its
+        // must reach this one.
+        self.retire_slug_state(&slug, None);
         let pane_id = new_identity_uuid();
         // A spawn target may be given as a slug OR a label; an unknown name
         // mints a new circle (slug from the name, name kept as the label).
@@ -184,7 +187,7 @@ impl Engine {
                 pane_id: p.pane_id.clone(),
                 kind: "file".into(),
                 name: p.name.clone(),
-                slug: want_slug,
+                slug: want_slug.clone(),
                 workspace: p.workspace.clone(),
                 cwd: p.cwd.clone(),
                 command: p.command.clone(),
@@ -192,7 +195,7 @@ impl Engine {
                 resume_on_restore: false,
                 agent_session: None,
                 asleep: p.asleep,
-                scratch_path: self.store.path_for(&p.slug),
+                scratch_path: self.store.path_for(&want_slug),
                 file: Some(path.to_string_lossy().to_string()),
                 session: None,
                 agency: crate::agency::Agency::default(),
@@ -251,7 +254,7 @@ impl Engine {
             pane_id: p.pane_id.clone(),
             kind: "terminal".into(),
             name: p.name.clone(),
-            slug: want_slug,
+            slug: want_slug.clone(),
             workspace: p.workspace.clone(),
             cwd: p.cwd.clone(),
             command: base,
@@ -259,7 +262,7 @@ impl Engine {
             resume_on_restore: p.resume_on_restore,
             agent_session,
             asleep: p.asleep,
-            scratch_path: self.store.path_for(&p.slug),
+            scratch_path: self.store.path_for(&want_slug),
             file: None,
             session,
             agency: crate::agency::Agency::default(),
@@ -348,6 +351,7 @@ impl Engine {
             // an empty one in both sidebars.
             // Before the prune: notices name the circle by its label.
             self.on_pane_closed(slug, &circle, was_lead);
+            self.retire_slug_state(slug, Some(&pane.pane_id));
             self.prune_workspace_if_empty(&workspace);
             events::log("daemon", None, Some(slug), "pane_killed", "killed".into());
         }

@@ -93,6 +93,42 @@ impl ScratchpadStore {
         }
         path
     }
+
+    /// Move `<slug>.md` and its sidecars (`.taskid`, `.task.json`,
+    /// `.telegram.json`, …) to `archive/<key>.*` so a later pane given the same
+    /// slug starts clean. Returns how many files moved.
+    pub fn archive(&self, slug: &str, key: &str) -> usize {
+        let stem = format!("{}.", sanitize_slug(slug));
+        let Ok(entries) = std::fs::read_dir(&self.dir) else {
+            return 0;
+        };
+        let archive = self.dir.join("archive");
+        let key = sanitize_slug(key);
+        let mut moved = 0;
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            // Slugs never contain '.', so the first dot ends the slug exactly
+            // (claude-2 must not take claude-29's files).
+            let Some(ext) = name.strip_prefix(&stem) else {
+                continue;
+            };
+            if !entry.path().is_file() || std::fs::create_dir_all(&archive).is_err() {
+                continue;
+            }
+            let mut dest = archive.join(format!("{key}.{ext}"));
+            if dest.exists() {
+                let ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or(0);
+                dest = archive.join(format!("{key}-{ms}.{ext}"));
+            }
+            if std::fs::rename(entry.path(), &dest).is_ok() {
+                moved += 1;
+            }
+        }
+        moved
+    }
 }
 
 /// Replace path-hostile characters in a slug so it stays a single flat file.

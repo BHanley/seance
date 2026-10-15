@@ -52,8 +52,8 @@ pub struct Inflight {
 /// Ephemeral pump state (not persisted).
 #[derive(Default)]
 pub struct SendQueueState {
-    idle_since: HashMap<String, u64>,
-    inflight: HashMap<String, Inflight>,
+    pub(super) idle_since: HashMap<String, u64>,
+    pub(super) inflight: HashMap<String, Inflight>,
 }
 
 impl Engine {
