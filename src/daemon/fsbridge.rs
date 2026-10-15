@@ -21,6 +21,10 @@ use crate::runtime::protocol::{FsOp, GuiEvent};
 
 use super::SharedEngine;
 
+/// Serializes [`FsOp::WriteIfUnchanged`]: its check and its rename must not
+/// interleave with another one (and the lock lets them share a temp name).
+static WRITE_IF: Mutex<()> = Mutex::new(());
+
 /// Execute one op. Returns `(ok, data, error)` for the FsResult.
 pub fn run(op: FsOp, engine: &SharedEngine) -> (bool, Option<Value>, Option<String>) {
     match run_inner(op, engine) {
@@ -47,6 +51,21 @@ fn run_inner(op: FsOp, engine: &SharedEngine) -> Result<Value, String> {
                 .map_err(|e| format!("bad base64: {e}"))?;
             atomic_write(&path, &bytes).map_err(|e| format!("write {path:?}: {e}"))?;
             Ok(json!({ "mtime_ms": mtime_ms(&path) }))
+        }
+        FsOp::WriteIfUnchanged {
+            path,
+            expected_b64,
+            contents_b64,
+        } => {
+            let b64 = &base64::engine::general_purpose::STANDARD;
+            let expected = b64
+                .decode(expected_b64.as_bytes())
+                .map_err(|e| format!("bad base64: {e}"))?;
+            let bytes = b64
+                .decode(contents_b64.as_bytes())
+                .map_err(|e| format!("bad base64: {e}"))?;
+            let real = write_if_unchanged(&expand(&path), &expected, &bytes)?;
+            Ok(json!({ "mtime_ms": mtime_ms(&real) }))
         }
         FsOp::Stat { path } => {
             let path = expand(&path);
@@ -163,6 +182,43 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
+/// The [`FsOp::WriteIfUnchanged`] write: through a symlink to its target,
+/// keeping the file's permissions, and only if it still holds `expected`.
+/// Returns the real path written.
+fn write_if_unchanged(path: &Path, expected: &[u8], bytes: &[u8]) -> Result<PathBuf, String> {
+    let real = std::fs::canonicalize(path).map_err(|e| format!("resolve {path:?}: {e}"))?;
+    // One at a time daemon-wide, so two clicks can't both pass the check.
+    let _one = WRITE_IF.lock().unwrap_or_else(|p| p.into_inner());
+    let current = std::fs::read(&real).map_err(|e| format!("read {real:?}: {e}"))?;
+    if current != expected {
+        return Err(crate::runtime::protocol::FS_CHANGED.to_string());
+    }
+    let perms = std::fs::metadata(&real)
+        .map_err(|e| format!("stat {real:?}: {e}"))?
+        .permissions();
+    let name = real.file_name().unwrap_or_default().to_string_lossy();
+    let tmp = real.with_file_name(format!(".{name}.seance-{}.tmp", std::process::id()));
+    // Born with the file's mode, so new contents are never wider-readable.
+    let written = {
+        use std::io::Write as _;
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+        let _ = std::fs::remove_file(&tmp); // a crash leftover
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(perms.mode())
+            .open(&tmp)
+            .and_then(|mut f| f.write_all(bytes))
+            .and_then(|_| std::fs::set_permissions(&tmp, perms))
+            .and_then(|_| std::fs::rename(&tmp, &real))
+    };
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("write {real:?}: {e}"));
+    }
+    Ok(real)
+}
+
 /// Shared GUI layout lives beside the daemon's state.json.
 fn layout_path() -> PathBuf {
     state_dir_file("layout.json")
@@ -220,4 +276,34 @@ pub fn start_host_poller(engine: SharedEngine) {
             }
         })
         .ok();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    #[test]
+    fn write_if_unchanged_follows_symlinks_keeps_mode_and_refuses_stale() {
+        let dir = std::env::temp_dir().join(format!("seance-wiu-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let real = dir.join("todo.md");
+        std::fs::write(&real, "- [ ] a\n").unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let link = dir.join("link.md");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        assert_eq!(
+            write_if_unchanged(&link, b"stale", b"x"),
+            Err(crate::runtime::protocol::FS_CHANGED.to_string())
+        );
+        write_if_unchanged(&link, b"- [ ] a\n", b"- [x] a\n").unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "- [x] a\n");
+        let mode = std::fs::metadata(&real).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "temp file left behind");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

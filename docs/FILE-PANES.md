@@ -80,6 +80,46 @@ line-multiset delta (`+added/-removed`) between the viewed snapshot and the one
 immediately before it. The click-to-toggle body is a real ordered unified line
 diff (LCS under 2500 lines per side; greedy lookahead beyond that).
 
+## Task boxes
+
+In a markdown pane following the live file, a `- [ ]` / `- [x]` box is
+clickable: a click flips that one line on disk (`[ ]` ↔ `[x]`), so a reader can
+tick items in a tracker without opening an editor. Nothing else in the pane is
+editable, and boxes in a history snapshot stay plain (a snapshot isn't the
+file).
+
+The write is careful, because the canonical file pane is one an agent is
+rewriting while you read it:
+
+- Before render, every task item the markdown parser finds gets an invisible
+  `<!--seance-task:N-->` marker carrying its line number **in the file**
+  (`src/mdtask.rs`). It is stamped on the unfolded source, so folding and the
+  frontmatter box can't shift it, and it comes from the parser, so a `- [ ]`
+  in a code block or an HTML comment is never a box. A click writes by that
+  line number, never by render position. A task on a line Seance can't edit
+  safely (inside a blockquote, say) still draws its box, but it doesn't click.
+- On click the file is re-read. It must match what the pane is showing byte
+  for byte, and line N must still read as the task you clicked, box state
+  included. Otherwise nothing is written and a toast says why; the watcher
+  reloads the pane within a second, and you click again. One click at a time
+  per pane.
+- The flip changes one byte. Line endings and everything else stay as they
+  were. The write is a daemon op, `FsOp::WriteIfUnchanged`, which checks the
+  file again right before writing, writes a temp file and renames it over
+  the real file (through a symlink to its target), and keeps the file's
+  permissions. A hard link to the file is split off by the rename. The 1s
+  watcher records the change as an ordinary history snapshot.
+- A file that isn't valid UTF-8 is never written.
+- Older daemons don't know the op: the click times out with a toast and
+  nothing is written. Restart the daemon onto this version to tick.
+
+The renderer draws boxes with no click hook, so (like folding) Seance works
+around it rather than forking it: any list holding a marked task is drawn by
+`fileview.rs` itself, a box or bullet beside each item and the item's
+markdown in a nested view, so bold, links and code still render. One cost: a
+drag selection across several blocks doesn't pick up text inside these lists
+(the copy button still copies the whole file).
+
 ## Folding sections
 
 Markdown panes **open folded to their outline**: every heading on screen, no
@@ -151,8 +191,10 @@ Plain, uncompressed file copies — no diffs — under:
 - **Cap: `MAX_SNAPSHOTS = 200`** per file. Recording past the cap prunes the
   oldest `.snap` files (indices keep climbing; the on-disk filenames are the
   source of truth, re-derived by listing the dir).
-- **Read-only.** The pane never writes the watched file — only its own history
-  copies. There is no merge/conflict logic because there are no local edits.
+- **Read-only, except task boxes.** The pane never edits the watched file,
+  with one exception (next section). Everything else it writes is its own
+  history copies. There is no merge/conflict logic because there are no local
+  edits.
 - **Poll latency ≤ 1s.** Changes are visible within one poll interval; this is
   not an inotify-tight loop (a deliberate match to the scratchpad pattern).
 - **Whole-file snapshots.** A large file edited many times stores many full

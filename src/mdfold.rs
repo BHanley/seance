@@ -75,7 +75,7 @@ fn atx_heading(line: &str) -> Option<(u8, String)> {
 
 /// Does this line open or close a fenced code block? Returns the fence char and
 /// its length so a shorter inner fence can't close a longer outer one.
-fn fence_marker(line: &str) -> Option<(char, usize)> {
+pub(crate) fn fence_marker(line: &str) -> Option<(char, usize)> {
     let indent = line.len() - line.trim_start_matches(' ').len();
     if indent > 3 {
         return None;

@@ -15,6 +15,7 @@ mod host;
 mod latency_probe;
 mod launch;
 mod mdfold;
+mod mdtask;
 mod pane;
 mod picker;
 mod popout;

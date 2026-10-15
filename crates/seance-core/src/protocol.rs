@@ -233,6 +233,9 @@ pub enum GuiRequest {
     Bye,
 }
 
+/// Error text of a [`FsOp::WriteIfUnchanged`] whose file moved on.
+pub const FS_CHANGED: &str = "file changed";
+
 /// Operations served by the daemon fs bridge. Paths are daemon-machine paths
 /// (same trust domain as the daemon itself — the control plane can already
 /// spawn arbitrary commands).
@@ -246,6 +249,15 @@ pub enum FsOp {
     /// Atomic write. → `{mtime_ms}`.
     Write {
         path: String,
+        contents_b64: String,
+    },
+    /// Compare-and-write for a user's own file (a file pane's task box):
+    /// writes only if the file still holds `expected_b64`, else fails with
+    /// [`FS_CHANGED`]. Writes through a symlink to its target and keeps the
+    /// file's permissions. → `{mtime_ms}`.
+    WriteIfUnchanged {
+        path: String,
+        expected_b64: String,
         contents_b64: String,
     },
     /// → `{exists, mtime_ms, size}` (`exists:false` is ok, not an error).

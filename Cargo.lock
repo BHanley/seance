@@ -5770,6 +5770,7 @@ dependencies = [
  "gpui-component",
  "gpui_platform",
  "libc",
+ "markdown",
  "notify 8.2.0",
  "rand 0.8.7",
  "regex",

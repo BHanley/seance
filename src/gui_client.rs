@@ -401,6 +401,26 @@ impl GuiClient {
         Ok(v.get("mtime_ms").and_then(|m| m.as_u64()))
     }
 
+    /// Write a daemon-side file only if it still holds `expected`. A file that
+    /// moved on fails with [`crate::runtime::protocol::FS_CHANGED`].
+    pub fn fs_write_if_unchanged(
+        &self,
+        path: &str,
+        expected: &[u8],
+        contents: &[u8],
+    ) -> Result<Option<u64>> {
+        let b64 = &base64::engine::general_purpose::STANDARD;
+        let v = self.fs_call(
+            crate::runtime::protocol::FsOp::WriteIfUnchanged {
+                path: path.to_string(),
+                expected_b64: b64.encode(expected),
+                contents_b64: b64.encode(contents),
+            },
+            FS_TIMEOUT,
+        )?;
+        Ok(v.get("mtime_ms").and_then(|m| m.as_u64()))
+    }
+
     /// Stat a daemon-side path: `None` when missing, `Some(mtime_ms)` when
     /// present (mtime may itself be None on exotic filesystems).
     pub fn fs_stat(&self, path: &str) -> Result<Option<Option<u64>>> {

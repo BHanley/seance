@@ -24,8 +24,10 @@
 //!   placeholder; a background task fetches the first content + snapshot list
 //!   and the view fills in when it lands.
 //!
-//! - **Read-only.** Unlike the scratchpad we never write the *watched* file. The
-//!   only files we write live under our own history dir (see [`history`] below).
+//! - **Read-only, except task boxes.** Unlike the scratchpad we never edit the
+//!   *watched* file, with one exception: clicking a markdown `- [ ]` box flips
+//!   that one line (see [`crate::mdtask`]). Everything else we write lives
+//!   under our own history dir (see [`history`] below).
 //!
 //! - **Markdown rendering.** For `.md` / `.markdown` files we peel YAML
 //!   frontmatter into a GH-style box (injected as a custom first block via a
@@ -69,7 +71,10 @@ use gpui::{
 use gpui_component::{
     highlighter::HighlightTheme,
     notification::Notification,
-    text::{markdown, markdown_ast, MarkdownNode, TextViewStyle},
+    text::{
+        markdown, markdown_ast, MarkdownExtensions, MarkdownNode, MarkdownParseContext, TextView,
+        TextViewStyle,
+    },
     ActiveTheme as _, StyledExt as _, WindowExt as _,
 };
 
@@ -189,6 +194,176 @@ fn render_fold_heading(
                 .text_color(SeancePalette::text_faint())
                 .child(format!("{hidden} lines"))
         }))
+}
+
+/// Custom node name for a list we draw ourselves because it holds a task box.
+const TASK_LIST: &str = "seance-tasks";
+
+/// A list holding at least one clickable task, ready to draw.
+struct TaskList {
+    ordered: bool,
+    start: u32,
+    spread: bool,
+    /// Scopes the nested views' state keys: the first marked file line in the
+    /// list plus the list's source length. A list nested inside another can
+    /// share the first marker, never the length.
+    key: String,
+    items: Vec<crate::mdtask::TaskItem>,
+}
+
+/// The task-list parser + renderer, with the renderer reusing the same
+/// extensions for each item's nested view (nested task lists stay clickable).
+/// `own` is a weak handle to the cell this ends up in, so there's no cycle.
+fn task_extensions(
+    view: WeakEntity<FileView>,
+    scope: u64,
+    own: std::sync::Weak<std::sync::OnceLock<MarkdownExtensions>>,
+) -> MarkdownExtensions {
+    MarkdownExtensions::default()
+        .block_parser(parse_task_list)
+        .block_renderer(TASK_LIST, move |node, _window, _cx| {
+            let Some(list) = node.data::<TaskList>() else {
+                return div().into_any_element();
+            };
+            let nested = own
+                .upgrade()
+                .and_then(|cell| cell.get().cloned())
+                .unwrap_or_default();
+            render_task_list(list, &view, scope, &nested).into_any_element()
+        })
+}
+
+/// Take over any list that holds a marked task, at any depth. A nested one
+/// has to be caught at the top: the stock list item drops custom children.
+fn parse_task_list(
+    node: &markdown_ast::Node,
+    pcx: &MarkdownParseContext<'_>,
+) -> Option<MarkdownNode> {
+    let markdown_ast::Node::List(list) = node else {
+        return None;
+    };
+    let src = pcx.node_source(node)?;
+    let (anchor, _) = crate::mdtask::take_marker(src)?;
+    let key = format!("{anchor}-{}", src.len());
+    let mut items = Vec::with_capacity(list.children.len());
+    for child in &list.children {
+        let checked = match child {
+            markdown_ast::Node::ListItem(item) => item.checked,
+            _ => None,
+        };
+        let col = child.position()?.start.column.saturating_sub(1);
+        items.push(crate::mdtask::split_item(pcx.node_source(child)?, col, checked));
+    }
+    let clean = crate::mdtask::strip_markers(src);
+    Some(
+        MarkdownNode::new(
+            TASK_LIST,
+            TaskList {
+                ordered: list.ordered,
+                start: list.start.unwrap_or(1),
+                spread: list.spread,
+                key,
+                items,
+            },
+        )
+        .text(clean.clone())
+        .markdown(clean),
+    )
+}
+
+/// Our own list: a box (or bullet) beside each item, the item's markdown in a
+/// nested view so bold, links and code still render.
+fn render_task_list(
+    list: &TaskList,
+    view: &WeakEntity<FileView>,
+    scope: u64,
+    nested: &MarkdownExtensions,
+) -> impl IntoElement {
+    let mut style = candlelit_markdown_style();
+    style.paragraph_gap = rems(0.3);
+    div()
+        .flex()
+        .flex_col()
+        .when(list.spread, |d| d.gap(rems(0.4)))
+        .children(list.items.iter().enumerate().map(|(i, item)| {
+            let id = format!("task-{scope}-{}-{i}", list.key);
+            let prefix = match (&item.mark, item.checked) {
+                (Some(mark), _) => render_task_box(&id, mark, view.clone()).into_any_element(),
+                (None, Some(checked)) => task_box_face(
+                    div().id(SharedString::from(format!("{id}-box"))),
+                    checked,
+                )
+                .opacity(0.5)
+                .tooltip(tip("this line can't be ticked from here"))
+                .into_any_element(),
+                (None, None) => div()
+                    .flex_none()
+                    .min_w(px(14.))
+                    .text_color(SeancePalette::text_faint())
+                    .child(if list.ordered {
+                        format!("{}.", list.start as usize + i)
+                    } else {
+                        "•".to_string()
+                    })
+                    .into_any_element(),
+            };
+            div()
+                .flex()
+                .flex_row()
+                .items_start()
+                .gap_1p5()
+                .child(prefix)
+                .child(
+                    div().flex_1().min_w_0().child(
+                        TextView::markdown(SharedString::from(id), item.body.clone())
+                            .markdown_extensions(nested.clone())
+                            .style(style.clone())
+                            .selectable(true),
+                    ),
+                )
+        }))
+}
+
+/// A box's look, shared by clickable boxes and the few the parser finds on a
+/// line we can't safely edit (a blockquote, say), which draw but don't click.
+fn task_box_face<E: Styled + ParentElement>(el: E, checked: bool) -> E {
+    let el = el
+        .flex_none()
+        .mt(px(4.))
+        .size(px(14.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(3.))
+        .border_1()
+        .text_size(px(10.));
+    if checked {
+        el.bg(SeancePalette::success())
+            .border_color(SeancePalette::success())
+            .text_color(SeancePalette::bg())
+            .child("✓")
+    } else {
+        el.border_color(SeancePalette::text_faint())
+    }
+}
+
+/// One clickable box. Checked is filled sage with a tick, open is an outline.
+fn render_task_box(
+    id: &str,
+    mark: &crate::mdtask::TaskMark,
+    view: WeakEntity<FileView>,
+) -> impl IntoElement {
+    let mark = mark.clone();
+    let checked = mark.checked;
+    task_box_face(div().id(SharedString::from(format!("{id}-box"))), checked)
+        .cursor_pointer()
+        .hover(|s| s.border_color(SeancePalette::flame()))
+        .tooltip(tip(if checked { "mark not done" } else { "mark done" }))
+        .on_click(move |_, window, cx| {
+            if let Some(view) = view.upgrade() {
+                view.update(cx, |this, cx| this.toggle_task(mark.clone(), window, cx));
+            }
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -483,6 +658,19 @@ pub struct FileView {
     /// the view; when the view drops, the weak handle stops upgrading and the
     /// loop ends.
     _watch_task: Task<()>,
+
+    /// Parser + renderer for clickable task lists. Built once and reused so an
+    /// ordinary repaint never hands a nested task view a new extension
+    /// revision (which re-parses it). Renderers hold only a weak handle.
+    tasks: Arc<std::sync::OnceLock<MarkdownExtensions>>,
+
+    /// The markdown body with task markers stamped (see [`crate::mdtask`]),
+    /// rebuilt when the content changes rather than on every repaint.
+    marked_body: String,
+
+    /// A task-box write is in flight. Further clicks wait for it, so two
+    /// quick ticks can't both start from the same file and lose one.
+    ticking: bool,
 }
 
 /// Everything one background poll step needs, snapshotted off the entity so
@@ -616,7 +804,15 @@ impl FileView {
             pinned_prev: None,
             last_seen_mtime: None,
             _watch_task: Task::ready(()),
+            tasks: Arc::new(std::sync::OnceLock::new()),
+            marked_body: String::new(),
+            ticking: false,
         };
+        let _ = this.tasks.set(task_extensions(
+            cx.weak_entity(),
+            cx.entity_id().as_u64(),
+            Arc::downgrade(&this.tasks),
+        ));
         this.start_init(cx);
         this.start_watch(cx);
         this
@@ -912,6 +1108,15 @@ impl FileView {
             // back is new again — and folded again, like anything else new.
             self.known_heads = live;
         }
+        self.marked_body = if self.is_markdown() {
+            // Markers carry FILE line numbers, so count the lines the
+            // frontmatter box swallows.
+            let (_, body) = split_frontmatter(&next);
+            let skipped = next[..next.len() - body.len()].matches('\n').count();
+            crate::mdtask::annotate(body, skipped)
+        } else {
+            String::new()
+        };
         self.content = next;
     }
 
@@ -922,6 +1127,84 @@ impl FileView {
             return 0;
         }
         crate::mdfold::headings(&self.content).len()
+    }
+
+    /// Flip one task box on disk. Re-reads the file, refuses unless it still
+    /// matches what the pane showed and the line still reads as the clicked
+    /// task, then writes atomically daemon-side. The watcher records the
+    /// change as an ordinary history snapshot on its next tick.
+    fn toggle_task(
+        &mut self,
+        mark: crate::mdtask::TaskMark,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.loaded || self.ticking || !matches!(self.mode, ViewMode::Live) {
+            return;
+        }
+        self.ticking = true;
+        let client = self.client.clone();
+        let path = self.path.to_string_lossy().into_owned();
+        let shown = self.content.clone();
+        cx.spawn_in(window, async move |this: WeakEntity<Self>, cx| {
+            let outcome: anyhow::Result<Result<String, crate::mdtask::FlipError>> = cx
+                .background_executor()
+                .spawn(async move {
+                    let (bytes, _) = client.fs_read(&path)?;
+                    // Strict UTF-8: a lossy read written back would mangle the file.
+                    let fresh = String::from_utf8(bytes)
+                        .map_err(|_| anyhow::anyhow!("file isn't UTF-8"))?;
+                    match crate::mdtask::flip(&fresh, &shown, &mark) {
+                        // The daemon re-checks right before it writes, which
+                        // closes the gap since our read (a network hop away).
+                        Ok(next) => match client.fs_write_if_unchanged(
+                            &path,
+                            fresh.as_bytes(),
+                            next.as_bytes(),
+                        ) {
+                            Ok(_) => Ok(Ok(next)),
+                            Err(e) if e.to_string() == crate::runtime::protocol::FS_CHANGED => {
+                                Ok(Err(crate::mdtask::FlipError::Changed))
+                            }
+                            Err(e) => Err(e),
+                        },
+                        Err(why) => Ok(Err(why)),
+                    }
+                })
+                .await;
+            let _ = cx.update(|window, cx| {
+                let Some(this) = this.upgrade() else { return };
+                this.update(cx, |this, cx| {
+                    this.ticking = false;
+                    let msg = match outcome {
+                        Ok(Ok(next)) => {
+                            if matches!(this.mode, ViewMode::Live) {
+                                this.adopt_content(next);
+                                cx.notify();
+                            }
+                            return;
+                        }
+                        Ok(Err(crate::mdtask::FlipError::Changed)) => {
+                            "the file changed on disk, nothing ticked (try again)".to_string()
+                        }
+                        Ok(Err(crate::mdtask::FlipError::LineMoved)) => {
+                            "that line moved or changed, nothing ticked".to_string()
+                        }
+                        // An older daemon drops the op unanswered.
+                        Err(e) if e.to_string().contains("timed out") => {
+                            "couldn't tick: no answer (the daemon may need a restart onto this version)"
+                                .to_string()
+                        }
+                        Err(e) => format!("couldn't tick: {e}"),
+                    };
+                    eprintln!("[seance gui] file pane task: {msg}");
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        window.push_notification(Notification::error(msg), cx);
+                    }));
+                });
+            });
+        })
+        .detach();
     }
 
     /// Toggle one section. Called from the heading renderer's caret.
@@ -1271,6 +1554,13 @@ impl FileView {
     fn render_content_body(&self, cx: &mut gpui::Context<Self>) -> gpui::AnyElement {
         if self.is_markdown() {
             let (frontmatter, body) = split_frontmatter(&self.content);
+            // Live only: a history snapshot isn't the file, so its boxes stay
+            // the renderer's own (not clickable).
+            let body = if matches!(self.mode, ViewMode::Live) {
+                self.marked_body.as_str()
+            } else {
+                body
+            };
             // Virtualized TextView (scrollable true): only visible blocks paint.
             // Frontmatter is injected as a custom first block so it scrolls away
             // with the doc (same UX as the old outer-scroll layout).
@@ -1290,6 +1580,7 @@ impl FileView {
             let view = cx.entity().downgrade();
 
             let md = markdown(source)
+                .markdown_extensions(self.tasks.get().cloned().unwrap_or_default())
                 .style(candlelit_markdown_style())
                 .selectable(true)
                 .scrollable(true)

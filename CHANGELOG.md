@@ -19,6 +19,14 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **Tick task boxes in a markdown file pane.** Clicking a `- [ ]` / `- [x]`
+  box flips that one line in the file on disk; nothing else in the pane is
+  editable. The click writes only if the file still matches what the pane
+  shows (otherwise a toast, nothing written), through a new daemon op
+  (`FsOp::WriteIfUnchanged`: re-checks, writes atomically through symlinks,
+  keeps permissions), so it works from any GUI once the daemon runs this
+  version. The change lands in history like any other edit. See
+  docs/FILE-PANES.md, "Task boxes".
 - **codex and grok panes come back on their own conversation** after a daemon
   crash, an OOM, or a sleep/wake, the way claude panes already did. grok gets
   a minted `--session-id` and restores with `--resume`. codex can't be handed
