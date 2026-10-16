@@ -185,9 +185,10 @@ pub fn split_item(src: &str, col: usize, checked: Option<bool>) -> TaskItem {
     // An indented item's source can start at the line, not the bullet, so
     // measure that lead in columns (tabs to 4, as `dedent` counts them).
     let lead = first_clean.len() - first_clean.trim_start_matches([' ', '\t']).len();
-    let lead_cols = first_clean[..lead]
-        .chars()
-        .fold(0, |c, ch| if ch == '\t' { (c / 4 + 1) * 4 } else { c + 1 });
+    let lead_cols =
+        first_clean[..lead]
+            .chars()
+            .fold(0, |c, ch| if ch == '\t' { (c / 4 + 1) * 4 } else { c + 1 });
     let bullet = bullet_width(&first_clean[lead..]);
     // Continuation lines indent to the item's content column, which is the
     // bullet's width even for a task (the box is part of the first paragraph).
@@ -358,7 +359,10 @@ mod tests {
     #[test]
     fn annotate_keeps_crlf() {
         let out = annotate("- [ ] a\r\n- [x] b\r\n", 0);
-        assert_eq!(out, "- [ ] <!--seance-task:0-->a\r\n- [x] <!--seance-task:1-->b\r\n");
+        assert_eq!(
+            out,
+            "- [ ] <!--seance-task:0-->a\r\n- [x] <!--seance-task:1-->b\r\n"
+        );
     }
 
     #[test]
@@ -373,7 +377,10 @@ mod tests {
                 expected: "- [ ] parent **bold**".into()
             })
         );
-        assert_eq!(item.body, "parent **bold**\nmore text\n- [x] <!--seance-task:9-->child");
+        assert_eq!(
+            item.body,
+            "parent **bold**\nmore text\n- [x] <!--seance-task:9-->child"
+        );
     }
 
     #[test]
@@ -385,10 +392,20 @@ mod tests {
 
     #[test]
     fn split_item_tab_children_and_unmarked_box() {
-        let item = split_item("- [ ] <!--seance-task:0-->parent\n\t- [ ] <!--seance-task:1-->kid\n\t- plain", 0, Some(false));
-        assert_eq!(item.body, "parent\n  - [ ] <!--seance-task:1-->kid\n  - plain");
+        let item = split_item(
+            "- [ ] <!--seance-task:0-->parent\n\t- [ ] <!--seance-task:1-->kid\n\t- plain",
+            0,
+            Some(false),
+        );
+        assert_eq!(
+            item.body,
+            "parent\n  - [ ] <!--seance-task:1-->kid\n  - plain"
+        );
         let item = split_item("- [x] no marker", 0, Some(true));
-        assert_eq!((item.mark, item.checked, item.body.as_str()), (None, Some(true), "no marker"));
+        assert_eq!(
+            (item.mark, item.checked, item.body.as_str()),
+            (None, Some(true), "no marker")
+        );
     }
 
     #[test]
@@ -400,7 +417,10 @@ mod tests {
         // Three tab levels: each nested body keeps a real nested list.
         let src = annotate("- [ ] a\n\t- [ ] b\n\t\t- [ ] c\n", 0);
         let a = split_item(src.trim_end(), 0, Some(false));
-        assert_eq!(a.body, "a\n  - [ ] <!--seance-task:1-->b\n  \t- [ ] <!--seance-task:2-->c");
+        assert_eq!(
+            a.body,
+            "a\n  - [ ] <!--seance-task:1-->b\n  \t- [ ] <!--seance-task:2-->c"
+        );
         let b_src = &a.body["a\n".len()..];
         let b = split_item(b_src, 0, Some(false));
         assert_eq!(b.mark.map(|m| m.line), Some(1));
@@ -410,29 +430,63 @@ mod tests {
     #[test]
     fn flip_ignores_trailing_whitespace() {
         let doc = "  - [ ] b  \n";
-        let b = TaskMark { line: 0, checked: false, expected: "- [ ] b".into() };
+        let b = TaskMark {
+            line: 0,
+            checked: false,
+            expected: "- [ ] b".into(),
+        };
         assert_eq!(flip(doc, doc, &b).unwrap(), "  - [x] b  \n");
     }
 
     #[test]
     fn flip_changes_one_byte() {
         let doc = "# T\r\n- [ ] a\r\n  - [x] b\r\n";
-        let a = TaskMark { line: 1, checked: false, expected: "- [ ] a".into() };
-        assert_eq!(flip(doc, doc, &a).unwrap(), "# T\r\n- [x] a\r\n  - [x] b\r\n");
-        let b = TaskMark { line: 2, checked: true, expected: "- [x] b".into() };
-        assert_eq!(flip(doc, doc, &b).unwrap(), "# T\r\n- [ ] a\r\n  - [ ] b\r\n");
+        let a = TaskMark {
+            line: 1,
+            checked: false,
+            expected: "- [ ] a".into(),
+        };
+        assert_eq!(
+            flip(doc, doc, &a).unwrap(),
+            "# T\r\n- [x] a\r\n  - [x] b\r\n"
+        );
+        let b = TaskMark {
+            line: 2,
+            checked: true,
+            expected: "- [x] b".into(),
+        };
+        assert_eq!(
+            flip(doc, doc, &b).unwrap(),
+            "# T\r\n- [ ] a\r\n  - [ ] b\r\n"
+        );
     }
 
     #[test]
     fn flip_refuses_when_anything_moved() {
         let doc = "- [ ] a\n- [ ] b\n";
-        let a = TaskMark { line: 0, checked: false, expected: "- [ ] a".into() };
+        let a = TaskMark {
+            line: 0,
+            checked: false,
+            expected: "- [ ] a".into(),
+        };
         assert_eq!(flip(doc, "- [ ] a\n", &a), Err(FlipError::Changed));
-        let stale = TaskMark { line: 1, checked: false, expected: "- [ ] a".into() };
+        let stale = TaskMark {
+            line: 1,
+            checked: false,
+            expected: "- [ ] a".into(),
+        };
         assert_eq!(flip(doc, doc, &stale), Err(FlipError::LineMoved));
-        let wrong_state = TaskMark { line: 0, checked: true, expected: "- [ ] a".into() };
+        let wrong_state = TaskMark {
+            line: 0,
+            checked: true,
+            expected: "- [ ] a".into(),
+        };
         assert_eq!(flip(doc, doc, &wrong_state), Err(FlipError::LineMoved));
-        let past_end = TaskMark { line: 9, checked: false, expected: "- [ ] a".into() };
+        let past_end = TaskMark {
+            line: 9,
+            checked: false,
+            expected: "- [ ] a".into(),
+        };
         assert_eq!(flip(doc, doc, &past_end), Err(FlipError::LineMoved));
     }
 }

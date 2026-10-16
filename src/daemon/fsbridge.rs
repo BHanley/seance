@@ -299,11 +299,18 @@ mod tests {
             Err(crate::runtime::protocol::FS_CHANGED.to_string())
         );
         write_if_unchanged(&link, b"- [ ] a\n", b"- [x] a\n").unwrap();
-        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
         assert_eq!(std::fs::read_to_string(&real).unwrap(), "- [x] a\n");
         let mode = std::fs::metadata(&real).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
-        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "temp file left behind");
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            2,
+            "temp file left behind"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -252,7 +252,11 @@ fn parse_task_list(
             _ => None,
         };
         let col = child.position()?.start.column.saturating_sub(1);
-        items.push(crate::mdtask::split_item(pcx.node_source(child)?, col, checked));
+        items.push(crate::mdtask::split_item(
+            pcx.node_source(child)?,
+            col,
+            checked,
+        ));
     }
     let clean = crate::mdtask::strip_markers(src);
     Some(
@@ -289,13 +293,12 @@ fn render_task_list(
             let id = format!("task-{scope}-{}-{i}", list.key);
             let prefix = match (&item.mark, item.checked) {
                 (Some(mark), _) => render_task_box(&id, mark, view.clone()).into_any_element(),
-                (None, Some(checked)) => task_box_face(
-                    div().id(SharedString::from(format!("{id}-box"))),
-                    checked,
-                )
-                .opacity(0.5)
-                .tooltip(tip("this line can't be ticked from here"))
-                .into_any_element(),
+                (None, Some(checked)) => {
+                    task_box_face(div().id(SharedString::from(format!("{id}-box"))), checked)
+                        .opacity(0.5)
+                        .tooltip(tip("this line can't be ticked from here"))
+                        .into_any_element()
+                }
                 (None, None) => div()
                     .flex_none()
                     .min_w(px(14.))
@@ -358,7 +361,11 @@ fn render_task_box(
     task_box_face(div().id(SharedString::from(format!("{id}-box"))), checked)
         .cursor_pointer()
         .hover(|s| s.border_color(SeancePalette::flame()))
-        .tooltip(tip(if checked { "mark not done" } else { "mark done" }))
+        .tooltip(tip(if checked {
+            "mark not done"
+        } else {
+            "mark done"
+        }))
         .on_click(move |_, window, cx| {
             if let Some(view) = view.upgrade() {
                 view.update(cx, |this, cx| this.toggle_task(mark.clone(), window, cx));
