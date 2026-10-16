@@ -63,7 +63,7 @@ impl SeanceApp {
                         .id("gui-menu-card")
                         .absolute()
                         .left(px(8.))
-                        .top(px(48.))
+                        .top(px(40.))
                         .w(px(260.))
                         .flex()
                         .flex_col()
@@ -1337,75 +1337,97 @@ impl SeanceApp {
             .border_r_1()
             .border_color(SeancePalette::border())
             .child(
-                // Brand header.
+                // Brand header: the name on top, the new-space/circle buttons
+                // tucked under it so a narrow rail never squeezes either.
                 div()
                     .flex_none()
-                    .h(px(44.))
                     .px_3()
+                    .pt_2()
+                    .pb_1p5()
                     .flex()
-                    .items_center()
-                    .gap_2()
+                    .flex_col()
+                    .gap_0p5()
                     .border_b_1()
                     .border_color(SeancePalette::border())
                     .child(
                         div()
-                            .id("gui-census")
-                            .px_1()
-                            .rounded_md()
-                            .text_color(SeancePalette::flame_dim())
-                            .text_lg()
-                            .cursor_pointer()
-                            .hover(|s| {
-                                s.text_color(SeancePalette::flame())
-                                    .bg(SeancePalette::surface())
-                            })
-                            .tooltip(tip("connected guis"))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.gui_menu_open = !this.gui_menu_open;
-                                cx.notify();
-                            }))
-                            .child("✦"),
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .id("gui-census")
+                                    .px_1()
+                                    .rounded_md()
+                                    .text_color(SeancePalette::flame_dim())
+                                    .text_lg()
+                                    .cursor_pointer()
+                                    .hover(|s| {
+                                        s.text_color(SeancePalette::flame())
+                                            .bg(SeancePalette::surface())
+                                    })
+                                    .tooltip(tip("connected guis"))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.gui_menu_open = !this.gui_menu_open;
+                                        cx.notify();
+                                    }))
+                                    .child("✦"),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_color(SeancePalette::text())
+                                    .text_sm()
+                                    .font_semibold()
+                                    .child("seance"),
+                            ),
                     )
                     .child(
                         div()
-                            .flex_1()
-                            .text_color(SeancePalette::text())
-                            .text_sm()
-                            .font_semibold()
-                            .child("seance"),
-                    )
-                    .child(
-                        div()
-                            .id("new-space")
-                            .flex_none()
-                            .px_1p5()
-                            .rounded_md()
-                            .text_xs()
-                            .text_color(SeancePalette::violet_dim())
-                            .hover(|s| s.text_color(SeancePalette::violet()).bg(SeancePalette::surface()))
-                            .cursor_pointer()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.create_space(window, cx);
-                                cx.notify();
-                            }))
-                            .tooltip(tip("new space (name it immediately)"))
-                            .child("+ space"),
-                    )
-                    .child(
-                        div()
-                            .id("new-workspace")
-                            .flex_none()
-                            .px_1p5()
-                            .rounded_md()
-                            .text_xs()
-                            .text_color(SeancePalette::violet_dim())
-                            .hover(|s| s.text_color(SeancePalette::violet()).bg(SeancePalette::surface()))
-                            .cursor_pointer()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.create_workspace(window, cx);
-                            }))
-                            .tooltip(tip("new empty circle in this space (name it immediately)"))
-                            .child("+ circle"),
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .id("new-space")
+                                    .flex_none()
+                                    .px_1p5()
+                                    .rounded_md()
+                                    .text_xs()
+                                    .text_color(SeancePalette::violet_dim())
+                                    .hover(|s| {
+                                        s.text_color(SeancePalette::violet())
+                                            .bg(SeancePalette::surface())
+                                    })
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.create_space(window, cx);
+                                        cx.notify();
+                                    }))
+                                    .tooltip(tip("new space (name it immediately)"))
+                                    .child("+ space"),
+                            )
+                            .child(
+                                div()
+                                    .id("new-workspace")
+                                    .flex_none()
+                                    .px_1p5()
+                                    .rounded_md()
+                                    .text_xs()
+                                    .text_color(SeancePalette::violet_dim())
+                                    .hover(|s| {
+                                        s.text_color(SeancePalette::violet())
+                                            .bg(SeancePalette::surface())
+                                    })
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.create_workspace(window, cx);
+                                    }))
+                                    .tooltip(tip(
+                                        "new empty circle in this space (name it immediately)",
+                                    ))
+                                    .child("+ circle"),
+                            ),
                     ),
             )
             .child(self.render_rail_chips(cx))
