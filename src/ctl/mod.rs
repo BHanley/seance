@@ -32,13 +32,23 @@ Visibility is the product. If `$SEANCE_SESSION` is set, you are in a pane now.
 
 ### Environment
 
-- `$SEANCE_SESSION`    your pane **slug** (use this id in ctl, not display name)
+- `$SEANCE_SESSION`    your pane **slug** (human-readable ctl address; reusable after deletion)
+- `$SEANCE_PANE_ID`    your pane's lifetime UUIDv4, never reused
+- `$SEANCE_WORKSPACE_ID`  your circle's lifetime UUIDv4, never reused
 - `$SEANCE_WORKSPACE`  your circle's **slug** — stable for the pane's whole life,
                        and what ctl auto-scopes to. Renaming a circle changes
                        its label, never this.
 - `$SEANCE_WORKSPACE_NAME`  the circle's current label (display only)
 - `$SEANCE_SCRATCHPAD` shared notes path (screens scroll away)
 - `$SEANCE_SOCKET`     control socket (ctl finds it)
+
+The UUIDs survive renames, sleep/wake, process relaunch and saved-state restore.
+Use them for durable external mappings. `ctl whoami --json` and pane rows in
+`list`/`roster`/`brief`/`status` expose `pane_id` and `workspace_id`.
+Pane targets also accept `id:<pane_id>`; normal workspace scope still applies.
+Legacy panes get IDs on upgrade; already-running processes get these new env
+vars on their next wake/restore, so use `whoami` until then. A `ctl handoff`
+successor is a new pane with a new UUID.
 
 Shared Codex app-servers can inherit a different pane's environment. `ctl`
 rejects that identity; relaunch Codex in the intended pane with `--no-daemon`.
@@ -112,7 +122,8 @@ progressively written file matches, e.g. its closing ```json block.
 
 **`roster --json` / `brief --json`**: `data.panes` is a list of rows;
 `status PANE --json` returns one row as `data`. Row fields:
-`slug` (the id to address) · `name` · `kind` (terminal|file) · `workspace` /
+`slug` (human-readable address) · `pane_id` / `workspace_id` (lifetime UUIDs) ·
+`name` · `kind` (terminal|file) · `workspace` /
 `workspace_name` · `cwd` · `command` · `parent` · `running` · `asleep` ·
 `exited` / `exit_code` · `activity` (busy|idle|awaiting-input|limited|exited|
 unknown) · `activity_evidence` (the deciding screen line) · `quota`
@@ -438,9 +449,24 @@ fn run_local(args: Vec<String>) -> i32 {
         "grant" => parse_grant(sub_args),
         "revoke" => parse_revoke(sub_args),
         "policy" => parse_policy(sub_args),
-        "pr-link" | "pr-links" => parse_pr_link(sub_args),
         "rename-circle" | "rename-workspace" => parse_rename_circle(sub_args),
         "rename-pane" => parse_rename_pane(sub_args),
+        "space" | "spaces" => {
+            let mut it = sub_args.into_iter();
+            let action = it.next().unwrap_or_else(|| "list".into());
+            Ok(ControlRequest::Space {
+                action,
+                args: it.collect(),
+                scope: None,
+                from: None,
+            })
+        }
+        "move" => Ok(ControlRequest::Space {
+            action: "move".into(),
+            args: sub_args,
+            scope: None,
+            from: None,
+        }),
         "sleep" => parse_sleep(sub_args, false),
         "wake" | "awaken" => parse_sleep(sub_args, true),
         "seize" => parse_seize(sub_args),
@@ -1262,4 +1288,12 @@ mod tests {
         assert!(matches!(s, ControlRequest::Status { pane, .. } if pane == "w"));
         assert!(parse_kill(vec![]).is_err());
     }
+}
+
+/// Explicit IDs never fall back to display names (or recycled slugs).
+pub(super) fn pane_row_matches(row: &serde_json::Value, key: &str) -> bool {
+    if let Some(id) = key.strip_prefix("id:") {
+        return row["pane_id"].as_str() == Some(id);
+    }
+    row["slug"].as_str() == Some(key) || row["name"].as_str() == Some(key)
 }

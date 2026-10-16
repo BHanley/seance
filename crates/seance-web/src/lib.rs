@@ -15,7 +15,6 @@ use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
-use seance_core::control::ControlRequest;
 use seance_core::input::{key_to_bytes, TermModes};
 use seance_core::protocol::{GuiEvent, GuiRequest};
 
@@ -26,7 +25,6 @@ pub mod help;
 pub mod input;
 pub mod keymap;
 pub mod menus;
-pub mod pr_board;
 pub mod probe;
 pub mod renderer;
 pub mod replay;
@@ -56,13 +54,6 @@ fn document() -> web_sys::Document {
 
 fn now_ms() -> f64 {
     window().performance().map(|p| p.now()).unwrap_or(0.0)
-}
-
-/// `now` in the DAEMON's unix-ms domain — the clock every PR stamp on the wire
-/// uses. Local clocks live in `performance.now()`; `clock_offset_ms` is the
-/// boot-time difference (0 in tests, so this is identity there).
-fn now_unix_ms(state: &state::ClientState) -> f64 {
-    now_ms() + state.clock_offset_ms
 }
 
 /// One pane's client-side render context.
@@ -215,12 +206,20 @@ impl App {
                 self.send(&GuiRequest::GridAck { seq });
             }
         }
-        let (applied, subs_dirty) = {
+        let (applied, subs_dirty, spaces_dirty) = {
             let mut st = self.state.borrow_mut();
             let applied = st.apply_event(ev, now_ms());
-            (applied, std::mem::take(&mut st.subs_dirty))
+            (
+                applied,
+                std::mem::take(&mut st.subs_dirty),
+                std::mem::take(&mut st.spaces_dirty),
+            )
         };
-        if subs_dirty {
+        // Space assignments are shared, but only once the daemon's copy is in
+        // hand: pushing a pre-load migration would overwrite the real one.
+        if spaces_dirty && self.rail_base.borrow().is_some() {
+            self.save_arrangement();
+        } else if subs_dirty || spaces_dirty {
             self.persist_subs();
         }
         match applied {
@@ -352,6 +351,9 @@ impl App {
             let st = self.state.borrow();
             root["seen"] = serde_json::json!(st.subs.seen);
             root["pinned"] = serde_json::json!(st.subs.pinned);
+            if !st.subs.spaces.is_empty() {
+                root["spaces"] = serde_json::json!(st.subs.spaces);
+            }
         }
         let Ok(json) = serde_json::to_string(&root) else {
             return;
@@ -422,14 +424,129 @@ impl App {
         }
         {
             let mut st = self.state.borrow_mut();
-            if st.subs.pinned == pref.pinned && st.subs.seen == pref.seen {
+            if st.subs.pinned == pref.pinned
+                && st.subs.seen == pref.seen
+                && st.subs.spaces == pref.spaces
+            {
                 return;
             }
             st.subs.seen = pref.seen.clone();
             st.subs.pinned = pref.pinned.clone();
+            st.subs.spaces = pref.spaces.clone();
             st.subs.seeded = true;
         }
         self.persist_subs();
+        self.need_rebuild.set(true);
+    }
+
+    /// Spaces and filters. Arrangement edits go to the daemon; which space or
+    /// filter this window is showing stays local.
+    pub fn rail(self: &Rc<Self>, op: app_api::RailOp) {
+        use app_api::RailOp;
+        let mut shared = false;
+        {
+            let mut st = self.state.borrow_mut();
+            match op {
+                RailOp::ShowSpace(id) => {
+                    st.rail_space = Some(id);
+                    st.rail_filter = state::RailFilter::All;
+                    let first = st.visible_workspaces().into_iter().next();
+                    drop(st);
+                    if let Some(first) = first {
+                        self.select_workspace(&first);
+                    }
+                    self.need_rebuild.set(true);
+                    return;
+                }
+                RailOp::BanishSpace(id) => {
+                    let circles = st.subs.spaces.circles_in(&id, &st.workspaces());
+                    let next = st
+                        .selected_workspace
+                        .as_ref()
+                        .filter(|s| circles.contains(s))
+                        .and_then(|_| st.workspaces().into_iter().find(|w| !circles.contains(w)));
+                    drop(st);
+                    for ws in &circles {
+                        self.send(&GuiRequest::KillWorkspace {
+                            workspace: ws.clone(),
+                        });
+                    }
+                    if let Some(next) = next {
+                        self.select_workspace(&next);
+                    }
+                    self.need_rebuild.set(true);
+                    return;
+                }
+                RailOp::Filter(f) => {
+                    st.rail_filter = if st.rail_filter == f {
+                        state::RailFilter::All
+                    } else {
+                        f
+                    };
+                }
+                RailOp::MoveToSpace { ws, space } => {
+                    shared = st.subs.spaces.move_circle(&ws, &space);
+                }
+                RailOp::NewSpace(name) => {
+                    let id = st.subs.spaces.create(&name);
+                    st.rail_space = Some(id);
+                    st.rail_filter = state::RailFilter::All;
+                    shared = true;
+                }
+                RailOp::RenameSpace { id, name } => shared = st.subs.spaces.rename(&id, &name),
+                RailOp::DeleteSpace(id) => {
+                    shared = st.subs.spaces.delete(&id);
+                    if st.rail_space.as_deref() == Some(id.as_str()) {
+                        st.rail_space = None;
+                    }
+                }
+                RailOp::SetDefault(id) => shared = st.subs.spaces.set_default(&id),
+                RailOp::UnpinAll => {
+                    shared = !st.subs.pinned.is_empty();
+                    st.subs.pinned.clear();
+                    if st.rail_filter == state::RailFilter::Starred {
+                        st.rail_filter = state::RailFilter::All;
+                    }
+                }
+                RailOp::ShiftSpace { id, delta } => {
+                    let list = &st.subs.spaces.list;
+                    if let Some(i) = list.iter().position(|s| s.id == id) {
+                        let before = if delta < 0 {
+                            i.checked_sub(1).map(|j| Some(list[j].id.clone()))
+                        } else if i + 1 < list.len() {
+                            Some(list.get(i + 2).map(|s| s.id.clone()))
+                        } else {
+                            None
+                        };
+                        if let Some(before) = before {
+                            shared = st.subs.spaces.reorder(&id, before.as_deref());
+                        }
+                    }
+                }
+                RailOp::ModeAllOff(mode) => {
+                    let circles: Vec<String> = st
+                        .circle_modes
+                        .iter()
+                        .filter(|(_, on)| on.iter().any(|m| *m == mode))
+                        .map(|(ws, _)| ws.clone())
+                        .collect();
+                    drop(st);
+                    for ws in circles {
+                        self.set_circle_mode(&ws, &mode, false);
+                    }
+                    let mut st = self.state.borrow_mut();
+                    if st.rail_filter == state::RailFilter::Mode(mode) {
+                        st.rail_filter = state::RailFilter::All;
+                    }
+                    drop(st);
+                    self.need_rebuild.set(true);
+                    return;
+                }
+            }
+        }
+        if shared {
+            self.save_arrangement();
+        }
         self.need_rebuild.set(true);
     }
 
@@ -481,7 +598,7 @@ impl App {
     /// belongs to the PTY. Order mirrors native: menu > help > activity >
     /// zoom > selection.
     pub fn escape_topmost(&self) -> bool {
-        if menus::close_menu() || help::close() || activity::close() || pr_board::close() {
+        if menus::close_menu() || help::close() || activity::close() {
             return true;
         }
         {
@@ -687,7 +804,6 @@ impl App {
                 ch.update_badges(&st);
             }
             activity::refresh(&st);
-            pr_board::refresh(&st, now_unix_ms(&st));
         }
         self.sync_sizes();
         self.sync_scroll_chip();
@@ -1232,20 +1348,14 @@ impl Actions for AppActions {
             file: None,
             tiled: true,
         });
-        // Land in the fresh circle when its pane arrives, PINNED: you pressed
-        // a button to start this thing, so it belongs at the top of the rail
-        // until you say otherwise (pin implies active — native twin does the
-        // same in app/quicklaunch.rs).
+        // Land in the fresh circle when its pane arrives; it joins the space
+        // on screen (reconcile's focused space), so hold the view there.
         {
             let mut st = self.0.state.borrow_mut();
-            st.subs.pin(&ws);
+            let here = st.current_space();
+            st.rail_space = Some(here);
             st.selected_workspace = Some(ws);
         }
-        // Through the daemon, like any other pin: a circle launched from the
-        // phone should be pinned at the desk too. The pin references a circle
-        // the daemon hasn't minted yet — `settle_absent` is what stops the
-        // next `State` from pruning it straight back off.
-        self.0.save_arrangement();
         self.0.need_rebuild.set(true);
     }
 
@@ -1261,6 +1371,9 @@ impl Actions for AppActions {
 
     fn pin_workspace(&self, ws: &str) {
         self.0.pin_workspace(ws);
+    }
+    fn rail(&self, op: app_api::RailOp) {
+        self.0.rail(op);
     }
     fn set_circle_mode(&self, ws: &str, mode: &str, on: bool) {
         self.0.set_circle_mode(ws, mode, on);
@@ -1343,27 +1456,6 @@ impl Actions for AppActions {
     fn toggle_activity(&self) {
         let st = self.0.state.borrow();
         activity::toggle(&st);
-    }
-
-    fn toggle_pr_board(&self) {
-        let actions: Rc<dyn Actions> = Rc::new(AppActions(Rc::clone(&self.0)));
-        let st = self.0.state.borrow();
-        pr_board::toggle(&st, now_unix_ms(&st), actions);
-    }
-
-    fn remove_pr_link(&self, ws: &str, url: &str) {
-        self.0.send(&GuiRequest::Ctl(ControlRequest::PrLinkClear {
-            url: Some(url.to_string()),
-            workspace: Some(ws.to_string()),
-            scope: None,
-            from: Some("web".into()),
-        }));
-        let changed = self.0.state.borrow_mut().remove_pr_link(ws, url);
-        if changed {
-            self.0.need_rebuild.set(true);
-            let st = self.0.state.borrow();
-            pr_board::refresh(&st, now_unix_ms(&st));
-        }
     }
 
     fn fs_call(
@@ -1767,7 +1859,13 @@ pub fn seance_mobile_circle_modes() -> String {
         let rows: Vec<serde_json::Value> = st
             .circle_mode_defs
             .iter()
-            .filter(|d| !d.on_label.is_empty())
+            .filter(|d| {
+                if on.contains(&d.id) {
+                    !d.off_label.is_empty()
+                } else {
+                    !d.on_label.is_empty()
+                }
+            })
             .map(|d| {
                 serde_json::json!({
                     "id": d.id,
@@ -1781,6 +1879,48 @@ pub fn seance_mobile_circle_modes() -> String {
         serde_json::Value::Array(rows).to_string()
     })
     .unwrap_or_else(|| "[]".to_string())
+}
+
+/// Spaces for the phone sheet's "move to" row: `[{id, name, here}]`.
+#[wasm_bindgen]
+pub fn seance_mobile_spaces() -> String {
+    with_mobile_app(|app| {
+        let st = app.state.borrow();
+        let here = app
+            .selected_workspace()
+            .map(|ws| st.subs.spaces.space_of(&ws).to_string());
+        let rows: Vec<serde_json::Value> = st
+            .subs
+            .spaces
+            .list
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "id": s.id,
+                    "name": s.name,
+                    "here": here.as_deref() == Some(s.id.as_str()),
+                })
+            })
+            .collect();
+        serde_json::Value::Array(rows).to_string()
+    })
+    .unwrap_or_else(|| "[]".to_string())
+}
+
+/// Move the selected circle to a space.
+#[wasm_bindgen]
+pub fn seance_mobile_move_to_space(space: &str) -> bool {
+    with_mobile_app(|app| {
+        let Some(ws) = app.selected_workspace() else {
+            return false;
+        };
+        app.rail(app_api::RailOp::MoveToSpace {
+            ws,
+            space: space.to_string(),
+        });
+        true
+    })
+    .unwrap_or(false)
 }
 
 /// Turn a host circle mode on/off for the selected circle.

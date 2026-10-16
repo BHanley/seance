@@ -390,7 +390,6 @@ impl Engine {
             .workspace_output
             .keys()
             .chain(self.workspace_touch_ms.keys())
-            .chain(self.pr_links.keys())
             .cloned()
         {
             if !meta_names.iter().any(|m| *m == ws) {
@@ -400,6 +399,7 @@ impl Engine {
         let workspace_meta: Vec<WorkspaceMeta> = meta_names
             .into_iter()
             .map(|ws| WorkspaceMeta {
+                workspace_id: self.workspace_ids.get(&ws).cloned().unwrap_or_default(),
                 modes: self
                     .comms
                     .modes
@@ -408,7 +408,6 @@ impl Engine {
                     .unwrap_or_default(),
                 last_output_ms: self.workspace_output.get(&ws).copied().unwrap_or(0),
                 last_touch_ms: self.workspace_touch_ms.get(&ws).copied().unwrap_or(0),
-                pr_links: self.pr_links.get(&ws).cloned().unwrap_or_default(),
                 name: self.workspace_names.get(&ws).cloned(),
                 workspace: ws,
             })
@@ -731,10 +730,6 @@ impl Engine {
                     }
                 }
             }
-            SessionEvent::PrLinkSeen { slug, url } => {
-                let (slug, url) = (slug.clone(), url.clone());
-                self.on_pr_link_seen(&slug, &url);
-            }
             SessionEvent::Bell { slug } => {
                 self.broadcast(GuiEvent::PaneAlert {
                     pane: slug.clone(),
@@ -916,6 +911,8 @@ impl Engine {
         };
         json!({
             "kind": p.kind,
+            "pane_id": p.pane_id,
+            "workspace_id": self.workspace_ids.get(&p.workspace),
             "name": p.name,
             "slug": p.slug,
             "workspace": p.workspace,
@@ -962,6 +959,8 @@ impl Engine {
                 };
                 let w = p.agency.to_wire();
                 PaneInfo {
+                    pane_id: p.pane_id.clone(),
+                    workspace_id: self.workspace_ids[&p.workspace].clone(),
                     kind: p.kind.clone(),
                     name: p.name.clone(),
                     slug: p.slug.clone(),

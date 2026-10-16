@@ -86,47 +86,10 @@ Daemon → client (push):
 - `pane_spawned` / `pane_killed` (process exit auto-kills the pane)
 - `ask` / `status` / `touch` events
 
-## PR links + the watcher seam (0.13)
-
-The PTY io-thread scrapes GitHub PR URLs out of raw output (ANSI stripped,
-with a 256B carry so a URL split across read chunks still matches) and
-attributes them to the pane's workspace — cap 8, most recent last. The list
-rides `WorkspaceMeta.pr_links` and survives daemon restart (state.json) and
-`seance upgrade` (handoff).
-
-The daemon does **not** judge PR state. An external poller (vita's `gh` loop,
-~3min) writes the state dir's `pr_watch.json` atomically:
-
-```json
-{ "https://github.com/o/r/pull/1": {
-    "state": "open", "attention": "needs",
-    "label": "CI ✗", "updated_ms": 1754000000000,
-    "is_draft": false, "ci": "fail", "review": "changes",
-    "opened_ms": 1753800000000,
-    "last_review_ms": 1753990000000,
-    "last_comment_ms": 1753995000000 } }
-```
-
-Everything past `updated_ms` is optional (0.14, `#[serde(default)]`) and feeds
-the PR board's sorting, glyphs and age labels: `is_draft`, `ci`
-(`pass` | `fail` | `running`), `review` (`required` | `approved` | `changes`),
-and the three unix-ms stamps (0 = unknown). A 0.13-shaped file still parses;
-a poller that omits them just yields a board with fewer glyphs. A verdict
-*transition* also bumps the workspace's recency clock — identical re-polls and
-the neutral backfill on boot deliberately do not.
-
-`src/daemon/prwatch.rs` re-reads that file only when its mtime moves (2s poll,
-same idiom as the host-widget poller), merges verdicts onto URLs it already
-scraped — never adding new ones — and pushes state when something actually
-changed. Malformed entries are dropped individually, so a poller bug can't
-blank every chip. `attention: "needs"` folds into the normal workspace
-attention machinery (a folded-away circle lights its band dot); `done` reads as
-resolved. Config seam, quicklaunch-style: swap the poller, keep the daemon.
-
 ## Layout on disk
 
 Unchanged paths under `~/.local/share/seance/` (or `SEANCE_STATE_DIR`):
-state.json, `pr_watch.json` (external PR poller drop, above), scratch/,
+state.json, scratch/,
 events.jsonl, `replay/<pane>/<hour>.srr[.gz]` (the 48h
 ring — docs/REPLAY.md), `web-token` (the `seance web` bearer token, 0600),
 plus `daemon.pid` for the live daemon,

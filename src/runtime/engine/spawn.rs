@@ -11,7 +11,7 @@ use super::helpers::shell_rc_path;
 use super::{Engine, EnginePane, SpawnSpec, DEFAULT_COMMAND, DEFAULT_WORKSPACE};
 use crate::events;
 use crate::runtime::pty_session::{PtySession, SpawnConfig};
-use crate::state::{slugify, unique_slug, PersistedPane};
+use crate::state::{new_identity_uuid, slugify, unique_slug, PersistedPane};
 
 /// True when `command` launches the claude CLI — bare or by absolute path.
 pub(super) fn is_claude_cmd(command: &str) -> bool {
@@ -35,6 +35,7 @@ impl Engine {
         };
         let taken: Vec<&str> = self.panes.iter().map(|p| p.slug.as_str()).collect();
         let slug = unique_slug(&name, &taken);
+        let pane_id = new_identity_uuid();
         // A spawn target may be given as a slug OR a label; an unknown name
         // mints a new circle (slug from the name, name kept as the label).
         let workspace = match spec.workspace.filter(|w| !w.trim().is_empty()) {
@@ -44,6 +45,7 @@ impl Engine {
                 .clone()
                 .unwrap_or_else(|| DEFAULT_WORKSPACE.into()),
         };
+        self.ensure_workspace_id(&workspace);
         // New / unlisted workspace names land at the bottom of the sidebar,
         // never alphabetically at the top.
         if !self.workspace_order.iter().any(|w| w == &workspace) {
@@ -74,6 +76,7 @@ impl Engine {
             self.panes.insert(
                 insert_at,
                 EnginePane {
+                    pane_id: pane_id.clone(),
                     kind: "file".into(),
                     name,
                     slug: slug.clone(),
@@ -129,11 +132,13 @@ impl Engine {
             command = format!("{command} --continue");
         }
 
-        let session = self.spawn_terminal_session(&slug, &command, &cwd_raw, &workspace, false)?;
+        let session =
+            self.spawn_terminal_session(&slug, &command, &cwd_raw, &workspace, &pane_id)?;
 
         self.panes.insert(
             insert_at,
             EnginePane {
+                pane_id,
                 kind: "terminal".into(),
                 name,
                 slug: slug.clone(),
@@ -163,6 +168,7 @@ impl Engine {
     }
 
     pub(super) fn spawn_from_persisted(&mut self, p: &PersistedPane) -> Result<()> {
+        self.ensure_workspace_id(&p.workspace);
         // Spawn with the persisted name; if slug collides, unique_slug suffixes.
         // Prefer exact slug restore when free.
         let taken: Vec<&str> = self.panes.iter().map(|x| x.slug.as_str()).collect();
@@ -175,6 +181,7 @@ impl Engine {
         if p.kind == "file" {
             let path = PathBuf::from(shellexpand::tilde(&p.command).into_owned());
             self.panes.push(EnginePane {
+                pane_id: p.pane_id.clone(),
                 kind: "file".into(),
                 name: p.name.clone(),
                 slug: want_slug,
@@ -237,10 +244,11 @@ impl Engine {
                 &command,
                 &p.cwd,
                 &p.workspace,
-                p.resume_on_restore,
+                &p.pane_id,
             )?)
         };
         self.panes.push(EnginePane {
+            pane_id: p.pane_id.clone(),
             kind: "terminal".into(),
             name: p.name.clone(),
             slug: want_slug,
@@ -265,7 +273,7 @@ impl Engine {
         command: &str,
         cwd_raw: &str,
         workspace: &str,
-        _resume: bool,
+        pane_id: &str,
     ) -> Result<PtySession> {
         let mut cwd = PathBuf::from(shellexpand::tilde(cwd_raw).into_owned());
         // A missing cwd (config typo, path from another machine) must not turn
@@ -280,7 +288,12 @@ impl Engine {
         let scratch_path = self.store.path_for(slug);
         let mut env = HashMap::new();
         env.insert("SEANCE_SESSION".into(), slug.to_string());
-        // The circle's stable id. This is the whole reason the slug never
+        env.insert("SEANCE_PANE_ID".into(), pane_id.to_string());
+        env.insert(
+            "SEANCE_WORKSPACE_ID".into(),
+            self.workspace_ids[workspace].clone(),
+        );
+        // The circle's human-readable slug. This is the whole reason the slug never
         // moves: a rename cannot reach into a running process's environment,
         // so the value it was given at spawn has to stay true forever.
         env.insert("SEANCE_WORKSPACE".into(), workspace.to_string());
@@ -331,7 +344,7 @@ impl Engine {
                 self.focused_pane = self.panes.first().map(|p| p.slug.clone());
             }
             // Last pane gone and nobody created this circle on purpose → drop
-            // the row (order/clocks/pr_links/subscriptions) instead of leaving
+            // the row (order/clocks/subscriptions) instead of leaving
             // an empty one in both sidebars.
             // Before the prune: notices name the circle by its label.
             self.on_pane_closed(slug, &circle, was_lead);
@@ -352,6 +365,7 @@ impl Engine {
         };
         let mut pane = self.panes.remove(from_idx);
         pane.workspace = slugify(workspace);
+        self.ensure_workspace_id(&pane.workspace);
         let insert_at = before
             .and_then(|b| self.panes.iter().position(|p| p.slug == b))
             .unwrap_or(self.panes.len());

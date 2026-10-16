@@ -16,10 +16,10 @@
 pub mod agent_state;
 pub mod auth;
 pub mod control;
-pub mod grouping;
 pub mod input;
 pub mod links;
 pub mod protocol;
 pub mod replay;
 pub mod snapshot;
+pub mod spaces;
 pub mod util;

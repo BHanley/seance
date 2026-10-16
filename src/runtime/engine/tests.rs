@@ -437,301 +437,10 @@ fn seize_release_drive_agency() {
     });
 }
 
-// ── PR links (scrape list + watcher ingest + hygiene) ──────────────────────
-
-#[test]
-fn pr_link_dedup_moves_to_most_recent_and_caps_at_eight() {
-    with_test_state_dir("pr-cap", || {
-        let scratch = temp_scratch("pr-cap");
-        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
-
-        for n in 1..=10 {
-            eng.record_pr_link("lab", &format!("https://github.com/o/r/pull/{n}"), n);
-        }
-        let links = &eng.pr_links["lab"];
-        assert_eq!(links.len(), super::pr_links::MAX_PR_LINKS);
-        // Oldest two evicted, ordering preserved (most recent LAST).
-        assert_eq!(links[0].url, "https://github.com/o/r/pull/3");
-        assert_eq!(links[7].url, "https://github.com/o/r/pull/10");
-
-        // Re-seeing an older URL promotes it and refreshes seen_ms.
-        assert!(eng.record_pr_link("lab", "https://github.com/o/r/pull/3", 99));
-        let links = &eng.pr_links["lab"];
-        assert_eq!(links.len(), 8);
-        assert_eq!(links[7].url, "https://github.com/o/r/pull/3");
-        assert_eq!(links[7].seen_ms, 99);
-        // Re-seeing the already-most-recent one is not a client-visible change.
-        assert!(!eng.record_pr_link("lab", "https://github.com/o/r/pull/3", 100));
-
-        let _ = std::fs::remove_dir_all(&scratch);
-    });
-}
-
-#[test]
-fn pr_watch_ingest_sets_and_clears_statuses() {
-    with_test_state_dir("pr-ingest", || {
-        let scratch = temp_scratch("pr-ingest");
-        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
-        eng.record_pr_link("lab", "https://github.com/o/r/pull/1", 1);
-        eng.record_pr_link("lab", "https://github.com/o/r/pull/2", 2);
-
-        let mut watch = std::collections::HashMap::new();
-        watch.insert(
-            "https://github.com/o/r/pull/1".to_string(),
-            PrStatus {
-                state: "open".into(),
-                attention: Some("needs".into()),
-                label: "CI x".into(),
-                updated_ms: 5,
-                ..Default::default()
-            },
-        );
-        // An unknown URL in the watch file is ignored (scrape list is truth).
-        watch.insert(
-            "https://github.com/other/x/pull/9".to_string(),
-            PrStatus::default(),
-        );
-
-        assert!(eng.ingest_pr_watch(&watch));
-        let links = &eng.pr_links["lab"];
-        assert_eq!(
-            links[0].status.as_ref().unwrap().attention.as_deref(),
-            Some("needs")
-        );
-        assert!(links[1].status.is_none());
-        assert_eq!(links.len(), 2);
-
-        // Idempotent: same map twice = no change, no state push.
-        assert!(!eng.ingest_pr_watch(&watch));
-        // Poller dropping a URL clears its status.
-        assert!(eng.ingest_pr_watch(&std::collections::HashMap::new()));
-        assert!(eng.pr_links["lab"][0].status.is_none());
-
-        let _ = std::fs::remove_dir_all(&scratch);
-    });
-}
-
-#[test]
-fn pr_watch_ingest_bumps_recency_only_on_transition() {
-    with_test_state_dir("pr-bump", || {
-        let scratch = temp_scratch("pr-bump");
-        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
-        let url = "https://github.com/o/r/pull/1";
-        eng.record_pr_link("lab", url, 1);
-        eng.workspace_output.insert("lab".into(), 1);
-
-        let status = |attention: Option<&str>, label: &str| {
-            let mut m = std::collections::HashMap::new();
-            m.insert(
-                url.to_string(),
-                PrStatus {
-                    state: "open".into(),
-                    attention: attention.map(|a| a.to_string()),
-                    label: label.into(),
-                    updated_ms: 5,
-                    ..Default::default()
-                },
-            );
-            m
-        };
-
-        // Boot backfill: first status, no attention → no reshuffle.
-        assert!(eng.ingest_pr_watch(&status(None, "CI ok")));
-        assert_eq!(eng.workspace_output.get("lab"), Some(&1));
-
-        // Identical re-poll: no change at all.
-        assert!(!eng.ingest_pr_watch(&status(None, "CI ok")));
-        assert_eq!(eng.workspace_output.get("lab"), Some(&1));
-
-        // Verdict flips → bump.
-        assert!(eng.ingest_pr_watch(&status(Some("needs"), "CI ✗")));
-        let bumped = eng.workspace_output["lab"];
-        assert!(bumped > 1, "expected recency bump, got {bumped}");
-
-        // Label-only change also counts as a transition.
-        eng.workspace_output.insert("lab".into(), 2);
-        assert!(eng.ingest_pr_watch(&status(Some("needs"), "2 comments")));
-        assert!(eng.workspace_output["lab"] > 2);
-
-        // Poller drops the URL: status clears, but that is bookkeeping.
-        eng.workspace_output.insert("lab".into(), 3);
-        assert!(eng.ingest_pr_watch(&std::collections::HashMap::new()));
-        assert_eq!(eng.workspace_output.get("lab"), Some(&3));
-
-        // First status that already asks for attention DOES bump.
-        assert!(eng.ingest_pr_watch(&status(Some("needs"), "CI ✗")));
-        assert!(eng.workspace_output["lab"] > 3);
-
-        let _ = std::fs::remove_dir_all(&scratch);
-    });
-}
-
-#[test]
-fn pr_watch_ingest_passes_new_status_fields_through() {
-    with_test_state_dir("pr-fields", || {
-        let scratch = temp_scratch("pr-fields");
-        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
-        let url = "https://github.com/o/r/pull/1";
-        eng.record_pr_link("lab", url, 1);
-
-        let mut watch = std::collections::HashMap::new();
-        watch.insert(
-            url.to_string(),
-            PrStatus {
-                state: "open".into(),
-                attention: Some("needs".into()),
-                label: "CI ✗".into(),
-                updated_ms: 5,
-                is_draft: true,
-                ci: Some("fail".into()),
-                review: Some("changes".into()),
-                opened_ms: 111,
-                last_review_ms: 222,
-                last_comment_ms: 333,
-            },
-        );
-        assert!(eng.ingest_pr_watch(&watch));
-        let st = eng.pr_links["lab"][0].status.clone().unwrap();
-        assert_eq!(st, watch[url]);
-        assert!(st.is_draft);
-        assert_eq!(st.ci.as_deref(), Some("fail"));
-        assert_eq!(st.review.as_deref(), Some("changes"));
-        assert_eq!(
-            (st.opened_ms, st.last_review_ms, st.last_comment_ms),
-            (111, 222, 333)
-        );
-
-        let _ = std::fs::remove_dir_all(&scratch);
-    });
-}
-
-#[test]
-fn pr_link_ctl_add_and_clear() {
-    with_test_state_dir("pr-ctl", || {
-        let scratch = temp_scratch("pr-ctl");
-        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
-
-        let r = eng.handle_control(ControlRequest::PrLinkAdd {
-            url: "https://github.com/o/r/pull/1".into(),
-            workspace: Some("lab".into()),
-            scope: None,
-            from: None,
-        });
-        assert!(r.ok, "{:?}", r.error);
-        assert_eq!(eng.pr_links["lab"].len(), 1);
-
-        // Not a PR url → rejected, list untouched.
-        let bad = eng.handle_control(ControlRequest::PrLinkAdd {
-            url: "https://github.com/o/r/issues/1".into(),
-            workspace: Some("lab".into()),
-            scope: None,
-            from: None,
-        });
-        assert!(!bad.ok);
-        assert_eq!(eng.pr_links["lab"].len(), 1);
-
-        // Workspace falls back to the caller's scope.
-        let scoped = eng.handle_control(ControlRequest::PrLinkAdd {
-            url: "https://github.com/o/r/pull/2".into(),
-            workspace: None,
-            scope: Some("lab".into()),
-            from: None,
-        });
-        assert!(scoped.ok);
-        assert_eq!(eng.pr_links["lab"].len(), 2);
-
-        // Clear one, then the rest.
-        let one = eng.handle_control(ControlRequest::PrLinkClear {
-            url: Some("https://github.com/o/r/pull/1".into()),
-            workspace: Some("lab".into()),
-            scope: None,
-            from: None,
-        });
-        assert!(one.ok);
-        assert_eq!(eng.pr_links["lab"].len(), 1);
-
-        let all = eng.handle_control(ControlRequest::PrLinkClear {
-            url: None,
-            workspace: Some("lab".into()),
-            scope: None,
-            from: None,
-        });
-        assert!(all.ok);
-        assert!(!eng.pr_links.contains_key("lab"));
-
-        let _ = std::fs::remove_dir_all(&scratch);
-    });
-}
-
-#[test]
-fn pr_links_survive_persist_and_reload() {
-    with_test_state_dir("pr-persist", || {
-        let scratch = temp_scratch("pr-persist");
-        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
-        eng.push_stub_pane("worker", "lab");
-        eng.record_pr_link("lab", "https://github.com/o/r/pull/7", 42);
-        eng.persist();
-
-        let state = crate::state::AppState::load();
-        assert_eq!(state.pr_links.len(), 1);
-        assert_eq!(state.pr_links[0].0, "lab");
-        assert_eq!(state.pr_links[0].1[0].url, "https://github.com/o/r/pull/7");
-        assert_eq!(state.pr_links[0].1[0].seen_ms, 42);
-
-        let _ = std::fs::remove_dir_all(&scratch);
-    });
-}
-
-#[test]
-fn scraped_url_lands_on_the_pane_workspace() {
-    with_test_state_dir("pr-seen", || {
-        let scratch = temp_scratch("pr-seen");
-        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
-        let slug = eng.push_stub_pane("worker", "lab");
-
-        eng.handle_session_event(crate::runtime::pty_session::SessionEvent::PrLinkSeen {
-            slug: slug.clone(),
-            url: "https://github.com/o/r/pull/3".into(),
-        });
-        assert_eq!(eng.pr_links["lab"][0].url, "https://github.com/o/r/pull/3");
-
-        // Unknown pane → no ghost workspace.
-        eng.handle_session_event(crate::runtime::pty_session::SessionEvent::PrLinkSeen {
-            slug: "ghost".into(),
-            url: "https://github.com/o/r/pull/4".into(),
-        });
-        assert_eq!(eng.pr_links.len(), 1);
-
-        let _ = std::fs::remove_dir_all(&scratch);
-    });
-}
-
-/// Renaming is a label change, so the link list is not migrated — it is not
-/// touched at all. This used to require `rename_pr_links`; the identity now
-/// holds still and the follow-through is gone.
-#[test]
-fn rename_leaves_pr_links_on_the_same_circle() {
-    with_test_state_dir("pr-rename", || {
-        let scratch = temp_scratch("pr-rename");
-        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
-        eng.push_stub_pane("worker", "lab");
-        eng.record_pr_link("lab", "https://github.com/o/r/pull/1", 1);
-
-        eng.rename_workspace("lab", "Atelier");
-        assert_eq!(eng.pr_links["lab"].len(), 1);
-        assert!(!eng.pr_links.contains_key("atelier"));
-        assert_eq!(eng.workspace_label("lab"), "Atelier");
-        // And the circle answers to both names afterwards.
-        assert_eq!(eng.resolve_workspace("Atelier").as_deref(), Some("lab"));
-
-        let _ = std::fs::remove_dir_all(&scratch);
-    });
-}
-
 #[test]
 fn last_pane_death_prunes_the_workspace_but_spares_created_circles() {
-    with_test_state_dir("pr-prune", || {
-        let scratch = temp_scratch("pr-prune");
+    with_test_state_dir("ws-prune", || {
+        let scratch = temp_scratch("ws-prune");
         let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
 
         // Implicit circle (born with its pane) → pruned when the pane dies.
@@ -739,192 +448,19 @@ fn last_pane_death_prunes_the_workspace_but_spares_created_circles() {
         eng.workspace_order.push("lab".into());
         eng.workspace_output.insert("lab".into(), 1);
         eng.workspace_touch_ms.insert("lab".into(), 2);
-        eng.record_pr_link("lab", "https://github.com/o/r/pull/1", 1);
 
         // Explicitly created empty circle → keeps its row.
         let b = eng.push_stub_pane("worker-b", "studio");
         eng.extra_workspaces.push("studio".into());
         eng.workspace_order.push("studio".into());
-        eng.record_pr_link("studio", "https://github.com/o/r/pull/2", 2);
 
         eng.kill_pane(&a);
-        assert!(!eng.pr_links.contains_key("lab"));
         assert!(!eng.workspace_order.iter().any(|w| w == "lab"));
         assert!(!eng.workspace_output.contains_key("lab"));
         assert!(!eng.workspace_touch_ms.contains_key("lab"));
 
         eng.kill_pane(&b);
         assert!(eng.workspace_order.iter().any(|w| w == "studio"));
-        assert_eq!(eng.pr_links["studio"].len(), 1);
-
-        let _ = std::fs::remove_dir_all(&scratch);
-    });
-}
-
-// ── PR link dismissal (clear must survive the next TUI repaint) ────────────
-
-#[test]
-fn clearing_a_link_dismisses_it_against_re_scrape() {
-    with_test_state_dir("pr-dismiss", || {
-        let scratch = temp_scratch("pr-dismiss");
-        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
-        let url = "https://github.com/o/r/pull/1";
-
-        eng.record_pr_link("lab", url, 1);
-        assert_eq!(eng.clear_pr_links("lab", Some(url)), 1);
-
-        // The repaint: same url, same workspace, must not come back.
-        assert!(!eng.record_pr_link("lab", url, 2));
-        assert!(!eng.pr_links.contains_key("lab"));
-
-        // A different url still lands normally.
-        assert!(eng.record_pr_link("lab", "https://github.com/o/r/pull/2", 3));
-        assert_eq!(eng.pr_links["lab"].len(), 1);
-
-        // Other workspaces are unaffected by lab's dismissal.
-        assert!(eng.record_pr_link("atelier", url, 4));
-        assert_eq!(eng.pr_links["atelier"][0].url, url);
-
-        let _ = std::fs::remove_dir_all(&scratch);
-    });
-}
-
-#[test]
-fn clear_all_dismisses_every_removed_link() {
-    with_test_state_dir("pr-dismiss-all", || {
-        let scratch = temp_scratch("pr-dismiss-all");
-        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
-        for n in 1..=3 {
-            eng.record_pr_link("lab", &format!("https://github.com/o/r/pull/{n}"), n);
-        }
-
-        assert_eq!(eng.clear_pr_links("lab", None), 3);
-        assert_eq!(eng.pr_dismissed["lab"].len(), 3);
-        for n in 1..=3 {
-            assert!(!eng.record_pr_link("lab", &format!("https://github.com/o/r/pull/{n}"), 9));
-        }
-        assert!(!eng.pr_links.contains_key("lab"));
-
-        let _ = std::fs::remove_dir_all(&scratch);
-    });
-}
-
-#[test]
-fn explicit_add_un_dismisses() {
-    with_test_state_dir("pr-undismiss", || {
-        let scratch = temp_scratch("pr-undismiss");
-        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
-        let url = "https://github.com/o/r/pull/1";
-        eng.record_pr_link("lab", url, 1);
-        eng.clear_pr_links("lab", Some(url));
-
-        let r = eng.handle_control(ControlRequest::PrLinkAdd {
-            url: url.into(),
-            workspace: Some("lab".into()),
-            scope: None,
-            from: None,
-        });
-        assert!(r.ok, "{:?}", r.error);
-        assert_eq!(eng.pr_links["lab"][0].url, url);
-        assert!(!eng.pr_link_dismissed("lab", url));
-        // And the scraper may keep it alive again.
-        assert!(!eng.record_pr_link("lab", url, 5)); // already most-recent
-        assert_eq!(eng.pr_links["lab"].len(), 1);
-
-        let _ = std::fs::remove_dir_all(&scratch);
-    });
-}
-
-#[test]
-fn dismissals_cap_and_evict_oldest() {
-    with_test_state_dir("pr-dismiss-cap", || {
-        let scratch = temp_scratch("pr-dismiss-cap");
-        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
-        let cap = super::pr_links::MAX_PR_DISMISSED;
-        for n in 0..cap + 2 {
-            eng.clear_pr_links("lab", Some(&format!("https://github.com/o/r/pull/{n}")));
-        }
-        assert_eq!(eng.pr_dismissed["lab"].len(), cap);
-        // Oldest two evicted → scrapable again; newest still tombstoned.
-        assert!(eng.record_pr_link("lab", "https://github.com/o/r/pull/0", 1));
-        assert!(!eng.record_pr_link(
-            "lab",
-            &format!("https://github.com/o/r/pull/{}", cap + 1),
-            2
-        ));
-
-        let _ = std::fs::remove_dir_all(&scratch);
-    });
-}
-
-#[test]
-fn rename_and_forget_follow_the_dismissed_set() {
-    with_test_state_dir("pr-dismiss-hygiene", || {
-        let scratch = temp_scratch("pr-dismiss-hygiene");
-        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
-        let url = "https://github.com/o/r/pull/1";
-        eng.clear_pr_links("lab", Some(url));
-
-        // A rename cannot move a dismissal off its circle any more: the key
-        // is the slug and the slug never moves.
-        eng.rename_workspace("lab", "Atelier");
-        assert!(eng.pr_link_dismissed("lab", url));
-        assert!(!eng.record_pr_link("lab", url, 1));
-
-        eng.forget_workspace("lab");
-        assert!(!eng.pr_dismissed.contains_key("lab"));
-        // Forgotten circle starts clean — the tombstones went with the row.
-        assert!(eng.record_pr_link("lab", url, 2));
-
-        let _ = std::fs::remove_dir_all(&scratch);
-    });
-}
-
-#[test]
-fn dismissals_survive_persist_reload_and_handoff() {
-    with_test_state_dir("pr-dismiss-persist", || {
-        let scratch = temp_scratch("pr-dismiss-persist");
-        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
-        let url = "https://github.com/o/r/pull/7";
-        eng.push_stub_pane("worker", "lab");
-        eng.record_pr_link("lab", url, 42);
-        eng.clear_pr_links("lab", Some(url));
-        eng.persist();
-
-        let state = crate::state::AppState::load();
-        assert_eq!(
-            state.pr_dismissed,
-            vec![("lab".to_string(), vec![url.to_string()])]
-        );
-
-        // Handoff carries it too — an upgrade must not resurrect the link.
-        let bundle = crate::runtime::protocol::HandoffBundle {
-            panes: vec![],
-            selected_workspace: None,
-            focused_pane: None,
-            extra_workspaces: vec![],
-            workspace_order: vec![],
-            workspace_names: vec![],
-            proposal_counter: 0,
-            ask_counter: 0,
-            statuses: vec![],
-            asks: vec![],
-            pad_revs: vec![],
-            inject_baselines: vec![],
-            tasks: vec![],
-            task_counter: 0,
-            active_tasks: vec![],
-            cmd_log: Default::default(),
-            workspace_output: vec![],
-            workspace_touch_ms: vec![],
-            pane_parents: vec![],
-            comms: Default::default(),
-            pr_links: vec![],
-            pr_dismissed: vec![("lab".to_string(), vec![url.to_string()])],
-        };
-        let json = serde_json::to_string(&bundle).unwrap();
-        let back: crate::runtime::protocol::HandoffBundle = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.pr_dismissed, bundle.pr_dismissed);
 
         let _ = std::fs::remove_dir_all(&scratch);
     });
@@ -1418,7 +954,64 @@ fn polled_circle_mode_follows_the_host_and_holds_pending_toggles() {
         assert!(eng
             .set_circle_mode_with(&ro, "claude-27", "slack", true)
             .unwrap_err()
-            .contains("display-only"));
+            .contains("host owns it"));
+        // Off-only: the host owns entering, seance may offer the way out.
+        let off_only = vec![crate::host::HostCircleMode {
+            id: "slack".into(),
+            label: "slack".into(),
+            state_cmd: Some("true".into()),
+            off_label: "disconnect".into(),
+            off_prompt: "leave the slack thread".into(),
+            ..Default::default()
+        }];
+        assert!(eng
+            .set_circle_mode_with(&off_only, "claude-27", "slack", true)
+            .is_err());
+        assert!(off_only[0].def().on_label.is_empty());
+        assert_eq!(off_only[0].def().off_label, "disconnect");
+        let _ = std::fs::remove_dir_all(&scratch);
+    });
+}
+
+/// `ctl space`/`ctl move` edit only the `spaces` key: pins, seen and the
+/// notes face in the same blob must come through untouched.
+#[test]
+fn space_ops_edit_the_rail_blob_and_keep_its_other_keys() {
+    with_test_state_dir("spaces", || {
+        let scratch = std::env::temp_dir().join(format!("seance-spaces-{}", std::process::id()));
+        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
+        eng.push_stub_pane("a", "ui-a");
+        eng.push_stub_pane("b", "ui-b");
+        eng.push_stub_pane("c", "loose");
+        let path = crate::daemon::fsbridge::subs_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"seen":["loose"],"pinned":["loose"],"flipped":"c"}"#,
+        )
+        .unwrap();
+
+        let listed = eng.space_op("list", &[], None).unwrap();
+        let ids: Vec<&str> = listed["spaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, vec!["general"]);
+
+        eng.space_op("new", &["later".into()], None).unwrap();
+        eng.space_op("move", &["ui-a".into(), "later".into()], None)
+            .unwrap();
+        assert!(eng.space_op("rm", &["general".into()], None).is_err());
+        let blob: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(blob["pinned"], serde_json::json!(["loose"]));
+        assert_eq!(blob["flipped"], "c");
+        assert_eq!(blob["spaces"]["of"]["ui-a"], "later");
+        // A move from inside a pane with no CIRCLE uses the caller's own.
+        eng.space_op("move", &["general".into()], Some("loose"))
+            .unwrap();
         let _ = std::fs::remove_dir_all(&scratch);
     });
 }

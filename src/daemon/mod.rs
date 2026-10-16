@@ -14,7 +14,6 @@ use anyhow::{bail, Context as _, Result};
 pub mod agentsessions;
 pub mod fsbridge;
 pub mod modewatch;
-pub mod prwatch;
 pub mod sleepsweep;
 
 use crate::control::{self, ControlRequest, ControlResponse};
@@ -156,8 +155,6 @@ fn run_daemon_inner(args: Vec<String>) -> Result<()> {
     // Daemon-side host widget poller (thin clients see this machine's chips).
     fsbridge::start_host_poller(Arc::clone(&engine));
 
-    // External PR-watcher ingest (pr_watch.json → PrLink.status).
-    prwatch::start_pr_watch_poller(Arc::clone(&engine));
     // Host circle modes (AFK) the host owns: poll its state_cmd.
     modewatch::start_mode_poller(Arc::clone(&engine));
     // Idle circles stop holding RAM (12h; restorable circles only).
@@ -351,7 +348,7 @@ fn serve_ctl(
 /// Stream events matching filters as JSON lines after an initial ack.
 fn serve_watch(
     mut writer: UnixStream,
-    _engine: SharedEngine,
+    engine: SharedEngine,
     since_seq: u64,
     kinds: Option<Vec<String>>,
     pane: Option<String>,
@@ -360,6 +357,27 @@ fn serve_watch(
     catch_up: bool,
 ) -> Result<()> {
     use crate::events;
+
+    // Watch bypasses handle_control, but its pane filter accepts the same
+    // explicit lifetime IDs as the one-shot commands.
+    let pane = if let Some(key) = pane.as_ref().filter(|p| p.starts_with("id:")) {
+        let resp = engine
+            .lock()
+            .map_err(|_| anyhow::anyhow!("engine lock poisoned"))?
+            .handle_control(ControlRequest::Status {
+                pane: key.clone(),
+                scope: scope.clone(),
+                from: None,
+            });
+        if !resp.ok {
+            writeln!(writer, "{}", serde_json::to_string(&resp)?)?;
+            return Ok(());
+        }
+        resp.data
+            .and_then(|row| row["slug"].as_str().map(str::to_string))
+    } else {
+        pane
+    };
 
     let (rx, cursor) = events::subscribe();
     let ack = ControlResponse::ok(serde_json::json!({

@@ -3,8 +3,7 @@
 //! Programs ask the terminal for a desktop notification with
 //! `ESC ] 9 ; body ST` (iTerm2) or `ESC ] 777 ; notify ; title ; body ST`
 //! (rxvt, used by Ghostty and others). alacritty_terminal drops both, so the
-//! I/O thread reads them from the raw stream, the same way `pr_scrape` finds
-//! PR links. ConEmu reuses OSC 9 with a numeric subcommand (`9;4;…` is a
+//! I/O thread reads them from the raw stream. ConEmu reuses OSC 9 with a numeric subcommand (`9;4;…` is a
 //! progress bar); those are not notifications, so any OSC 9 whose first field
 //! is all digits is skipped.
 //!

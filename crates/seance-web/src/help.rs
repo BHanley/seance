@@ -239,8 +239,8 @@ prefer the middle column.</p>
 <tr><td class="k">ctrl+shift+m</td><td class="alt">alt+m</td><td class="d">the same zoom, second spelling — for keyboards where z is taken</td></tr>
 <tr><td class="k">ctrl+shift+r</td><td class="alt">alt+r</td><td class="d">rename the selected workspace <span class="note">— chord may hard-reload the tab, use alt</span></td></tr>
 <tr><td class="k">ctrl+shift+p</td><td class="alt">alt+p</td><td class="d">latency probe overlay <span class="note">— diverges from native, where this key pins the selected circle</span></td></tr>
-<tr><td class="k">ctrl+shift+home</td><td class="alt">alt+home</td><td class="d">jump to the top of the rail — first pinned circle, else the top of active</td></tr>
-<tr><td class="k">ctrl+shift+1 … 9</td><td class="alt">—</td><td class="d">jump to the nth circle down the rail (1 = the top row) <span class="note">— no alt twin: alt+digit switches browser tabs</span></td></tr>
+<tr><td class="k">ctrl+shift+home</td><td class="alt">alt+home</td><td class="d">jump to the first circle in the rail's list</td></tr>
+<tr><td class="k">ctrl+shift+1 … 9</td><td class="alt">—</td><td class="d">jump to the nth circle in the rail's list (the space on screen, or the filter) <span class="note">— no alt twin: alt+digit switches browser tabs</span></td></tr>
 <tr><td class="k">ctrl+shift+a</td><td class="alt">alt+a</td><td class="d">activity drawer — the attributed event feed</td></tr>
 <tr><td class="k">ctrl+shift+? &nbsp;/&nbsp; ctrl+shift+/</td><td class="alt">alt+? / alt+/</td><td class="d">this grimoire</td></tr>
 <tr><td class="k">ctrl+pgup / pgdn</td><td class="alt">—</td><td class="d">previous / next workspace (sidebar order, wraps)</td></tr>
@@ -271,7 +271,7 @@ prefer the middle column.</p>
 <tr><td class="k">needs</td><td class="d">that pane wants a human — a pending ask, a block, or an agent-reported <code>needs-human</code></td></tr>
 <tr><td class="k">done</td><td class="d">the agent reported <code>done</code> and is waiting to be read</td></tr>
 <tr><td class="k">× banish</td><td class="d">kill. the first click arms it (turns red), a second within two seconds does it. banishing the last pane banishes the circle — ptys shut down, scratchpad files on disk are kept</td></tr>
-<tr><td class="k">quicklaunch</td><td class="d">saved pane recipes (name + cwd + command) — one click summons a pane already pointed at the right project, in a fresh circle that arrives pinned</td></tr>
+<tr><td class="k">quicklaunch</td><td class="d">saved pane recipes (name + cwd + command) — one click summons a pane already pointed at the right project, in a fresh circle in the space on screen</td></tr>
 <tr><td class="k">accounts</td><td class="d">the host-bridge strip: which claude account a new agent pane runs as. it fails closed — a quiet bridge shows an empty strip rather than a wrong one</td></tr>
 </table>
 

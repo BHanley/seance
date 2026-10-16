@@ -17,6 +17,7 @@
 //! the test suite so tests never touch the real state file, but the app itself
 //! may honor it too (e.g. to run isolated profiles).
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::Context as _;
@@ -26,6 +27,10 @@ use serde::{Deserialize, Serialize};
 /// future kinds (markdown viewer, graph, ...) slot in via `kind`.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PersistedPane {
+    /// Lifetime identity, independent of the reusable slug and agent process.
+    /// Empty only in legacy state, until `load_with_ids` migrates it.
+    #[serde(default)]
+    pub pane_id: String,
     /// Pane kind discriminator. `"terminal"` today.
     #[serde(default = "default_kind")]
     pub kind: String,
@@ -97,6 +102,9 @@ fn default_workspace() -> String {
 /// Top-level persisted application state.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct AppState {
+    /// Circle slug → lifetime UUID. Includes explicitly created empty circles.
+    #[serde(default)]
+    pub workspace_ids: BTreeMap<String, String>,
     /// All known panes, tiled and shelved. Serialized as `sessions` for
     /// back-compat with v0.1 state files.
     #[serde(rename = "sessions")]
@@ -157,13 +165,6 @@ pub struct AppState {
     /// Cross-session comms: leads, former labels, contacts, messages.
     #[serde(default)]
     pub comms: crate::runtime::protocol::CommsState,
-    /// workspace → scraped PR links (0.13 — survive upgrade).
-    #[serde(default)]
-    pub pr_links: Vec<(String, Vec<crate::runtime::protocol::PrLink>)>,
-    /// workspace → PR urls the human cleared (0.14.1). Persisted because the
-    /// scraper would otherwise re-add a cleared url from the next repaint.
-    #[serde(default)]
-    pub pr_dismissed: Vec<(String, Vec<String>)>,
 }
 
 fn default_split_ratio() -> f32 {
@@ -171,6 +172,43 @@ fn default_split_ratio() -> f32 {
 }
 
 impl AppState {
+    /// Migrate identities and commit them before any restored process can use
+    /// them. A failed migration write aborts startup rather than exposing IDs
+    /// that would change again on the next restart.
+    pub fn load_with_ids() -> anyhow::Result<Self> {
+        let mut state = Self::load();
+        if state.migrate_ids() {
+            state
+                .save()
+                .context("persisting pane/workspace identity migration")?;
+        }
+        Ok(state)
+    }
+
+    fn migrate_ids(&mut self) -> bool {
+        let mut changed = false;
+        for pane in &mut self.panes {
+            if pane.pane_id.is_empty() {
+                pane.pane_id = new_identity_uuid();
+                changed = true;
+            }
+        }
+        for slug in self
+            .panes
+            .iter()
+            .map(|p| &p.workspace)
+            .chain(&self.extra_workspaces)
+            .chain(&self.workspace_order)
+        {
+            let id = self.workspace_ids.entry(slug.clone()).or_default();
+            if id.is_empty() {
+                *id = new_identity_uuid();
+                changed = true;
+            }
+        }
+        changed
+    }
+
     /// Load state from disk.
     ///
     /// Reads `~/.local/share/seance/state.json` (or `$SEANCE_STATE_DIR/state.json`).
@@ -275,6 +313,25 @@ pub(crate) fn state_dir() -> anyhow::Result<PathBuf> {
 /// Full path to the state file.
 fn state_file_path() -> anyhow::Result<PathBuf> {
     Ok(state_dir()?.join("state.json"))
+}
+
+/// UUIDv4 from OS randomness: never derived from names, PIDs or counters, so
+/// deleting a pane/circle cannot make its identity available for reuse.
+pub(crate) fn new_identity_uuid() -> String {
+    use rand::RngCore;
+    let mut bytes = [0u8; 16];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    )
 }
 
 /// Turn an arbitrary name into a filesystem-safe slug.
@@ -414,6 +471,7 @@ mod tests {
         let state = AppState {
             panes: vec![
                 PersistedPane {
+                    pane_id: new_identity_uuid(),
                     kind: "terminal".to_string(),
                     workspace: "main".to_string(),
                     name: "Vita".to_string(),
@@ -435,6 +493,7 @@ mod tests {
                     inject_pad_bytes: None,
                 },
                 PersistedPane {
+                    pane_id: new_identity_uuid(),
                     kind: "terminal".to_string(),
                     workspace: "main".to_string(),
                     name: "Scratch".to_string(),
@@ -464,6 +523,7 @@ mod tests {
             extra_workspaces: vec![],
             workspace_order: vec![],
             workspace_names: vec![],
+            workspace_ids: BTreeMap::new(),
             window_size: Some((1280.0, 800.0)),
             tasks: vec![],
             task_counter: 0,
@@ -475,18 +535,6 @@ mod tests {
             workspace_touch_ms: vec![("main".to_string(), 1_700_000_000_500)],
             pane_parents: vec![],
             comms: Default::default(),
-            pr_links: vec![(
-                "main".to_string(),
-                vec![crate::runtime::protocol::PrLink {
-                    url: "https://github.com/o/r/pull/5".into(),
-                    status: None,
-                    seen_ms: 1_700_000_000_900,
-                }],
-            )],
-            pr_dismissed: vec![(
-                "main".to_string(),
-                vec!["https://github.com/o/r/pull/4".into()],
-            )],
         };
 
         state.save().expect("save should succeed");
@@ -498,16 +546,6 @@ mod tests {
         assert_eq!(
             loaded.workspace_touch_ms,
             vec![("main".to_string(), 1_700_000_000_500)]
-        );
-        assert_eq!(loaded.pr_links.len(), 1);
-        assert_eq!(loaded.pr_links[0].0, "main");
-        assert_eq!(loaded.pr_links[0].1[0].url, "https://github.com/o/r/pull/5");
-        assert_eq!(
-            loaded.pr_dismissed,
-            vec![(
-                "main".to_string(),
-                vec!["https://github.com/o/r/pull/4".to_string()]
-            )]
         );
 
         assert_eq!(loaded.panes.len(), 2);

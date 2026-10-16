@@ -495,6 +495,11 @@ pub enum GuiEvent {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PaneInfo {
+    /// Lifetime UUIDs. Empty only when reading a pre-ID daemon's wire data.
+    #[serde(default)]
+    pub pane_id: String,
+    #[serde(default)]
+    pub workspace_id: String,
     pub kind: String,
     pub name: String,
     pub slug: String,
@@ -563,6 +568,8 @@ pub struct StatusInfo {
 /// between windows, and `seance upgrade` — the clients are mirrors.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct WorkspaceMeta {
+    #[serde(default)]
+    pub workspace_id: String,
     /// The circle's stable **slug** — its identity. Minted once at creation
     /// and never rewritten, so anything holding it (a pane's environment, a
     /// client's rail prefs, a path on disk) survives a rename.
@@ -577,11 +584,6 @@ pub struct WorkspaceMeta {
     /// Last human input (keystroke / inject) into any pane here.
     #[serde(default)]
     pub last_touch_ms: u64,
-    /// PR links scraped from this workspace's pane output, most-recently-seen
-    /// LAST. Statuses are filled in by an external poller through
-    /// `<state_dir>/pr_watch.json` — the daemon only owns the URL list.
-    #[serde(default)]
-    pub pr_links: Vec<PrLink>,
     /// Host-defined circle modes currently on here (ids from
     /// `GuiEvent::State::circle_modes`, e.g. `["afk"]`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -601,53 +603,6 @@ pub struct CircleModeDef {
     /// Circles in this mode get their own band at the top of the rail.
     #[serde(default)]
     pub top: bool,
-}
-
-/// One PR URL observed in a workspace's pane output.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct PrLink {
-    /// Canonical `https://github.com/OWNER/REPO/pull/N` URL.
-    pub url: String,
-    /// Latest poller verdict, when the watcher has seen this URL.
-    #[serde(default)]
-    pub status: Option<PrStatus>,
-    /// When the URL was last seen in pane output (unix ms).
-    #[serde(default)]
-    pub seen_ms: u64,
-}
-
-/// External-poller view of one PR (written to `pr_watch.json`).
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct PrStatus {
-    /// Freeform: `open` | `draft` | `merged` | `closed` | …
-    pub state: String,
-    /// `needs` (resurface the workspace) | `done` | None.
-    #[serde(default)]
-    pub attention: Option<String>,
-    /// Short chip text, e.g. `CI ✗`, `approved ✓`, `2 comments`.
-    #[serde(default)]
-    pub label: String,
-    /// Poller's last refresh (unix ms).
-    #[serde(default)]
-    pub updated_ms: u64,
-    /// PR is a draft.
-    #[serde(default)]
-    pub is_draft: bool,
-    /// `pass` | `fail` | `running`, or None when the PR has no checks.
-    #[serde(default)]
-    pub ci: Option<String>,
-    /// `required` | `approved` | `changes`, or None.
-    #[serde(default)]
-    pub review: Option<String>,
-    /// PR open time (unix ms; 0 = unknown).
-    #[serde(default)]
-    pub opened_ms: u64,
-    /// Latest review submission (unix ms; 0 = unknown).
-    #[serde(default)]
-    pub last_review_ms: u64,
-    /// Latest comment (unix ms; 0 = unknown).
-    #[serde(default)]
-    pub last_comment_ms: u64,
 }
 
 /// Pad rev + bytes recorded at last inject — wait uses this for since-inject evidence.
@@ -776,42 +731,6 @@ mod workspace_meta_tests {
             GuiEvent::State { subscriptions, .. } => assert!(subscriptions.is_empty()),
             _ => panic!("expected State"),
         }
-    }
-
-    /// `pr_links` is additive: a 0.12 payload (and a 0.12 client) still parse.
-    #[test]
-    fn workspace_meta_pr_links_are_optional_and_roundtrip() {
-        let old: WorkspaceMeta =
-            serde_json::from_str(r#"{"workspace":"lab","last_output_ms":1,"last_touch_ms":2}"#)
-                .unwrap();
-        assert!(old.pr_links.is_empty());
-
-        let meta = WorkspaceMeta {
-            workspace: "lab".into(),
-            name: None,
-            last_output_ms: 1,
-            last_touch_ms: 2,
-            modes: vec!["afk".into()],
-            pr_links: vec![PrLink {
-                url: "https://github.com/o/r/pull/3".into(),
-                status: Some(PrStatus {
-                    state: "open".into(),
-                    attention: Some("needs".into()),
-                    label: "CI x".into(),
-                    updated_ms: 9,
-                    is_draft: true,
-                    ci: Some("running".into()),
-                    review: Some("changes".into()),
-                    opened_ms: 100,
-                    last_review_ms: 200,
-                    last_comment_ms: 300,
-                }),
-                seen_ms: 5,
-            }],
-        };
-        let back: WorkspaceMeta =
-            serde_json::from_str(&serde_json::to_string(&meta).unwrap()).unwrap();
-        assert_eq!(back.pr_links, meta.pr_links);
     }
 
     #[test]

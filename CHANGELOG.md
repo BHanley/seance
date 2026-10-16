@@ -27,6 +27,105 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   keeps permissions), so it works from any GUI once the daemon runs this
   version. The change lands in history like any other edit. See
   docs/FILE-PANES.md, "Task boxes".
+- `~/.config/seance/terminal.conf` (Ghostty config syntax, `config-file`
+  includes and `theme` names work) sets the terminal palette, font, bell
+  sound and command-finish notifications. No file keeps today's look.
+- Terminal alerts: BEL plays the bell sound, and OSC 9 / OSC 777 and long
+  shell commands post a desktop notification when you aren't looking at that
+  pane (new `pane_alert` event). OSC 52 copies reach the clipboard of the
+  window showing the pane (`pane_clipboard`).
+- macOS line editing like Ghostty: cmd+backspace, cmd+left/right,
+  option+left/right; cmd+click opens links. Alt+backspace deletes a word on
+  every platform.
+- `seance ctl rename-pane [PANE] NAME` sets a pane's display name from a
+  script (the slug never moves).
+- Lifetime UUIDv4 identities for panes and circles: `SEANCE_PANE_ID` and
+  `SEANCE_WORKSPACE_ID` in launched processes, `pane_id` and `workspace_id`
+  in ctl pane rows and `whoami`, and `id:<pane_id>` pane addressing. IDs
+  survive renames, sleep/wake, cold restore and daemon upgrades; deleted
+  panes/circles and handoff successors never reuse them. Legacy state and
+  upgrade bundles gain IDs and save them immediately. Processes retained
+  by a live upgrade receive the env vars on their next wake/restore.
+
+### Removed
+
+- PR links, gone everywhere: the PTY scraper, the per-circle link list and
+  its dismissals, the `pr_watch.json` watcher, `ctl pr-link`, the header PR
+  chips and the `PRs (N)` board in both GUIs (and the phone circle menu).
+  Saved state and upgrade bundles that still carry `pr_links` /
+  `pr_dismissed` load fine, and those fields are dropped.
+- Prefix auto-spaces. A label like `mtg-ai` no longer routes a circle or
+  mints a space, and rows no longer dim a prefix their space names. Circles
+  move only by hand; a new one lands in the space on screen. Existing auto
+  spaces load as ordinary spaces and keep their circles (`prefix` / `auto` /
+  `placed` are ignored and drop on the next save). `seance-core`'s unused
+  `grouping.rs` went with it.
+
+## [0.27.0] — 2026-10-11
+
+### Added
+
+- **Spaces: the rail's top tier.** The rail lists spaces first, one line
+  each with a spinner or dot for anything happening inside and a count. Below
+  them it lists the circles of the space on screen. Click a space to show it.
+  Drag a circle's row onto a space to move it. The web and phone clients do
+  the same from the row menu and the circle sheet ("move to space"). Spaces
+  live in the shared rail arrangement (`subscriptions.json` → `spaces`), so
+  every window agrees. The model is `seance-core/src/spaces.rs`:
+  - One space is the **default** (`general` at first). It can be renamed,
+    never deleted, and it catches anything without a better home. Deleting a
+    space sends its circles there.
+  - A label prefix still routes circles: a space whose prefix matches catches
+    them, and a prefix that ≥2 circles share mints an **auto** space. Generated
+    names like `claude-49` never count. A circle you move by hand stays put;
+    a prefix never moves it again. An auto space disappears when it empties.
+    Renaming one keeps it and keeps its prefix as an alias (rename `mtg` to
+    "meetings" and `mtg-*` circles still land there).
+  - New circles land in the space on screen.
+  - Clicking a space selects its first circle.
+  - Drag a space onto another to reorder (drop on the divider under the
+    spaces to send it to the end).
+    Spaces never auto-sort; only circles do, inside a space. The web uses
+    move up/down instead.
+  - Right-click a space → **banish all** kills every circle in it, after a
+    confirm (a red pill on the row on desktop, a dialog on web).
+  - Upgrading guesses nothing. Existing ≥2-prefix clusters become auto spaces,
+    and everything else goes to `general`.
+- **Filter chips** over the rail: all · pins · one per host circle mode
+  (AFK, slack). A filter narrows the list across every space and never moves
+  a circle. A chip with nothing in it doesn't show, and the bar disappears
+  when "all" would be the only chip. Right-click **pins** to unpin
+  everything. **Right-click a mode chip** to turn the mode off for every
+  circle in it, e.g. "i'm back" to all AFK circles at once.
+- `ctl space [list]`, `ctl space new|rename|rm|default`, and `ctl move
+  [CIRCLE] SPACE` edit the same arrangement and push it to every window.
+- Host circle modes can be **off-only**: set just `off_label` + `off_prompt`
+  on a host-owned mode to offer the way out without offering the way in
+  (docs/HOST.md).
+
+### Changed
+
+- **Pins don't move circles anymore.** The pinned band is gone. Pinning
+  (ctrl+shift+p, the row menu, the phone sheet) puts a circle under the
+  pins chip and leaves it where it is.
+- Prefix clusters and their folds are gone; spaces replaced them.
+- **The rail's `needs` state is gone**: no needs badge for a circle you
+  never selected, for a `needs-human`/`blocked` status, or for a PR waiting
+  on you. It lit up for too many reasons to mean anything. PR chips and the
+  PR board still color a PR that needs you, and `ctl status-set needs-human`
+  still notifies.
+- The selected circle and space get an amber fill, and hovering deepens it
+  instead of replacing it.
+- Host modes no longer get bands above the rail, so `top` is ignored. Their
+  circles show under their chip.
+- The header's `◈+` is now **`+ space` `+ circle`**.
+- Quicklaunch and host-menu circles no longer arrive pinned. They land in the
+  space on screen. A host menu result can still say `"pin": true`.
+- ctrl+page, ctrl+shift+1…9 and ctrl+shift+home walk the rail's list: the
+  space on screen, or the active filter.
+
+### Added (earlier, unreleased until now)
+
 - **codex and grok panes come back on their own conversation** after a daemon
   crash, an OOM, or a sleep/wake, the way claude panes already did. grok gets
   a minted `--session-id` and restores with `--resume`. codex can't be handed
@@ -46,18 +145,6 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   Each top mode gets its own band above the pins. A mode with no toggle
   fields is display-only, e.g. vita's `slack` mode, which lists the circles
   whose pane holds a cadence slack thread.
-- `~/.config/seance/terminal.conf` (Ghostty config syntax, `config-file`
-  includes and `theme` names work) sets the terminal palette, font, bell
-  sound and command-finish notifications. No file keeps today's look.
-- Terminal alerts: BEL plays the bell sound, and OSC 9 / OSC 777 and long
-  shell commands post a desktop notification when you aren't looking at that
-  pane (new `pane_alert` event). OSC 52 copies reach the clipboard of the
-  window showing the pane (`pane_clipboard`).
-- macOS line editing like Ghostty: cmd+backspace, cmd+left/right,
-  option+left/right; cmd+click opens links. Alt+backspace deletes a word on
-  every platform.
-- `seance ctl rename-pane [PANE] NAME` sets a pane's display name from a
-  script (the slug never moves).
 - Phone web views show one pane at a time, with tabs across the top to switch
   panes. The active terminal fills the screen above the keyboard.
 - `--help` / `-h` anywhere on the `seance` command line prints top-level

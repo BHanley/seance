@@ -236,26 +236,35 @@ pub fn run_state_cmd(cmd: &str) -> Result<String, String> {
 impl HostCircleMode {
     /// Whether the rail menu can turn this mode on and off.
     pub fn toggleable(&self) -> bool {
-        ![
-            &self.on_label,
-            &self.off_label,
-            &self.on_prompt,
-            &self.off_prompt,
-        ]
-        .iter()
-        .any(|f| f.trim().is_empty())
+        self.can_turn_on() && self.can_turn_off()
     }
 
-    /// What clients see (labels, no prompts). Empty menu labels mean
-    /// display-only: no menu entry.
+    pub fn can_turn_on(&self) -> bool {
+        !self.on_label.trim().is_empty() && !self.on_prompt.trim().is_empty()
+    }
+
+    /// A host-owned mode may still offer the way out (slack: "disconnect"),
+    /// with only `off_label` + `off_prompt` set.
+    pub fn can_turn_off(&self) -> bool {
+        !self.off_label.trim().is_empty() && !self.off_prompt.trim().is_empty()
+    }
+
+    /// What clients see (labels, no prompts). An empty label means that
+    /// direction has no menu entry.
     pub fn def(&self) -> seance_core::protocol::CircleModeDef {
-        let toggle = self.toggleable();
-        let menu = |s: &String| if toggle { s.clone() } else { String::new() };
         seance_core::protocol::CircleModeDef {
             id: self.id.clone(),
             label: self.label.clone(),
-            on_label: menu(&self.on_label),
-            off_label: menu(&self.off_label),
+            on_label: if self.can_turn_on() {
+                self.on_label.clone()
+            } else {
+                String::new()
+            },
+            off_label: if self.can_turn_off() {
+                self.off_label.clone()
+            } else {
+                String::new()
+            },
             top: self.top,
         }
     }

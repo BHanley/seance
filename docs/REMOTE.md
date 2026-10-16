@@ -136,9 +136,9 @@ way as Linux (`scripts/bootstrap-deps.sh` symlinks `deps/zed`, then
 
 A thin-client window follows the normal multi-window model: nothing is owned,
 and every window subscribes to every circle (0.26 — the park verb is gone).
-**The arrangement itself — pins, folds — is daemon-owned as of 0.23**, so a mac
-window opens on the same rail as the desk, in the same order, with the same
-circles pinned. Pin something here and it pins there; the daemon pushes the
+**The arrangement itself — spaces, pins — is daemon-owned as of 0.23**, so a mac
+window opens on the same rail as the desk, with the same spaces and pins.
+Move a circle here and it moves there; the daemon pushes the
 change to every attached window (`~/.local/share/seance/subscriptions.json`
 on the daemon host, beside `layout.json`).
 

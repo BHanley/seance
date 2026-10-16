@@ -99,6 +99,13 @@ impl Engine {
     /// circle's pane, which is how a reply went to the wrong session.
     pub(crate) fn resolve_target(&self, key: &str) -> Result<Target, String> {
         let key = key.trim();
+        if key.starts_with("id:") {
+            return Ok(Target {
+                pane: self.pane_slug_from_id(key)?,
+                circle: None,
+                note: None,
+            });
+        }
         let circle_target = |slug: String, renamed: Option<String>| -> Result<Target, String> {
             let label = self.workspace_label(&slug);
             let lead = self
@@ -524,9 +531,14 @@ impl Engine {
             .find(|m| m.id == mode)
             .cloned()
             .ok_or_else(|| format!("no circle mode '{mode}' in host.json"))?;
-        if !def.toggleable() {
+        if !(if on {
+            def.can_turn_on()
+        } else {
+            def.can_turn_off()
+        }) {
             return Err(format!(
-                "circle mode '{mode}' is display-only (host owns it)"
+                "circle mode '{mode}' can't be turned {} from seance (host owns it)",
+                if on { "on" } else { "off" }
             ));
         }
         let (slug, _) = self

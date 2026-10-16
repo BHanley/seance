@@ -56,6 +56,8 @@
         seance_mobile_banish_workspace,
         seance_mobile_circle_modes,
         seance_mobile_set_circle_mode,
+        seance_mobile_spaces,
+        seance_mobile_move_to_space,
       } from './seance_web.js';
       await init();
       // The phone chrome below is plain JS and can't reach the websocket —
@@ -73,6 +75,8 @@
         banish: seance_mobile_banish_workspace,
         circleModes: seance_mobile_circle_modes,
         setCircleMode: seance_mobile_set_circle_mode,
+        spaces: seance_mobile_spaces,
+        moveToSpace: seance_mobile_move_to_space,
       };
       window.dispatchEvent(new Event('seance-ready'));
     </script>
@@ -212,14 +216,10 @@
         }, true); // capture: ql-chip's wasm handler stops propagation
 
         // ── circle menu ───────────────────────────────────────────────────
-        // The topbar packs title + PR chips + connection + probe into 390px,
+        // The topbar packs title + connection + probe into 390px,
         // and the title lost — "free-premium-rp" wrapped to three lines and
         // shoved the terminal down. On mobile the title gets the whole bar and
         // everything else moves in here, reached by tapping the title.
-        //
-        // The chips are wasm-bound buttons (their click opens the PR), so this
-        // MOVES the live #pr-chips node in rather than cloning it — a clone
-        // would look right and do nothing.
         var menu = mk('div', 'm-menu');
         menu.hidden = true;
         var menuTitle = mk('div', 'm-menu-title', null, '');
@@ -241,17 +241,16 @@
         nameSave.type = 'button';
         menuName.appendChild(nameInput);
         menuName.appendChild(nameSave);
-        // Pin: the desktop's is a right-click on a rail row, which a finger
-        // has no spelling for — so a circle launched from the phone (they
-        // launch pinned) could never be put back once it slipped.
+        // Pin + space moves: the desktop's are a right-click on a rail row,
+        // which a finger has no spelling for.
         var menuRailHead = mk('div', null, 'm-menu-sec', 'rail');
-        var pinBtn = mk('button', 'm-menu-pin', 'm-sheet-btn', 'pin to top');
+        var pinBtn = mk('button', 'm-menu-pin', 'm-sheet-btn', 'pin');
         pinBtn.type = 'button';
         // Host circle modes (AFK) — one toggle each, only when host.json
         // defines any. The daemon prompts the circle's first pane.
         var modeBtns = mk('div', 'm-menu-modes');
-        var menuPrsHead = mk('div', null, 'm-menu-sec', 'pull requests');
-        var menuPrs = mk('div', 'm-menu-prs');
+        var menuSpacesHead = mk('div', null, 'm-menu-sec', 'move to space');
+        var spaceBtns = mk('div', 'm-menu-spaces');
         var menuConnHead = mk('div', null, 'm-menu-sec', 'connection');
         var menuConn = mk('div', 'm-menu-conn', null, '');
         // Destructive, so it sits at the bottom, away from the controls you
@@ -269,8 +268,8 @@
           menuRailHead,
           pinBtn,
           modeBtns,
-          menuPrsHead,
-          menuPrs,
+          menuSpacesHead,
+          spaceBtns,
           menuConnHead,
           menuConn,
           menuDangerHead,
@@ -327,9 +326,31 @@
           // rather than showing one that does nothing.
           pinBtn.hidden = on === undefined;
           menuRailHead.hidden = on === undefined;
-          pinBtn.textContent = on ? 'unpin' : 'pin to top';
+          pinBtn.textContent = on ? 'unpin' : 'pin';
           pinBtn.classList.toggle('on', !!on);
           paintModes();
+          paintSpaces();
+        }
+        function paintSpaces() {
+          spaceBtns.textContent = '';
+          var spaces = [];
+          try {
+            spaces = window.seanceMobile ? JSON.parse(window.seanceMobile.spaces()) : [];
+          } catch (_) {}
+          var others = spaces.filter(function (s) { return !s.here; });
+          menuSpacesHead.hidden = others.length === 0;
+          others.forEach(function (s) {
+            var b = mk('button', null, 'm-sheet-btn', s.name);
+            b.type = 'button';
+            b.addEventListener('click', function (e) {
+              e.preventDefault();
+              if (window.seanceMobile && window.seanceMobile.moveToSpace(s.id)) {
+                paintSpaces();
+                toast('moved to ' + s.name);
+              }
+            });
+            spaceBtns.appendChild(b);
+          });
         }
         function paintModes() {
           modeBtns.textContent = '';
@@ -360,7 +381,7 @@
           if (was === undefined) return;
           var now = window.seanceMobile.setPinned(!was);
           paintPin();
-          toast(now ? 'pinned to the top' : 'unpinned');
+          toast(now ? 'pinned' : 'unpinned');
         });
         nameSave.addEventListener('click', function (e) {
           e.preventDefault();
@@ -389,21 +410,11 @@
           }
         });
 
-        function chipsNode() {
-          return document.getElementById('pr-chips');
-        }
         function openMenu() {
           var t = document.querySelector('.tb-title');
           menuTitle.textContent = t ? t.textContent : '';
           nameInput.value = menuTitle.textContent;
           paintPin();
-          var chips = chipsNode();
-          menuPrs.textContent = '';
-          if (chips && chips.children.length) {
-            menuPrs.appendChild(chips); // live move, handlers intact
-          } else {
-            menuPrs.appendChild(mk('div', null, 'm-menu-empty', 'no open PRs'));
-          }
           var lbl = document.getElementById('conn-label');
           var dot = document.getElementById('conn-dot');
           menuConn.textContent = (lbl && lbl.textContent) || 'unknown';
@@ -413,14 +424,6 @@
         }
         function closeMenu() {
           disarmBanish();
-          var chips = menuPrs.querySelector('.pr-chips');
-          if (chips) {
-            // A re-render while we were open will have built a fresh row in
-            // the topbar; putting ours back would duplicate the id.
-            var tb = document.getElementById('topbar');
-            if (tb && !tb.querySelector('.pr-chips')) tb.appendChild(chips);
-            else chips.remove();
-          }
           menu.hidden = true;
           body.classList.remove('m-menu-open');
         }

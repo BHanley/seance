@@ -1,4 +1,4 @@
-//! Pinned/seen/folds rail arrangement — the shape of this module, not its
+//! Stars/seen/spaces rail arrangement — the shape of this module, not its
 //! storage. **The daemon owns the arrangement** (`FsOp::SubsLoad/SubsSave`,
 //! beside `layout.json` in its state dir), so the circles you keep in front of
 //! you follow you to any window: desk, mac thin client, browser. Changing it
@@ -12,17 +12,11 @@
 //! and its park verb were removed in 0.26: every window subscribes to every
 //! circle, so an `active` key in an older blob parses and is discarded.
 //!
-//! Shape: `{ "seen": [...], "pinned": [...], "collapsed": [...],
-//! "flipped": "slug", "docked": [...] }`.
-//! - `seen` — every workspace this GUI has selected at least once (plus
-//!   everything that already existed on first run). One that appears without
-//!   ever being selected badges `needs` — that's a ctl-spawned circle you
-//!   haven't looked at.
-//! - `pinned` — rendered in its own section at the very top of the rail, above
-//!   a divider. Same internal sort as every other band.
-//! - `collapsed` — folded rail nodes; this is the whole organization story now
-//!   that park is gone. Fold a band or a prefix cluster to get it out of the
-//!   way.
+//! Shape: `{ "seen": [...], "pinned": [...], "spaces": {...}, "flipped":
+//! "slug", "docked": [...] }`. `pinned` is the ★ set (0.27; the pinned band is gone), `spaces`
+//! is `seance_core::spaces::Spaces`. `seen` marks circles this GUI has
+//! selected; one that appears without ever being selected badges `needs`.
+//! `docked` lists file panes shown in their circle's right-side dock panel.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -57,11 +51,9 @@ pub struct SubscriptionsPref {
     /// machine too.
     #[serde(default)]
     pub docked: BTreeSet<String>,
-}
-
-/// Collapse key for a prefix group inside a section.
-pub fn group_key(section: &str, prefix: &str) -> String {
-    format!("{section}/{}", prefix.to_ascii_lowercase())
+    /// The rail's spaces (`seance_core::spaces`). `pinned` above is the ★ set.
+    #[serde(default, skip_serializing_if = "seance_core::spaces::Spaces::is_empty")]
+    pub spaces: seance_core::spaces::Spaces,
 }
 
 pub fn config_path() -> PathBuf {
@@ -108,33 +100,6 @@ pub fn save(pref: &SubscriptionsPref) {
 }
 
 impl SubscriptionsPref {
-    /// Is this cluster folded?
-    pub fn is_collapsed(&self, key: &str) -> bool {
-        self.collapsed.as_ref().is_some_and(|s| s.contains(key))
-    }
-
-    /// Unfold `key` if it is folded. Reports whether anything changed, so the
-    /// caller only persists on a real edit.
-    ///
-    /// Used when the rail has to *reveal* a row — jumping to a circle inside a
-    /// folded band can't just scroll to it, because the row isn't drawn at all.
-    pub fn uncollapse(&mut self, key: &str) -> bool {
-        if !self.is_collapsed(key) {
-            return false;
-        }
-        self.toggle_collapsed(key);
-        true
-    }
-
-    /// Fold / unfold. Always reports `true` — the caller persists.
-    pub fn toggle_collapsed(&mut self, key: &str) -> bool {
-        let set = self.collapsed.get_or_insert_with(BTreeSet::new);
-        if !set.remove(key) {
-            set.insert(key.to_string());
-        }
-        true
-    }
-
     /// Drop folds for clusters that no longer exist, so a cluster you renamed
     /// away doesn't leave a fold behind that surprises you when the name comes
     /// back. Bare band keys (`active`, and `parked`/`sleeping` from older
@@ -184,11 +149,6 @@ impl SubscriptionsPref {
         self.pinned.retain(|w| known.contains(w));
         before != (self.seen.len(), self.pinned.len())
     }
-
-    /// Never selected in this GUI — badge `needs` until it is.
-    pub fn never_seen(&self, ws: &str) -> bool {
-        !self.seen.contains(ws)
-    }
 }
 
 #[cfg(test)]
@@ -218,11 +178,12 @@ mod tests {
         let mut pref = SubscriptionsPref::default();
         pref.pin("growth");
         pref.mark_seen("lab");
-        pref.toggle_collapsed("active/mtg");
+        pref.spaces
+            .reconcile(&[("growth".into(), "growth".into())], None);
         let back = parse(&encode(&pref).unwrap()).unwrap();
         assert_eq!(back, pref);
         assert!(back.is_pinned("growth"));
-        assert!(back.is_collapsed("active/mtg"));
+        assert_eq!(back.spaces.space_of("growth"), "general");
     }
 
     /// A blob we can't read means "keep the rail you have". Returning a
@@ -300,7 +261,7 @@ mod tests {
         let mut pref = SubscriptionsPref::default();
         assert!(pref.pin("lab"));
         assert!(pref.is_pinned("lab"));
-        assert!(!pref.never_seen("lab"));
+        assert!(pref.seen.contains("lab"));
         assert!(!pref.pin("lab"), "re-pinning is a no-op");
     }
 
@@ -310,7 +271,7 @@ mod tests {
         pref.pin("lab");
         assert!(pref.unpin("lab"));
         assert!(!pref.is_pinned("lab"));
-        assert!(!pref.never_seen("lab"));
+        assert!(pref.seen.contains("lab"));
         assert!(!pref.unpin("lab"));
     }
 
@@ -325,51 +286,16 @@ mod tests {
         assert!(!pref.prune(&set(&["lab"])));
     }
 
-    /// Nothing is folded until the human folds it — there are no band
-    /// defaults left to spring back to.
-    #[test]
-    fn nothing_is_folded_by_default() {
-        let mut pref = SubscriptionsPref::default();
-        let k = group_key("active", "mtg");
-        assert!(!pref.is_collapsed(&k));
-        pref.toggle_collapsed(&k);
-        assert!(pref.is_collapsed(&k));
-        pref.toggle_collapsed(&k);
-        assert!(!pref.is_collapsed(&k));
-    }
-
-    /// A cluster fold is per section: folding `mtg` under active leaves the
-    /// slept `mtg` circles alone.
-    #[test]
-    fn group_folds_are_scoped_to_their_section() {
-        let mut pref = SubscriptionsPref::default();
-        let a = group_key("active", "mtg");
-        let s = group_key("sleeping", "MTG");
-        pref.toggle_collapsed(&a);
-        assert!(pref.is_collapsed(&a));
-        assert!(!pref.is_collapsed(&s));
-        assert_eq!(s, "sleeping/mtg", "prefix key is case-insensitive");
-    }
-
-    #[test]
-    fn prune_drops_dead_group_folds() {
-        let mut pref = SubscriptionsPref::default();
-        pref.toggle_collapsed(&group_key("active", "mtg"));
-        pref.toggle_collapsed(&group_key("active", "gone"));
-        assert!(pref.prune_collapsed(&set(&["active/mtg"])));
-        assert!(pref.is_collapsed("active/mtg"));
-        assert!(!pref.is_collapsed("active/gone"));
-    }
-
-    /// Older blobs carry bare band keys (`parked`, `sleeping`, `active`) that
-    /// name nothing foldable now — sweep them instead of carrying them.
+    /// Fold keys that name nothing foldable are swept, not carried.
     #[test]
     fn prune_sweeps_bare_band_folds() {
         let mut pref = parse(r#"{"collapsed":["parked","sleeping","active/mtg"]}"#).unwrap();
         assert!(pref.prune_collapsed(&set(&["active/mtg"])));
-        assert!(!pref.is_collapsed("parked"));
-        assert!(!pref.is_collapsed("sleeping"));
-        assert!(pref.is_collapsed("active/mtg"), "live clusters survive");
+        assert_eq!(
+            pref.collapsed,
+            Some(set(&["active/mtg"])),
+            "live keys survive"
+        );
     }
 
     /// First run: everything that already exists counts as looked-at, so an
@@ -379,7 +305,7 @@ mod tests {
         let known = set(&["lab", "cadence", "notes"]);
         let mut pref = SubscriptionsPref::default();
         pref.seed_seen(&known);
-        assert!(!pref.never_seen("notes"));
+        assert!(pref.seen.contains("notes"));
     }
 
     /// `needs` is now purely "never selected here" — the ctl-spawned circle
@@ -388,8 +314,8 @@ mod tests {
     fn unselected_circle_is_the_ctl_spawn_case() {
         let mut pref = SubscriptionsPref::default();
         pref.mark_seen("lab");
-        assert!(!pref.never_seen("lab"));
-        assert!(pref.never_seen("ctl-spawned"));
+        assert!(pref.seen.contains("lab"));
+        assert!(!pref.seen.contains("ctl-spawned"));
     }
 
     #[test]

@@ -5,6 +5,34 @@
 
 use seance_core::protocol::GuiRequest;
 
+/// Rail arrangement edits (spaces, filters). Native twin: the `Act*Space`
+/// actions in `src/app/actions.rs`.
+#[derive(Clone, Debug)]
+pub enum RailOp {
+    ShowSpace(String),
+    Filter(crate::state::RailFilter),
+    MoveToSpace {
+        ws: String,
+        space: String,
+    },
+    NewSpace(String),
+    RenameSpace {
+        id: String,
+        name: String,
+    },
+    DeleteSpace(String),
+    SetDefault(String),
+    ShiftSpace {
+        id: String,
+        delta: i32,
+    },
+    UnpinAll,
+    /// Kill every circle in a space (confirmed in the menu).
+    BanishSpace(String),
+    /// Turn a host mode off for every circle in it (right-click its chip).
+    ModeAllOff(String),
+}
+
 /// App-level actions available to chrome + input handling. Fire-and-forget:
 /// results come back as daemon events folded into `ClientState`.
 pub trait Actions {
@@ -61,6 +89,7 @@ pub trait Actions {
     fn request_rebuild(&self);
     /// Fold / unfold a rail band or prefix cluster, and persist it.
     fn toggle_collapsed(&self, key: &str);
+    fn rail(&self, op: RailOp);
     /// Ctrl+PageUp/Down — ACTIVE circles only.
     fn cycle_workspace(&self, delta: i32);
     fn cycle_pane(&self, delta: i32);
@@ -70,12 +99,6 @@ pub trait Actions {
     fn toggle_zoom(&self, slug: &str);
     fn toggle_help(&self);
     fn toggle_activity(&self);
-    /// Toggle the PR board sweep overlay (`PRs (N)` in the sidebar footer).
-    fn toggle_pr_board(&self);
-    /// Drop ONE PR link from a circle: `pr-link clear` for that url (engine
-    /// removes AND sticky-dismisses it) plus the optimistic local mirror, so
-    /// chip / popover / board reflect it before the daemon state lands.
-    fn remove_pr_link(&self, ws: &str, url: &str);
     /// Daemon fs-bridge call (quicklaunch config, host select, …). Callback
     /// may never fire if the socket drops mid-flight — tolerate silence.
     fn fs_call(

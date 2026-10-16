@@ -193,9 +193,11 @@ single screen and that the human can watch update in real time.
 
 ### Session environment
 
-Spawned sessions get five env vars so the agent inside knows it's under seance:
+Spawned sessions get these env vars so the agent inside knows it's under seance:
 
-- `SEANCE_SESSION` — the session's slug/id,
+- `SEANCE_SESSION` — the pane's human-readable slug (can be reused after deletion),
+- `SEANCE_PANE_ID` — the pane's lifetime UUIDv4, never reused,
+- `SEANCE_WORKSPACE_ID` — its circle's lifetime UUIDv4, never reused,
 - `SEANCE_WORKSPACE` — its circle's **slug** (what makes scoping automatic).
   Stable for the pane's whole life: renaming a circle changes its label, never
   this,
@@ -204,6 +206,37 @@ Spawned sessions get five env vars so the agent inside knows it's under seance:
   it,
 - `SEANCE_SCRATCHPAD` — absolute path to its own scratchpad file,
 - `SEANCE_SOCKET` — the control socket to talk back on.
+
+Use `pane_id` and `workspace_id` for durable external mappings (for example,
+AFK topics). Both appear on every pane row in `ctl list --all --json`,
+`roster --json`, `brief --json`, and `status PANE --json`, and in
+`ctl whoami --json`. Empty circles also have IDs, stored in state even when
+they have no panes. Slugs remain the human-readable addresses; IDs are
+independent of slugs, labels, agent conversation IDs, and process PIDs.
+
+Any ctl pane target accepts `id:<pane_id>`, including `wait`, `handoff`,
+`roster --parent`, and cross-circle message recipients. For example:
+`seance ctl status "id:$SEANCE_PANE_ID" --json`. Workspace scoping still
+applies: pass `--all` when intentionally addressing another circle.
+An unknown or deleted ID is an error and never falls back to a reused slug.
+
+Pane UUIDs are saved in `state.json` under `sessions[].pane_id`; circle
+UUIDs are saved in the `workspace_ids` map keyed by circle slug. Cold
+restore, sleep/wake, and daemon upgrade transfer these same values. Renames
+change labels only. Killing a pane and creating another, including a
+`ctl handoff` successor, mints a new pane UUID. Deleting and recreating a
+circle likewise mints a new workspace UUID. On first load of legacy state,
+missing IDs are minted and the state is saved immediately, before restore
+launches any process; failure to save aborts startup.
+
+Deployment: build with `cargo build --release`, then run `seance upgrade`
+when ready. The new daemon migrates legacy upgrade bundles and saves their
+IDs immediately. A live upgrade preserves existing process environments:
+those panes expose IDs through ctl immediately, but gain the new env vars
+only after sleep/wake or a cold restore relaunches their processes. A GUI
+restart alone does not deploy this change. If a pane is moved to another
+circle, ctl reports its current circle ID; its process environment retains
+the launch-time circle until relaunch.
 
 Seance adds `--no-daemon` to direct `codex` launches when the installed Codex
 supports it. Shared Codex app-servers can retain another pane's
@@ -249,7 +282,8 @@ accepted but delivery not confirmed.
 | `harvest` | alias: `wait … --status done --cat` |
 | `whoami` | principal + session + active `task_id` |
 | `doctor` / `skill` / `help` | profiles + agent contract |
-| `pr-link` | `seance ctl pr-link add WORKSPACE URL` · `pr-link clear WORKSPACE [URL]` |
+| `space` | `seance ctl space [list]` · `space new NAME` · `space rename SPACE NAME` · `space rm SPACE` · `space default SPACE` — the rail's spaces (0.27) |
+| `move` | `seance ctl move [CIRCLE] SPACE` — put a circle in a space; omit CIRCLE inside a pane for your own |
 
 Notes:
 
@@ -302,21 +336,6 @@ Notes:
   cancelled, completed, or superseded ids are rejected before changing the
   scratchpad or status.
 - **Roster** prefers **slug** when name≠slug (ctl needs slug).
-- **`pr-link`** (0.13): the daemon normally scrapes PR URLs off pane output
-  itself — these verbs are for backfill and hygiene. `add` seeds a link
-  (per-workspace cap 8, most recent last); `clear` drops one URL, or every
-  link on the workspace when `URL` is omitted (`rm` / `remove` alias `clear`).
-  **`clear` also dismisses** (0.14.1): every URL it removes is tombstoned on
-  that workspace, so a re-scrape of the same URL off pane output is ignored —
-  without that, a TUI repaint undoes the removal within seconds. Dismissals
-  are per workspace (cap 32, oldest evicted), persist across daemon restart
-  and `seance upgrade`, carry through rename, and drop with the workspace.
-  A new *distinct* URL is still tracked normally, and an explicit **`add`
-  un-dismisses** — an intentional add always beats a past clear.
-  Requests are `PrLinkAdd` / `PrLinkClear`, cap-checked as **`pr_link_add`** /
-  **`pr_link_clear`** (mutating: denied under `locked` without a grant).
-  Statuses are not settable here — those come from the external watcher
-  (`pr_watch.json`, docs/DAEMON.md).
 
 ### Examples
 

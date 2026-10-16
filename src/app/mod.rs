@@ -37,8 +37,6 @@ mod menus;
 mod overview;
 mod pads;
 mod palette;
-mod prboard;
-mod prlinks;
 mod quicklaunch;
 mod sidebar;
 mod tiles;
@@ -57,7 +55,7 @@ use self::workspaces::WorkspaceAttention;
 enum RenameTarget {
     Pane(String),
     Workspace(String),
-    Group { key: String, prefix: String },
+    Space(String),
 }
 
 /// What the right drawer shows. Notes live on the *back of a pane* now
@@ -249,6 +247,12 @@ pub struct SeanceApp {
     /// Until then the first State marks every known circle seen, so a fresh
     /// install doesn't badge the whole rail `needs`.
     subs_seeded: bool,
+    /// The daemon's arrangement was read at boot. Until then spaces reconcile
+    /// locally only — pushing a fresh migration would overwrite the real one.
+    rail_loaded: bool,
+    /// Space whose circles the rail lists (None → the selected circle's).
+    rail_space: Option<String>,
+    rail_filter: workspaces::RailFilter,
     /// Last activity timestamp (ms) per workspace — input/inject/status, not click.
     workspace_touch: std::collections::HashMap<String, u64>,
     /// Last observed pane output per workspace (ms) — sidebar shows "time
@@ -306,17 +310,6 @@ pub struct SeanceApp {
     host_menu_token: u64,
     /// `✦` popover: census of the GUI windows attached to this daemon.
     gui_menu_open: bool,
-    /// Daemon-scraped PR links per workspace (most-recently-seen LAST) —
-    /// a pure mirror of `WorkspaceMeta.pr_links`, rebuilt on every State.
-    pr_links: std::collections::HashMap<String, Vec<seance_core::protocol::PrLink>>,
-    /// URL of the PR chip whose details popover is showing (hover-driven,
-    /// zero delay). `None` = no popover.
-    pr_tip: Option<String>,
-    /// The popover is pinned open because that chip's context menu is up —
-    /// hover-out must not close it while the menu is being used.
-    pr_tip_pinned: bool,
-    /// Full-content PR board overlay (sidebar `PRs (N)` button).
-    pr_board: bool,
     /// Render-safe cache of daemon-side files (pad sidecars, phone binds,
     /// prompt library) — refreshed by a ~2s background loop.
     remote_cache: Arc<crate::remote_cache::RemoteCache>,
@@ -500,6 +493,9 @@ impl SeanceApp {
             subs_pref: pref.unwrap_or_default(),
             absent_since: std::collections::HashMap::new(),
             subs_seeded,
+            rail_loaded: false,
+            rail_space: None,
+            rail_filter: workspaces::RailFilter::All,
             workspace_touch: std::collections::HashMap::new(),
             workspace_activity: std::collections::HashMap::new(),
             resize_settle: std::collections::HashMap::new(),
@@ -523,10 +519,6 @@ impl SeanceApp {
             host_menu: None,
             host_menu_token: 0,
             gui_menu_open: false,
-            pr_links: std::collections::HashMap::new(),
-            pr_tip: None,
-            pr_tip_pinned: false,
-            pr_board: false,
             remote_cache,
             daemon_error: None,
             render_probe: RenderProbe::default(),
@@ -577,13 +569,17 @@ impl SeanceApp {
                     if let Some(pref) = crate::subscriptions_pref::parse(&json) {
                         app.subs_pref = pref;
                         app.subs_seeded = true;
+                        app.rail_loaded = true;
                         crate::subscriptions_pref::save(&app.subs_pref);
                     }
                 }
                 // A daemon with no copy yet — first window up after the
                 // upgrade donates its arrangement instead of everyone
                 // starting from a blank rail.
-                Ok(None) => app.push_rail_to_daemon(),
+                Ok(None) => {
+                    app.rail_loaded = true;
+                    app.push_rail_to_daemon();
+                }
                 Err(e) => eprintln!("[seance gui] rail prefs load failed: {e}"),
             }
         }
@@ -918,9 +914,6 @@ impl SeanceApp {
                 // Daemon-owned activity clocks are the durable copy: seed the
                 // local mirrors with a MAX merge (both are unix ms, so they
                 // compare directly). Local stamping stays for instant feedback.
-                // pr_links arrive for every known workspace: rebuild the
-                // mirror wholesale so cleared/renamed circles drop out.
-                let mut links = std::collections::HashMap::new();
                 // Labels arrive for every known circle, so rebuild wholesale:
                 // a circle renamed back to its slug must lose its entry.
                 let mut names = std::collections::HashMap::new();
@@ -931,9 +924,6 @@ impl SeanceApp {
                     }
                     if let Some(n) = m.name.clone() {
                         names.insert(m.workspace.clone(), n);
-                    }
-                    if !m.pr_links.is_empty() {
-                        links.insert(m.workspace.clone(), m.pr_links.clone());
                     }
                     if m.last_output_ms > 0 {
                         let cur = self
@@ -953,7 +943,6 @@ impl SeanceApp {
                         }
                     }
                 }
-                self.pr_links = links;
                 self.workspace_names = names;
                 self.circle_modes = modes;
                 self.circle_mode_defs = circle_modes;
@@ -1725,11 +1714,6 @@ impl SeanceApp {
                 cx.stop_propagation();
                 return;
             }
-            if self.pr_board {
-                self.set_pr_board(false, cx);
-                cx.stop_propagation();
-                return;
-            }
             if self.renaming.is_some() {
                 self.renaming = None;
                 self.pending_rename = None;
@@ -2090,7 +2074,7 @@ impl SeanceApp {
                 .find(|p| p.slug == *slug)
                 .map(|p| p.name.clone()),
             RenameTarget::Workspace(w) => Some(w.clone()),
-            RenameTarget::Group { prefix, .. } => Some(prefix.clone()),
+            RenameTarget::Space(id) => self.subs_pref.spaces.get(id).map(|s| s.name.clone()),
         };
         let Some(current) = current else {
             // Target not ready yet — retry next frame.
@@ -2108,27 +2092,6 @@ impl SeanceApp {
     }
 
     fn commit_rename(&mut self, new_name: &str, cx: &mut Context<Self>) -> bool {
-        if let Some((RenameTarget::Group { prefix, .. }, _)) = &self.renaming {
-            let labels = match workspaces::group_rename_labels(
-                &self.workspaces(),
-                |ws| self.workspace_label(ws),
-                prefix,
-                new_name,
-            ) {
-                Ok(labels) => labels,
-                Err(message) => {
-                    crate::desktop_notify::notify("seance · rename group", message);
-                    return false;
-                }
-            };
-            for (slug, label) in labels {
-                if let Err(e) = self.client.rename_workspace(&slug, &label) {
-                    crate::desktop_notify::notify("seance · rename failed", &e.to_string());
-                    return false;
-                }
-                self.workspace_names.insert(slug, label);
-            }
-        }
         let Some((target, _)) = self.renaming.take() else {
             return true;
         };
@@ -2154,7 +2117,7 @@ impl SeanceApp {
                     .insert(slug.clone(), new_name.to_string());
                 let _ = self.client.rename_workspace(&slug, new_name);
             }
-            RenameTarget::Group { .. } => {}
+            RenameTarget::Space(id) => self.rename_space(&id, new_name),
         }
         cx.notify();
         true
@@ -2878,7 +2841,6 @@ impl Render for SeanceApp {
         let stage_el = self.render_stage_strip(active, cx).into_any_element();
         let awaken_el = self.render_awaken_bar(cx);
         let daemon_err_el = self.render_daemon_error_bar(cx);
-        let pr_el = self.render_pr_chip(cx);
         let t2 = std::time::Instant::now();
         let tiles_el = self.render_tiles(active, cx).into_any_element();
         let t3 = std::time::Instant::now();
@@ -2931,28 +2893,74 @@ impl Render for SeanceApp {
                 let label = this.workspace_label(&act.0);
                 this.start_rename(RenameTarget::Workspace(act.0.clone()), &label, window, cx);
             }))
-            .on_action(cx.listener(|this, act: &ActRenameGroup, window, cx| {
-                this.start_rename(
-                    RenameTarget::Group {
-                        key: act.0.clone(),
-                        prefix: act.1.clone(),
-                    },
-                    &act.1,
-                    window,
-                    cx,
-                );
+            .on_action(cx.listener(|this, act: &ActRenameSpace, window, cx| {
+                let name = this
+                    .subs_pref
+                    .spaces
+                    .get(&act.0)
+                    .map(|s| s.name.clone())
+                    .unwrap_or_default();
+                this.start_rename(RenameTarget::Space(act.0.clone()), &name, window, cx);
+            }))
+            .on_action(cx.listener(|this, act: &ActDeleteSpace, _, cx| {
+                this.delete_space(&act.0.clone());
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _act: &ActNewSpace, window, cx| {
+                this.create_space(window, cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _act: &ActUnpinAll, _, cx| {
+                if !this.subs_pref.pinned.is_empty() {
+                    this.subs_pref.pinned.clear();
+                    this.save_arrangement();
+                }
+                if this.rail_filter == workspaces::RailFilter::Starred {
+                    this.rail_filter = workspaces::RailFilter::All;
+                }
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, act: &ActBanishSpace, window, cx| {
+                this.banish_space_click(&act.0.clone(), window, cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, act: &ActSpaceDefault, _, cx| {
+                this.space_set_default(&act.0.clone());
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, act: &ActSpaceShift, _, cx| {
+                this.space_shift(&act.0.clone(), act.1);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, act: &ActMoveToSpace, _, cx| {
+                let ActMoveToSpace(ws, space) = act.clone();
+                this.move_circle_to_space(&ws, &space);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, act: &ActCircleModeAllOff, _, cx| {
+                let mode = act.0.clone();
+                let circles: Vec<String> = this
+                    .circle_modes
+                    .iter()
+                    .filter(|(_, on)| on.iter().any(|m| *m == mode))
+                    .map(|(ws, _)| ws.clone())
+                    .collect();
+                for ws in circles {
+                    let _ = this.client.set_circle_mode(&ws, &mode, false);
+                    if let Some(on) = this.circle_modes.get_mut(&ws) {
+                        on.retain(|m| *m != mode);
+                        if on.is_empty() {
+                            this.circle_modes.remove(&ws);
+                        }
+                    }
+                }
+                if this.rail_filter == workspaces::RailFilter::Mode(mode) {
+                    this.rail_filter = workspaces::RailFilter::All;
+                }
+                cx.notify();
             }))
             .on_action(cx.listener(|_this, act: &ActShareReplay, _, _cx| {
                 share_replay_open(&act.0);
-            }))
-            .on_action(cx.listener(|_this, act: &ActOpenPrLink, _, _cx| {
-                crate::sysopen::open_detached(&act.0);
-            }))
-            .on_action(cx.listener(|this, act: &ActRemovePrLink, _, cx| {
-                this.remove_pr_link(&act.workspace.clone(), &act.url.clone(), cx);
-            }))
-            .on_action(cx.listener(|this, act: &ActClearPrLinks, _, cx| {
-                this.clear_pr_links(&act.0.clone(), cx);
             }))
             .on_action(cx.listener(|this, act: &ActSleepWorkspace, _, cx| {
                 let _ = this.client.sleep_workspace(&act.0.clone());
@@ -2993,7 +3001,7 @@ impl Render for SeanceApp {
             // root so they work over a terminal, the rail, anywhere — the
             // terminal forwards no button events to the PTY, so nothing
             // downstream wants them. A modal overlay that `occlude()`s
-            // (menus, the PR board, the overview) swallows them, which is the
+            // (menus, the overview) swallows them, which is the
             // right answer: navigate the thing in front of you first.
             .on_mouse_down(
                 gpui::MouseButton::Navigate(gpui::NavigationDirection::Back),
@@ -3101,7 +3109,6 @@ impl Render for SeanceApp {
                     .child(daemon_err_el)
                     .children(asks_el)
                     .child(shelf_el)
-                    .child(pr_el)
                     .child(stage_el)
                     .child(awaken_el)
                     .child(tiles_el),
@@ -3109,10 +3116,6 @@ impl Render for SeanceApp {
             .children(
                 self.overview
                     .then(|| self.render_overview(cx).into_any_element()),
-            )
-            .children(
-                (self.pr_board && !self.overview)
-                    .then(|| self.render_pr_board(cx).into_any_element()),
             )
             // Below the (deferred) menu dropdown, above everything else — the
             // click-away catcher for an open host menu.

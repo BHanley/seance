@@ -518,18 +518,6 @@ pub enum ControlRequest {
         from: Option<String>,
     },
 
-    /// Seed a PR link onto a workspace by hand (backfill / manual hygiene).
-    /// The daemon normally scrapes these off pane output itself.
-    PrLinkAdd {
-        url: String,
-        #[serde(default)]
-        workspace: Option<String>,
-        #[serde(default)]
-        scope: Option<String>,
-        #[serde(default)]
-        from: Option<String>,
-    },
-
     /// Set a circle's display label. The slug — its identity — is untouched,
     /// so nothing keyed by it moves. `workspace` addresses the circle by
     /// either form; `name` is the new label (empty resets it to the slug).
@@ -577,12 +565,12 @@ pub enum ControlRequest {
         from: Option<String>,
     },
 
-    /// Drop one PR link (`url` set) or all of a workspace's links.
-    PrLinkClear {
+    /// `space list|new|rename|rm|default|move` — edits the rail's spaces
+    /// (`seance_core::spaces`) in the shared arrangement blob.
+    Space {
+        action: String,
         #[serde(default)]
-        url: Option<String>,
-        #[serde(default)]
-        workspace: Option<String>,
+        args: Vec<String>,
         #[serde(default)]
         scope: Option<String>,
         #[serde(default)]
@@ -732,8 +720,7 @@ impl ControlRequest {
             | Self::Note { from, .. }
             | Self::Finish { from, .. }
             | Self::Roster { from, .. }
-            | Self::PrLinkAdd { from, .. }
-            | Self::PrLinkClear { from, .. }
+            | Self::Space { from, .. }
             | Self::Sleep { from, .. }
             | Self::Wake { from, .. }
             | Self::RenameCircle { from, .. }
@@ -760,12 +747,6 @@ impl ControlRequest {
             | Self::CapsRevoke {
                 workspace, scope, ..
             }
-            | Self::PrLinkAdd {
-                workspace, scope, ..
-            }
-            | Self::PrLinkClear {
-                workspace, scope, ..
-            }
             | Self::Sleep {
                 workspace, scope, ..
             }
@@ -780,6 +761,7 @@ impl ControlRequest {
             } => workspace.as_deref().or(scope.as_deref()),
             Self::List { scope, .. }
             | Self::RenamePane { scope, .. }
+            | Self::Space { scope, .. }
             | Self::Send { scope, .. }
             | Self::TaskFail { scope, .. }
             | Self::MsgSend { scope, .. }

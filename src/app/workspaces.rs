@@ -11,12 +11,20 @@ use std::time::{Duration, Instant};
 use gpui::{Context, Window};
 
 use super::util::now_ms;
-use seance_core::grouping::{Section, SectionRow};
 use seance_core::util::{rail_prefs_is_foreign, recency_rank, settle_absent};
 
 /// How long the sidebar banish × stays armed after a first click. Matches the
 /// web client's `KILL_CONFIRM_MS` so both clients feel the same.
 pub(super) const BANISH_ARM: Duration = Duration::from_millis(2000);
+/// Longer than a row's ×: the confirm pill appears after a menu closes, so
+/// the hand has further to travel.
+pub(super) const SPACE_BANISH_ARM: Duration = Duration::from_millis(5000);
+
+/// Arm key for a space's banish-all; shares `banish_armed` with row ×s so
+/// only one destructive control is ever hot.
+pub(super) fn space_banish_key(id: &str) -> String {
+    format!("space:{id}")
+}
 
 /// Is `ws` the armed circle, with the arm still live at `now`? Pure so the
 /// two-click window is testable without leaning on a real clock.
@@ -46,30 +54,6 @@ pub(super) fn rel_label(delta_ms: u64) -> String {
     }
 }
 use super::{RenameTarget, SeanceApp};
-
-pub(super) fn group_rename_labels(
-    circles: &[String],
-    label_of: impl Fn(&str) -> String,
-    prefix: &str,
-    new_prefix: &str,
-) -> Result<Vec<(String, String)>, &'static str> {
-    let new_prefix = new_prefix.trim();
-    if new_prefix.is_empty() || new_prefix.contains('-') {
-        return Err("use a non-empty group name without hyphens");
-    }
-    let prefix = prefix.trim().to_ascii_lowercase();
-    Ok(circles
-        .iter()
-        .filter_map(|slug| {
-            let label = label_of(slug);
-            if seance_core::grouping::prefix_of(&label).as_deref() != Some(prefix.as_str()) {
-                return None;
-            }
-            let (_, suffix) = label.split_once('-')?;
-            Some((slug.clone(), format!("{new_prefix}-{suffix}")))
-        })
-        .collect())
-}
 
 /// One circle's rail position: working band first, then by the clock the row
 /// displays, name as the tiebreak.
@@ -153,12 +137,23 @@ impl NavHistory {
     }
 }
 
+/// What the rail's circle list is narrowed to. A view, never a position:
+/// filtering moves nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum RailFilter {
+    All,
+    Starred,
+    /// A host circle mode (AFK, slack thread) by id.
+    Mode(String),
+}
+
 /// Badge on an *inactive* workspace header in the sidebar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum WorkspaceAttention {
     /// Observed live-busy (TUI title spinner / agent actively driving).
     Working,
-    /// Blocked or needs-human.
+    /// A pane is live blocked or needs-human (never sticky): the blinking
+    /// needs-you dot.
     NeedsHuman,
     /// Finished work while the human was elsewhere — sticky until select.
     Done,
@@ -225,6 +220,7 @@ impl SeanceApp {
             .pinned
             .iter()
             .chain(self.subs_pref.seen.iter())
+            .chain(self.subs_pref.spaces.of.keys())
             .cloned()
             .collect();
         let protected = settle_absent(
@@ -234,23 +230,35 @@ impl SeanceApp {
             now_ms(),
         );
         changed |= self.subs_pref.prune(&protected);
-        // A cluster that no longer exists shouldn't leave a fold behind to
-        // surprise you when that name comes back.
-        let live_groups: std::collections::BTreeSet<String> = self
-            .workspace_sections()
-            .into_iter()
-            .flat_map(|(section, circles)| {
-                self.section_rows(&circles)
-                    .into_iter()
-                    .filter_map(move |row| match row {
-                        SectionRow::Group { prefix, .. } => {
-                            Some(crate::subscriptions_pref::group_key(section.key(), &prefix))
-                        }
-                        SectionRow::Circle(_) => None,
-                    })
-            })
+        // Cluster folds died with the clusters (spaces replaced them).
+        changed |= self
+            .subs_pref
+            .prune_collapsed(&std::collections::BTreeSet::new());
+        // `protected`, not `known`: a circle a lagging State omits keeps its
+        // space instead of being forgotten and re-routed.
+        let circles: Vec<(String, String)> = protected
+            .iter()
+            .map(|ws| (ws.clone(), self.workspace_label(ws)))
             .collect();
-        changed |= self.subs_pref.prune_collapsed(&live_groups);
+        let focused = self.current_space();
+        if self.subs_pref.spaces.reconcile(&circles, Some(&focused)) {
+            if self.rail_loaded {
+                self.save_arrangement();
+            } else {
+                self.save_arrangement_local();
+            }
+        }
+        // Then freeze the view on the selected circle's space: a fresh circle
+        // is selected before it has one, and following the selection then
+        // would send it to the default. Only once the selection is assigned —
+        // freezing before the first migration pinned the rail to `general`.
+        if self.rail_space.is_none() {
+            if let Some(sel) = self.selected_workspace.as_deref() {
+                if self.subs_pref.spaces.of.contains_key(sel) {
+                    self.rail_space = Some(self.subs_pref.spaces.space_of(sel).to_string());
+                }
+            }
+        }
         if changed {
             self.save_arrangement_local();
         }
@@ -364,28 +372,6 @@ impl SeanceApp {
         }
     }
 
-    /// The rail's two bands in display order, each carrying the single sort
-    /// from [`Self::workspaces`]: pinned, then everything else.
-    pub(super) fn workspace_sections(&self) -> Vec<(Section, Vec<String>)> {
-        seance_core::grouping::partition_sections(
-            &self.workspaces(),
-            &self.subs_pref.pinned,
-            &self.top_mode_bands(),
-        )
-    }
-
-    /// Circles in each host mode marked `top` (AFK, slack thread), one set
-    /// per mode in host order: each gets its own band at the top of the rail.
-    pub(super) fn top_mode_bands(&self) -> Vec<std::collections::BTreeSet<String>> {
-        let top: Vec<&str> = self
-            .circle_mode_defs
-            .iter()
-            .filter(|d| d.top)
-            .map(|d| d.id.as_str())
-            .collect();
-        seance_core::grouping::top_mode_bands(&top, &self.circle_modes)
-    }
-
     /// The host modes on for `workspace`, as their definitions (badge labels).
     pub(super) fn circle_modes_of(
         &self,
@@ -399,125 +385,227 @@ impl SeanceApp {
             .collect()
     }
 
-    /// One band's rows: loose circles and prefix clusters, in sort order.
-    /// Grouping reads the LABEL, so retyping a name is how you regroup.
-    pub(super) fn section_rows(&self, circles: &[String]) -> Vec<SectionRow> {
-        seance_core::grouping::group_by_prefix(circles, |ws| self.workspace_label(ws))
+    /// The space the rail is showing: the one picked, else the selected
+    /// circle's, else the default.
+    pub(super) fn current_space(&self) -> String {
+        let spaces = &self.subs_pref.spaces;
+        if let Some(id) = self.rail_space.as_deref() {
+            if spaces.get(id).is_some() {
+                return id.to_string();
+            }
+        }
+        match self.selected_workspace.as_deref() {
+            Some(ws) => spaces.space_of(ws).to_string(),
+            None => spaces.default_id().to_string(),
+        }
     }
 
-    /// Every circle the rail is actually SHOWING, top-to-bottom, in draw
-    /// order. This is the ctrl+page ring and the neighbour list for kill.
-    ///
-    /// Folds count: a collapsed band or cluster is not on screen, so cycling
-    /// skips it. That makes collapsing a way to narrow what ctrl+page walks —
-    /// fold the piles you're not in and the rotation is just your working set.
+    pub(super) fn rail_filter_matches(&self, filter: &RailFilter, ws: &str) -> bool {
+        match filter {
+            RailFilter::All => true,
+            RailFilter::Starred => self.subs_pref.is_pinned(ws),
+            RailFilter::Mode(id) => self
+                .circle_modes
+                .get(ws)
+                .is_some_and(|m| m.iter().any(|x| x == id)),
+        }
+    }
+
+    /// Every circle the rail is listing, top-to-bottom. Unfiltered: the
+    /// current space. Filtered: matches from every space, in space order.
+    /// This is the ctrl+page ring and the ctrl+shift+N count.
     pub(super) fn visible_workspaces(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        for (section, circles) in self.workspace_sections() {
-            if circles.is_empty() {
-                continue;
-            }
-            for row in self.section_rows(&circles) {
-                match row {
-                    SectionRow::Circle(ws) => out.push(ws),
-                    SectionRow::Group { prefix, members } => {
-                        let key = crate::subscriptions_pref::group_key(section.key(), &prefix);
-                        if !self.subs_pref.is_collapsed(&key) {
-                            out.extend(members);
-                        }
-                    }
-                }
-            }
+        let ordered = self.workspaces();
+        let spaces = &self.subs_pref.spaces;
+        match &self.rail_filter {
+            RailFilter::All => spaces.circles_in(&self.current_space(), &ordered),
+            f => spaces
+                .list
+                .iter()
+                .flat_map(|s| spaces.circles_in(&s.id, &ordered))
+                .filter(|ws| self.rail_filter_matches(f, ws))
+                .collect(),
         }
-        out
     }
 
-    /// Position of a circle's row among the elements the rail emits, so
-    /// scroll-to-item lands on it. Cluster headers and the pinned rule are
-    /// rows too.
-    fn rail_row_index(&self, workspace: &str) -> Option<usize> {
-        let mut i = 0usize;
-        let mut rows_above = false;
-        for (section, circles) in self.workspace_sections() {
-            if circles.is_empty() {
-                continue;
-            }
-            if rows_above {
-                i += 1; // the rule between this band and the one above
-            }
-            rows_above = true;
-            for row in self.section_rows(&circles) {
-                match row {
-                    SectionRow::Circle(ws) => {
-                        if ws == workspace {
-                            return Some(i);
-                        }
-                        i += 1;
-                    }
-                    SectionRow::Group { prefix, members } => {
-                        i += 1; // cluster header
-                        let key = crate::subscriptions_pref::group_key(section.key(), &prefix);
-                        if self.subs_pref.is_collapsed(&key) {
-                            continue;
-                        }
-                        for ws in members {
-                            if ws == workspace {
-                                return Some(i);
-                            }
-                            i += 1;
-                        }
-                    }
-                }
-            }
-        }
-        None
+    /// Rows the rail scroller emits above the circle list: one per space and
+    /// the divider.
+    pub(super) fn rail_rows_above_circles(&self) -> usize {
+        self.subs_pref.spaces.list.len() + 1
     }
 
-    /// The cluster fold a circle's row hides under, if any. Pure lookup over
-    /// the same sectioning the rail renders from, so the unfold and the row
-    /// index can never disagree about where a circle is.
-    fn rail_row_cluster(&self, workspace: &str) -> Option<String> {
-        for (section, circles) in self.workspace_sections() {
-            for row in self.section_rows(&circles) {
-                if let SectionRow::Group { prefix, members } = row {
-                    if members.iter().any(|m| m == workspace) {
-                        return Some(crate::subscriptions_pref::group_key(section.key(), &prefix));
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    /// Bring a circle's row into view: unfold whatever hides it, then scroll.
+    /// Bring a circle's row into view: switch the rail to its space (unless a
+    /// filter is already showing it), then scroll.
     ///
     /// Called on every select, so ctrl+page cycling, a jump, and a host menu
-    /// creating a circle all land the same way — the rail always shows you
-    /// where you just went.
+    /// creating a circle all land the same way.
     pub(super) fn reveal_workspace_row(&mut self, workspace: &str) {
-        if let Some(key) = self.rail_row_cluster(workspace) {
-            if self.subs_pref.uncollapse(&key) {
-                self.save_arrangement_local();
-            }
+        let assigned = self.subs_pref.spaces.of.contains_key(workspace);
+        if assigned && !self.visible_workspaces().iter().any(|w| w == workspace) {
+            self.rail_filter = RailFilter::All;
+            self.rail_space = Some(self.subs_pref.spaces.space_of(workspace).to_string());
         }
-        // Count the elements the rail actually emits above this row: the
-        // pinned rule, one per cluster header, one per circle.
-        if let Some(idx) = self.rail_row_index(workspace) {
-            self.sidebar_scroll.scroll_to_item(idx);
+        if let Some(i) = self
+            .visible_workspaces()
+            .iter()
+            .position(|w| w == workspace)
+        {
+            self.sidebar_scroll
+                .scroll_to_item(self.rail_rows_above_circles() + i);
         }
     }
 
-    /// Badge for a rail row: the normal live attention, or `needs` for a circle
-    /// this window has never selected — which is how a ctl-spawned circle
-    /// announces itself.
-    pub(super) fn row_attention(&self, ws: &str) -> Option<WorkspaceAttention> {
-        self.workspace_attention_cx(ws).or({
-            if self.subs_pref.never_seen(ws) {
-                Some(WorkspaceAttention::NeedsHuman)
-            } else {
-                None
+    /// Strongest attention among a space's circles, for its rail row.
+    pub(super) fn space_attention(&self, id: &str) -> Option<WorkspaceAttention> {
+        let ordered = self.workspaces();
+        self.subs_pref
+            .spaces
+            .circles_in(id, &ordered)
+            .iter()
+            .filter_map(|ws| self.row_attention(ws))
+            .max_by_key(|a| a.priority())
+    }
+
+    pub(super) fn move_circle_to_space(&mut self, ws: &str, space: &str) {
+        if self.subs_pref.spaces.move_circle(ws, space) {
+            self.client.log_event(
+                "human",
+                Some(ws),
+                None,
+                "workspace_moved_space",
+                format!("moved '{ws}' to space '{space}'"),
+            );
+            self.save_arrangement();
+        }
+    }
+
+    pub(super) fn create_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let id = self.subs_pref.spaces.create("new space");
+        self.save_arrangement();
+        self.rail_space = Some(id.clone());
+        self.rail_filter = RailFilter::All;
+        self.start_rename(super::RenameTarget::Space(id), "new space", window, cx);
+    }
+
+    pub(super) fn delete_space(&mut self, id: &str) {
+        if self.subs_pref.spaces.delete(id) {
+            if self.rail_space.as_deref() == Some(id) {
+                self.rail_space = None;
+            }
+            self.save_arrangement();
+        }
+    }
+
+    pub(super) fn rename_space(&mut self, id: &str, name: &str) {
+        if self.subs_pref.spaces.rename(id, name) {
+            self.save_arrangement();
+        }
+    }
+
+    /// Show a space and land on its first circle.
+    pub(super) fn show_space(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.rail_space = Some(id.to_string());
+        self.rail_filter = RailFilter::All;
+        if let Some(first) = self.visible_workspaces().into_iter().next() {
+            if self.selected_workspace.as_deref() != Some(first.as_str()) {
+                self.select_workspace(&first, window, cx);
+            }
+        }
+    }
+
+    pub(super) fn space_banish_armed(&self, id: &str) -> bool {
+        self.banish_armed
+            .as_ref()
+            .is_some_and(|(k, at)| *k == space_banish_key(id) && at.elapsed() < SPACE_BANISH_ARM)
+    }
+
+    /// First call arms (the row shows a confirm pill), a second inside
+    /// `SPACE_BANISH_ARM` kills every circle in the space.
+    pub(super) fn banish_space_click(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.space_banish_armed(id) {
+            self.banish_armed = None;
+            let circles = self.subs_pref.spaces.circles_in(id, &self.workspaces());
+            let lost_selection = self
+                .selected_workspace
+                .as_ref()
+                .is_some_and(|s| circles.contains(s));
+            self.client.log_event(
+                "human",
+                None,
+                None,
+                "space_banished",
+                format!("banished {} circle(s) in space '{id}'", circles.len()),
+            );
+            for ws in &circles {
+                let _ = self.client.kill_workspace(ws);
+            }
+            if lost_selection {
+                let next = self.workspaces().into_iter().find(|w| !circles.contains(w));
+                if let Some(next) = next {
+                    self.select_workspace(&next, window, cx);
+                }
+                // Stay on the emptied space; the rail shows it empty.
+                self.rail_space = Some(id.to_string());
+            }
+            return;
+        }
+        self.banish_armed = Some((space_banish_key(id), Instant::now()));
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SPACE_BANISH_ARM).await;
+            if let Some(this) = this.upgrade() {
+                this.update(cx, |app: &mut SeanceApp, cx| {
+                    if app
+                        .banish_armed
+                        .as_ref()
+                        .is_some_and(|(_, at)| at.elapsed() >= SPACE_BANISH_ARM)
+                    {
+                        app.banish_armed = None;
+                        cx.notify();
+                    }
+                });
             }
         })
+        .detach();
+    }
+
+    pub(super) fn space_set_default(&mut self, id: &str) {
+        if self.subs_pref.spaces.set_default(id) {
+            self.save_arrangement();
+        }
+    }
+
+    /// Nudge a space one slot up (`-1`) or down (`+1`) in the rail.
+    pub(super) fn space_shift(&mut self, id: &str, delta: i32) {
+        let list = &self.subs_pref.spaces.list;
+        let Some(i) = list.iter().position(|s| s.id == id) else {
+            return;
+        };
+        let before = if delta < 0 {
+            if i == 0 {
+                return;
+            }
+            Some(list[i - 1].id.clone())
+        } else {
+            match list.get(i + 2) {
+                Some(s) => Some(s.id.clone()),
+                None if i + 1 < list.len() => None,
+                None => return,
+            }
+        };
+        if self.subs_pref.spaces.reorder(id, before.as_deref()) {
+            self.save_arrangement();
+        }
+    }
+
+    /// Badge for a rail row. The rail has no `needs` state (removed 0.27 —
+    /// it lit up for too many reasons to mean anything).
+    pub(super) fn row_attention(&self, ws: &str) -> Option<WorkspaceAttention> {
+        self.workspace_attention_cx(ws)
     }
 
     /// All workspaces in sidebar display order.
@@ -709,7 +797,6 @@ impl SeanceApp {
             return;
         }
         let att = match state {
-            "needs-human" | "blocked" | "risky" => Some(WorkspaceAttention::NeedsHuman),
             "done" => Some(WorkspaceAttention::Done),
             "working" | "planning" => Some(WorkspaceAttention::Working),
             _ => None,
@@ -740,26 +827,19 @@ impl SeanceApp {
     /// Live attention with title spinners (needs `&App`) — badges only;
     /// sidebar order uses [`Self::workspace_has_working_agent`].
     pub(super) fn workspace_attention_cx(&self, workspace: &str) -> Option<WorkspaceAttention> {
-        let needs = self.panes.iter().any(|p| {
+        // A pane asking for a human right now (live status, never sticky) is
+        // the one purple the rail keeps: it drives the blinking needs-you dot.
+        if self.panes.iter().any(|p| {
             p.workspace == workspace
                 && matches!(
                     self.statuses.get(&p.slug).map(|s| s.state.as_str()),
                     Some("needs-human") | Some("blocked") | Some("risky")
                 )
-        });
-        if needs {
+        }) {
             return Some(WorkspaceAttention::NeedsHuman);
         }
-        // A live working spinner outranks PR attention — an agent actively in
-        // the circle is usually already on the red PR; the chip stays visible
-        // regardless. On idle circles a `needs` PR resurfaces the row exactly
-        // like an agent asking for help (web client mirrors this order).
         if self.workspace_has_working_agent(workspace) {
             return Some(WorkspaceAttention::Working);
-        }
-        let pr = super::prlinks::pr_attention(self.pr_links_for(workspace));
-        if pr == Some(WorkspaceAttention::NeedsHuman) {
-            return Some(WorkspaceAttention::NeedsHuman);
         }
         // An unread `Working` is history, not work: live working was checked
         // above, and drawing it froze a spinner on an idle row.
@@ -767,7 +847,6 @@ impl SeanceApp {
             .get(workspace)
             .copied()
             .filter(|a| !matches!(a, WorkspaceAttention::Working))
-            .or(pr)
     }
 
     /// Sidebar right-edge label: relative time since the last pane output in
@@ -1207,52 +1286,6 @@ impl SeanceApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn group_rename_changes_labels_and_preserves_slugs_and_full_suffixes() {
-        let circles = ["desk", "arch", "mobile", "loose", "other"].map(str::to_string);
-        let labels = |slug: &str| {
-            match slug {
-                "desk" => "paceline-desk",
-                "arch" => "PACELINE-arch-v2",
-                "mobile" => " paceline -ios",
-                "loose" => "paceline",
-                _ => "pacelines-other",
-            }
-            .to_string()
-        };
-        let renamed = group_rename_labels(&circles, labels, "paceline", " pl ").unwrap();
-        assert_eq!(
-            renamed,
-            vec![
-                ("desk".into(), "pl-desk".into()),
-                ("arch".into(), "pl-arch-v2".into()),
-                ("mobile".into(), "pl-ios".into()),
-            ]
-        );
-        let rows = seance_core::grouping::group_by_prefix(&circles, |slug| {
-            renamed
-                .iter()
-                .find(|(id, _)| id == slug)
-                .map(|(_, label)| label.clone())
-                .unwrap_or_else(|| labels(slug))
-        });
-        assert!(matches!(&rows[0], SectionRow::Group { prefix, members }
-            if prefix == "pl" && members == &["desk", "arch", "mobile"]));
-    }
-
-    #[test]
-    fn group_rename_rejects_names_that_cannot_be_a_prefix() {
-        for invalid in ["", "  ", "pl-desk", "pl-"] {
-            assert!(group_rename_labels(
-                &["paceline-desk".into()],
-                str::to_string,
-                "paceline",
-                invalid
-            )
-            .is_err());
-        }
-    }
 
     /// Drive the history the way the app does: every selection change is
     /// folded in by the render-time observer, including the ones our own

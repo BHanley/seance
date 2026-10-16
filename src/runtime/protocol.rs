@@ -19,6 +19,8 @@ pub fn hello_line(role: &str) -> String {
 /// Handoff message (old daemon → new) — FDs travel out-of-band via SCM_RIGHTS.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HandoffPane {
+    #[serde(default)]
+    pub pane_id: String,
     pub name: String,
     pub slug: String,
     pub workspace: String,
@@ -49,6 +51,8 @@ pub struct HandoffPane {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HandoffBundle {
+    #[serde(default)]
+    pub workspace_ids: std::collections::BTreeMap<String, String>,
     pub panes: Vec<HandoffPane>,
     pub selected_workspace: Option<String>,
     pub focused_pane: Option<String>,
@@ -94,14 +98,6 @@ pub struct HandoffBundle {
     pub pane_parents: Vec<(String, String)>,
     #[serde(default)]
     pub comms: CommsState,
-    /// workspace → scraped PR links (0.13 — survive upgrade).
-    #[serde(default)]
-    pub pr_links: Vec<(String, Vec<crate::runtime::protocol::PrLink>)>,
-    /// workspace → PR urls the human cleared (0.14.1). Must survive upgrade:
-    /// the scraper re-reads the same TUI bytes on every repaint, so a
-    /// dismissal that dies with the process un-dismisses itself in seconds.
-    #[serde(default)]
-    pub pr_dismissed: Vec<(String, Vec<String>)>,
 }
 
 /// Cross-session communication state (docs/COMMS.md): who leads each circle,

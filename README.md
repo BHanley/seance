@@ -13,23 +13,9 @@ daemon; the window is disposable.
 
 ![seance](docs/screenshot.png)
 
-**License:** MIT · **Platform:** Linux (Wayland / X11) + macOS thin client · **Status:** 0.26.2
+**License:** MIT · **Platform:** Linux (Wayland / X11) + macOS thin client · **Status:** 0.27.0
 
 Release notes: [`CHANGELOG.md`](CHANGELOG.md).
-
-**New in 0.14**: **the PR board** — one **PRs (N)** button in the sidebar opens
-a circle-first sweep of every PR the daemon knows: needs-first sections, each
-row `repo#N` with draft / CI / review glyphs, age, last review or comment, and
-a *push or close* mark once it's gone quiet. Click a row to open the PR, a
-section header to jump to that circle. Hover a row — in the board or the chip
-popover — and a **✕** drops that one ref for good: the removal is remembered
-per circle, so the next pane repaint can't scrape it back. The watcher now supplies structured
-state (draft, CI pass/fail/running, review required/approved/changes,
-open/review/comment times) instead of one label string, a verdict *change*
-bumps the circle's recency clock, and chips lead with the repo name.
-(0.13: **PR links** — GitHub PR URLs scraped straight out of pane output,
-mapped onto circle attention by an external watcher (`pr_watch.json`).
-See [docs/CONTROL.md](docs/CONTROL.md), [docs/DAEMON.md](docs/DAEMON.md).)
 
 ## Why it exists
 
@@ -53,7 +39,7 @@ the keyboard). Point `--command` at whatever agent CLI you use.
 ## Features
 
 - **Live multi-pane terminals** — real PTYs, selection, scrollback; weighted tile grid with drag sashes (n≥2)
-- **Workspaces** — keep circles of work apart; resize the desktop sidebar by dragging its right edge. Right-click a prefix group → rename group (e.g. `paceline-*` → `pl-*`), preserving suffixes and running sessions.
+- **Spaces** — the rail lists spaces, then the circles in the one you're looking at. Drag a circle onto a space to move it; drag spaces to reorder them. A circle stays where you put it; a new one lands in the space on screen. One space is the default and catches everything else. Filter chips (pins, AFK, slack…) narrow the list across spaces without moving anything. `ctl space` / `ctl move` do the same from scripts.
 - **Notes on the back of every pane** — shared markdown (`$SEANCE_SCRATCHPAD`)
 - **Pad drawer** — stage chip / ▤ shows task inject body + pad tail (live-refreshes)
 - **Stage strip** — urgency-sorted roster chips (click focus+pad, double-click zoom)
@@ -168,9 +154,9 @@ attention routing free.
 | ctrl+shift+n | new pane (shell by default) |
 | ctrl+shift+w | banish (kill) active pane |
 | ctrl+shift+s | flip notes ↔ face |
-| ctrl+shift+p | pin / unpin selected workspace |
-| ctrl+shift+home | jump to top of the rail (first pinned, else top active) |
-| ctrl+shift+1 … 9 | jump to the nth circle down the rail |
+| ctrl+shift+p | pin / unpin selected circle (shows under the pins chip) |
+| ctrl+shift+home | jump to the first circle in the rail's list |
+| ctrl+shift+1 … 9 | jump to the nth circle in the rail's list |
 | ctrl+shift+o | pop pane to its own window |
 | ctrl+shift+k | precanned prompt palette |
 | ctrl+shift+j | fuzzy jump (workspace) |
@@ -178,7 +164,7 @@ attention routing free.
 | ctrl+shift+space | overview (live map) |
 | ctrl+shift+r | rename selected workspace |
 | ctrl+shift+f | last failed shell command |
-| ctrl+pageup / pagedown | cycle workspaces |
+| ctrl+pageup / pagedown | cycle circles in the rail's list |
 | ctrl+shift+pageup / pagedown | cycle panes in this workspace |
 | ctrl+shift+v | paste |
 | ctrl+click (macOS: cmd+click) / middle-click | open OSC-8 / URL in the default browser |
@@ -188,7 +174,11 @@ attention routing free.
 | ⚡ | arm agent (`ctl skill` orientation) |
 | ▤ | pad drawer |
 | sidebar right-edge drag | resize sidebar (width persists) |
-| group right-click → rename group | replace the prefix across pinned and unpinned workspaces |
+| click a space | show it and select its first circle |
+| drag a circle onto a space | move it there (sticky) |
+| drag a space onto another | reorder spaces (onto the divider = to the end) |
+| space right-click | rename · make default · banish all · delete |
+| chip right-click | pins: unpin all · a host mode: turn it off for every circle in it |
 | sash drag | resize 2-pane ratio or multi-pane weights |
 | macOS: cmd+backspace / cmd+←→ / option+←→ | kill to line start / line start, end / word back, forward (as in Ghostty) |
 | option+backspace (alt on Linux) | delete previous word |
@@ -237,9 +227,17 @@ after editing.
 | events | `~/.local/share/seance/events.jsonl` |
 | socket | `$XDG_RUNTIME_DIR/seance.sock` |
 
-Injected into every pane: `SEANCE_SESSION`, `SEANCE_WORKSPACE`,
-`SEANCE_SCRATCHPAD`, `SEANCE_SOCKET`. Workspace scoping is automatic inside a
-pane — agents only see their circle unless you pass `--all`.
+Injected into every pane: `SEANCE_SESSION`, `SEANCE_PANE_ID`,
+`SEANCE_WORKSPACE`, `SEANCE_WORKSPACE_ID`, `SEANCE_WORKSPACE_NAME`,
+`SEANCE_SCRATCHPAD`, `SEANCE_SOCKET`. The two `_ID` vars are lifetime UUIDv4s:
+saved with the pane/circle, preserved through rename, sleep/wake and restore,
+never reused after deletion. Use them for durable integrations; slugs can be
+reused. `ctl list --all --json` and `ctl whoami --json` expose `pane_id` and
+`workspace_id`; pane targets accept `id:<pane_id>`. Legacy state gains IDs
+on load and saves them immediately. Existing processes retained by a live
+upgrade get the env vars on their next wake/restore; ctl has the IDs immediately.
+Workspace scoping is automatic inside a pane — agents only see their circle
+unless you pass `--all`. See [CONTROL.md](docs/CONTROL.md#session-environment).
 
 ## Docs
 

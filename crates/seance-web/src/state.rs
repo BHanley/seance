@@ -7,11 +7,10 @@
 use std::collections::HashMap;
 
 use base64::Engine as _;
-use seance_core::protocol::{AskInfo, GuiEvent, PaneInfo, PrLink, StatusInfo, WindowInfo};
+use seance_core::protocol::{AskInfo, GuiEvent, PaneInfo, StatusInfo, WindowInfo};
 use seance_core::snapshot::{decode_grid_bin_onto, GridSnapshot};
 
-use crate::subs::{group_key, SubPrefs};
-use seance_core::grouping::{Section, SectionRow};
+use crate::subs::SubPrefs;
 
 /// What a folded event dirtied.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -99,9 +98,6 @@ pub struct ClientState {
     /// slug is its identity; nothing here is keyed by the label, so a rename
     /// disturbs none of it — including the localStorage rail prefs.
     pub workspace_names: HashMap<String, String>,
-    /// PR links per workspace, daemon-owned (`WorkspaceMeta.pr_links`),
-    /// most-recently-seen LAST. Statuses come from the external poller.
-    pub workspace_pr_links: HashMap<String, Vec<PrLink>>,
     /// Host circle modes (`host.json` `circle_modes[]`, e.g. AFK), as the
     /// daemon advertises them. Empty when the host defines none — then the
     /// whole feature is invisible.
@@ -118,6 +114,21 @@ pub struct ClientState {
     /// keeps a quicklaunch pin alive across the `State` that lands before its
     /// spawn does.
     pub absent_since: HashMap<String, u64>,
+    /// Space whose circles the rail lists (None → the selected circle's).
+    pub rail_space: Option<String>,
+    pub rail_filter: RailFilter,
+    /// Space assignments changed on reconcile — shared state, so it goes to
+    /// the daemon (unlike `subs_dirty`, which is local bookkeeping).
+    pub spaces_dirty: bool,
+}
+
+/// What the rail's circle list is narrowed to (native `RailFilter`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum RailFilter {
+    #[default]
+    All,
+    Starred,
+    Mode(String),
 }
 
 /// One row of the host-bridge widget strip (native `HostWidgetSnap` shape).
@@ -200,13 +211,6 @@ pub fn rel_label(delta_ms: f64) -> String {
         3600..=86_399 => format!("{}h", s / 3600),
         _ => format!("{}d", s / 86_400),
     }
-}
-
-/// `…/pull/123` → `123`. Tolerates trailing path/query (`/files`, `#issue`).
-pub fn pr_number(url: &str) -> Option<u64> {
-    let tail = url.split("/pull/").nth(1)?;
-    let digits: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
-    digits.parse().ok()
 }
 
 use seance_core::util::recency_rank;
@@ -296,12 +300,8 @@ impl ClientState {
             .collect()
     }
 
-    /// Row badge: a circle this GUI has never selected (a `ctl` spawn with no
-    /// GUI attribution) badges `needs` until it is.
+    /// Row badge. The rail has no `needs` state (removed 0.27, native twin).
     pub fn row_attention(&self, ws: &str) -> Option<Attention> {
-        if !self.subs.has_seen(ws) {
-            return Some(Attention::NeedsHuman);
-        }
         self.workspace_attention(ws)
     }
 
@@ -337,70 +337,10 @@ impl ClientState {
 
     /// Live attention badge for a sidebar row (native `workspace_attention_cx`).
     pub fn workspace_attention(&self, workspace: &str) -> Option<Attention> {
-        let needs = self.panes.iter().any(|p| {
-            p.workspace == workspace
-                && matches!(
-                    self.statuses.get(&p.slug).map(|s| s.state.as_str()),
-                    Some("needs-human" | "blocked" | "risky")
-                )
-        });
-        if needs {
-            return Some(Attention::NeedsHuman);
-        }
         if self.workspace_has_working_agent(workspace) {
             return Some(Attention::Working);
         }
-        // PR verdicts from the external poller: a red PR resurfaces a quiet
-        // circle exactly like an agent asking for help. Live work still wins.
-        if let Some(a) = self.pr_attention(workspace) {
-            return Some(a);
-        }
         self.workspace_unread.get(workspace).copied()
-    }
-
-    /// PR links for a workspace, most-recently-seen LAST.
-    pub fn pr_links(&self, workspace: &str) -> &[PrLink] {
-        self.workspace_pr_links
-            .get(workspace)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
-    }
-
-    /// Drop ONE PR link from a workspace — the optimistic mirror of a
-    /// single-url `pr-link clear` (engine-side that also sticky-dismisses the
-    /// url, so the scraper won't re-add it). Returns true when a link went
-    /// away; an emptied list drops its key, matching the State-fold shape
-    /// (only non-empty lists are inserted there).
-    pub fn remove_pr_link(&mut self, workspace: &str, url: &str) -> bool {
-        let Some(list) = self.workspace_pr_links.get_mut(workspace) else {
-            return false;
-        };
-        let before = list.len();
-        list.retain(|l| l.url != url);
-        let removed = list.len() != before;
-        if list.is_empty() {
-            self.workspace_pr_links.remove(workspace);
-        }
-        removed
-    }
-
-    /// The chip's link: the most recently seen one.
-    pub fn latest_pr_link(&self, workspace: &str) -> Option<&PrLink> {
-        self.pr_links(workspace).last()
-    }
-
-    /// Attention contributed by this workspace's PR links: any `needs` wins,
-    /// else any `done`.
-    pub fn pr_attention(&self, workspace: &str) -> Option<Attention> {
-        let mut done = false;
-        for l in self.pr_links(workspace) {
-            match l.status.as_ref().and_then(|s| s.attention.as_deref()) {
-                Some("needs") => return Some(Attention::NeedsHuman),
-                Some("done") => done = true,
-                _ => {}
-            }
-        }
-        done.then_some(Attention::Done)
     }
 
     /// Ctrl+PageUp/Down walks EXACTLY what the sidebar displays, read live at
@@ -412,29 +352,6 @@ impl ClientState {
     }
 
     /// Bump recency (human typing here / fresh spawn).
-    /// The rail's two bands in display order, each carrying the same sort.
-    pub fn workspace_sections(&self) -> Vec<(Section, Vec<String>)> {
-        let ordered = self.workspaces();
-        let pinned: std::collections::BTreeSet<String> = ordered
-            .iter()
-            .filter(|w| self.subs.is_pinned(w))
-            .cloned()
-            .collect();
-        seance_core::grouping::partition_sections(&ordered, &pinned, &self.top_mode_bands())
-    }
-
-    /// Circles in each host mode marked `top` (AFK, slack thread), one set
-    /// per mode in host order: each leads the rail in its own band.
-    pub fn top_mode_bands(&self) -> Vec<std::collections::BTreeSet<String>> {
-        let top: Vec<&str> = self
-            .circle_mode_defs
-            .iter()
-            .filter(|d| d.top)
-            .map(|d| d.id.as_str())
-            .collect();
-        seance_core::grouping::top_mode_bands(&top, &self.circle_modes)
-    }
-
     /// Optimistic flip of a circle mode, ahead of the daemon's State echo.
     pub fn set_circle_mode_local(&mut self, ws: &str, mode: &str, on: bool) {
         let ids = self.circle_modes.entry(ws.to_string()).or_default();
@@ -458,33 +375,57 @@ impl ClientState {
             .collect()
     }
 
-    /// One band's rows: loose circles and prefix clusters, in sort order.
-    /// Grouping reads the LABEL, so retyping a name is how you regroup.
-    pub fn section_rows(&self, circles: &[String]) -> Vec<SectionRow> {
-        seance_core::grouping::group_by_prefix(circles, |ws| self.workspace_label(ws))
-    }
-
-    /// Every circle the rail is actually SHOWING, in draw order — the
-    /// ctrl+page ring. Folds count, so folding a pile narrows the rotation.
-    pub fn visible_workspaces(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        for (section, circles) in self.workspace_sections() {
-            if circles.is_empty() || self.subs.is_collapsed(section.key()) {
-                continue;
-            }
-            for row in self.section_rows(&circles) {
-                match row {
-                    SectionRow::Circle(ws) => out.push(ws),
-                    SectionRow::Group { prefix, members } => {
-                        let key = group_key(section.key(), &prefix);
-                        if !self.subs.is_collapsed(&key) {
-                            out.extend(members);
-                        }
-                    }
-                }
+    /// The space the rail is showing: picked, else the selected circle's,
+    /// else the default.
+    pub fn current_space(&self) -> String {
+        let spaces = &self.subs.spaces;
+        if let Some(id) = self.rail_space.as_deref() {
+            if spaces.get(id).is_some() {
+                return id.to_string();
             }
         }
-        out
+        match self.selected_workspace.as_deref() {
+            Some(ws) => spaces.space_of(ws).to_string(),
+            None => spaces.default_id().to_string(),
+        }
+    }
+
+    pub fn rail_filter_matches(&self, filter: &RailFilter, ws: &str) -> bool {
+        match filter {
+            RailFilter::All => true,
+            RailFilter::Starred => self.subs.is_pinned(ws),
+            RailFilter::Mode(id) => self
+                .circle_modes
+                .get(ws)
+                .is_some_and(|m| m.iter().any(|x| x == id)),
+        }
+    }
+
+    /// Every circle the rail is listing, in draw order — the ctrl+page ring.
+    /// Unfiltered: the current space. Filtered: matches from every space.
+    pub fn visible_workspaces(&self) -> Vec<String> {
+        let ordered = self.workspaces();
+        let spaces = &self.subs.spaces;
+        match &self.rail_filter {
+            RailFilter::All => spaces.circles_in(&self.current_space(), &ordered),
+            f => spaces
+                .list
+                .iter()
+                .flat_map(|s| spaces.circles_in(&s.id, &ordered))
+                .filter(|ws| self.rail_filter_matches(f, ws))
+                .collect(),
+        }
+    }
+
+    /// Strongest attention among a space's circles.
+    pub fn space_attention(&self, id: &str) -> Option<Attention> {
+        let ordered = self.workspaces();
+        self.subs
+            .spaces
+            .circles_in(id, &ordered)
+            .iter()
+            .filter_map(|ws| self.row_attention(ws))
+            .max_by_key(|a| a.priority())
     }
 
     /// What to show for a circle: its label, falling back to its slug — which
@@ -647,7 +588,6 @@ impl ClientState {
             return;
         }
         let att = match state {
-            "needs-human" | "blocked" | "risky" => Some(Attention::NeedsHuman),
             "done" => Some(Attention::Done),
             "working" | "planning" => Some(Attention::Working),
             _ => None,
@@ -725,10 +665,6 @@ impl ClientState {
                 // Daemon-owned clocks are the durable copy — mirror them
                 // (converted to the perf domain, max-merged so a local stamp
                 // from a frame we already painted is never walked back).
-                // pr_links ride on the same meta rows and arrive for EVERY
-                // known workspace, so the map is rebuilt (not merged) — a
-                // cleared list must actually clear.
-                self.workspace_pr_links.clear();
                 // Labels arrive for every known circle, so rebuild wholesale:
                 // a circle renamed back to its slug must lose its entry.
                 self.workspace_names.clear();
@@ -744,14 +680,11 @@ impl ClientState {
                     if let Some(n) = m.name.clone() {
                         self.workspace_names.insert(m.workspace.clone(), n);
                     }
-                    if !m.pr_links.is_empty() {
-                        self.workspace_pr_links
-                            .insert(m.workspace.clone(), m.pr_links);
-                    }
                 }
                 // Rail bookkeeping: first State marks everything known as
                 // looked-at, every State prunes circles that are gone.
                 let known = self.workspaces();
+                let mut space_circles: Vec<String> = known.clone();
                 if self.subs.seeded {
                     // Prune against what the daemon knows PLUS anything only
                     // recently missing: quicklaunch pins the circle the
@@ -765,6 +698,7 @@ impl ClientState {
                         .pinned
                         .iter()
                         .chain(self.subs.seen.iter())
+                        .chain(self.subs.spaces.of.keys())
                         .cloned()
                         .collect();
                     let known_set: std::collections::BTreeSet<String> =
@@ -778,9 +712,29 @@ impl ClientState {
                     .into_iter()
                     .collect();
                     self.subs_dirty |= self.subs.reconcile(&protected);
+                    space_circles = protected;
                 } else {
                     self.subs.seed(&known);
                     self.subs_dirty = true;
+                }
+                // Space bookkeeping covers recently-absent circles too, so a
+                // State that lags a spawn doesn't forget where one lives.
+                let circles: Vec<(String, String)> = space_circles
+                    .into_iter()
+                    .map(|ws| {
+                        let label = self.workspace_label(&ws);
+                        (ws, label)
+                    })
+                    .collect();
+                let focused = self.current_space();
+                self.spaces_dirty |= self.subs.spaces.reconcile(&circles, Some(&focused));
+                // Freeze the view once the selection has a space (native twin).
+                if self.rail_space.is_none() {
+                    if let Some(sel) = self.selected_workspace.as_deref() {
+                        if self.subs.spaces.of.contains_key(sel) {
+                            self.rail_space = Some(self.subs.spaces.space_of(sel).to_string());
+                        }
+                    }
                 }
                 self.structure_rev += 1;
                 Applied::Structure
@@ -1174,86 +1128,26 @@ mod tests {
         .unwrap()
     }
 
-    /// Both circles active, `raid` carrying a PR link with `attention`.
-    fn pr_state_event(attention: &str) -> GuiEvent {
-        let att = if attention.is_empty() {
-            "null".to_string()
-        } else {
-            format!("\"{attention}\"")
-        };
-        serde_json::from_str(&format!(
-            r#"{{"event":"state","panes":[
-                {{"kind":"term","name":"r","slug":"r-1","workspace":"raid",
+    /// Both circles active; `raid` holds the one pane.
+    fn two_circle_state_event() -> GuiEvent {
+        serde_json::from_str(
+            r#"{"event":"state","panes":[
+                {"kind":"term","name":"r","slug":"r-1","workspace":"raid",
                  "command":"bash","cwd":"/","tiled":true,"running":true,
-                 "title":null,"scratchpad":"/tmp/r"}}],
+                 "title":null,"scratchpad":"/tmp/r"}],
                 "selected_workspace":"raid","focused_pane":"r-1",
                 "extra_workspaces":["lab"],"workspace_order":["lab","raid"],
                 "asks":[],"statuses":[],"subscriptions":["lab","raid"],
-                "workspace_meta":[{{"workspace":"raid","last_output_ms":0,
-                  "last_touch_ms":0,"pr_links":[
-                    {{"url":"https://github.com/o/r/pull/7","seen_ms":1,
-                      "status":{{"state":"open","attention":null,
-                        "label":"2 comments","updated_ms":1}}}},
-                    {{"url":"https://github.com/o/r/pull/42","seen_ms":2,
-                      "status":{{"state":"open","attention":{att},
-                        "label":"CI ✗","updated_ms":2}}}}]}}]}}"#
-        ))
+                "workspace_meta":[{"workspace":"raid","last_output_ms":0,
+                  "last_touch_ms":0}]}"#,
+        )
         .unwrap()
-    }
-
-    #[test]
-    fn pr_number_parses_trailing_paths() {
-        assert_eq!(pr_number("https://github.com/o/r/pull/42"), Some(42));
-        assert_eq!(pr_number("https://github.com/o/r/pull/42/files"), Some(42));
-        assert_eq!(pr_number("https://github.com/o/r/issues/42"), None);
-        assert_eq!(pr_number("https://github.com/o/r/pull/x"), None);
-    }
-
-    #[test]
-    fn pr_links_land_per_workspace_most_recent_last() {
-        let mut st = ClientState::default();
-        st.apply_event(pr_state_event("needs"), 0.0);
-        assert_eq!(st.pr_links("raid").len(), 2);
-        assert_eq!(
-            st.latest_pr_link("raid").map(|l| l.url.as_str()),
-            Some("https://github.com/o/r/pull/42")
-        );
-        assert!(st.pr_links("lab").is_empty());
-        // A State with no links must actually clear them (rebuild, not merge).
-        st.apply_event(global_state_event(), 0.0);
-        assert!(st.pr_links("raid").is_empty());
-    }
-
-    #[test]
-    fn pr_attention_needs_beats_done_and_live_work_beats_both() {
-        let mut st = ClientState::default();
-        st.apply_event(pr_state_event("needs"), 0.0);
-        st.subs.mark_seen("raid");
-        assert_eq!(st.pr_attention("raid"), Some(Attention::NeedsHuman));
-        assert_eq!(st.row_attention("raid"), Some(Attention::NeedsHuman));
-
-        st.apply_event(pr_state_event("done"), 0.0);
-        st.subs.mark_seen("raid");
-        assert_eq!(st.row_attention("raid"), Some(Attention::Done));
-
-        // Live working outranks a done PR.
-        st.statuses.insert(
-            "r-1".into(),
-            serde_json::from_str(r#"{"slug":"r-1","state":"working","note":null}"#).unwrap(),
-        );
-        assert_eq!(st.row_attention("raid"), Some(Attention::Working));
-
-        // No verdict at all → no PR-driven badge.
-        st.statuses.clear();
-        st.apply_event(pr_state_event(""), 0.0);
-        st.subs.mark_seen("raid");
-        assert_eq!(st.pr_attention("raid"), None);
     }
 
     #[test]
     fn displayed_active_ring_is_the_sidebar_order_live() {
         let mut st = ClientState::default();
-        st.apply_event(pr_state_event("needs"), 0.0);
+        st.apply_event(two_circle_state_event(), 0.0);
         st.touch_workspace("raid", 100.0);
         assert_eq!(
             st.displayed_active_ring(),
@@ -1308,7 +1202,7 @@ mod tests {
     #[test]
     fn pinned_section_floats_above_the_active_band_and_owns_the_ring() {
         let mut st = ClientState::default();
-        st.apply_event(pr_state_event("needs"), 0.0);
+        st.apply_event(two_circle_state_event(), 0.0);
         st.touch_workspace("raid", 100.0);
         st.touch_workspace("lab", 200.0);
         // Unpinned order: lab (fresher touch) then raid.
@@ -1319,12 +1213,12 @@ mod tests {
         st.subs.pin("raid");
         assert_eq!(st.pinned_workspaces(), vec!["raid".to_string()]);
         assert_eq!(st.unpinned_active_workspaces(), vec!["lab".to_string()]);
+        // Spaces replaced the pinned band: a star never reorders the ring.
         assert_eq!(
             st.displayed_active_ring(),
-            vec!["raid".to_string(), "lab".to_string()]
+            vec!["lab".to_string(), "raid".to_string()]
         );
-        // Ring == pinned ++ unpinned == render order, and nothing is dropped
-        // or duplicated relative to the flat active list.
+        // One space holds everything here, so the ring is the full list.
         let mut ring = st.displayed_active_ring();
         let mut active = st.active_workspaces();
         ring.sort();
@@ -1332,12 +1226,32 @@ mod tests {
         assert_eq!(ring, active);
     }
 
+    #[test]
+    fn the_rail_lists_one_space_and_a_filter_spans_them_all() {
+        let mut st = ClientState::default();
+        st.apply_event(two_circle_state_event(), 0.0);
+        assert!(st.spaces_dirty, "first State migrates spaces");
+        assert_eq!(st.subs.spaces.space_of("lab"), "general");
+        let other = st.subs.spaces.create("other");
+        st.subs.spaces.move_circle("raid", &other);
+        st.selected_workspace = Some("lab".into());
+        assert_eq!(st.visible_workspaces(), vec!["lab".to_string()]);
+        st.rail_space = Some(other.clone());
+        assert_eq!(st.visible_workspaces(), vec!["raid".to_string()]);
+        st.subs.pin("lab");
+        st.subs.pin("raid");
+        st.rail_filter = RailFilter::Starred;
+        let mut both = st.visible_workspaces();
+        both.sort();
+        assert_eq!(both, vec!["lab".to_string(), "raid".to_string()]);
+    }
+
     /// Touches minutes apart still order. Sub-second ones deliberately do not
     /// — that jitter is what made repainting circles trade places.
     #[test]
     fn pinned_subset_keeps_the_working_idle_sort_internally() {
         let mut st = ClientState::default();
-        st.apply_event(pr_state_event("needs"), 0.0);
+        st.apply_event(two_circle_state_event(), 0.0);
         st.subs.pin("lab");
         st.subs.pin("raid");
         // Half an hour apart — inside ten minutes everything deliberately ties.
@@ -1387,19 +1301,14 @@ mod tests {
         .unwrap()
     }
 
-    /// A circle that shows up after the seed was never selected here, so it
-    /// badges `needs` — the ctl-spawn case, now the only source of that badge.
+    /// A circle ctl spawned with no GUI attribution used to badge `needs`;
+    /// the rail has no `needs` state now.
     #[test]
-    fn a_ctl_spawned_circle_badges_needs_human() {
+    fn a_ctl_spawned_circle_gets_no_badge() {
         let mut st = ClientState::default();
-        // Seed with `lab` alone…
         st.apply_event(lab_only_event(), 0.0);
-        // …then `raid` appears, spawned by ctl with no GUI attribution.
         st.subs_dirty = false;
         st.apply_event(global_state_event(), 0.0);
-        assert_eq!(st.row_attention("raid"), Some(Attention::NeedsHuman));
-        // First select acknowledges it.
-        st.subs.mark_seen("raid");
         assert_eq!(st.row_attention("raid"), None);
     }
 
@@ -1410,30 +1319,6 @@ mod tests {
         st.grids.insert("w-1".into(), GridSnapshot::empty("w-1"));
         st.apply_event(GuiEvent::PaneKilled { slug: "w-1".into() }, 0.0);
         assert!(st.panes.is_empty() && st.grids.is_empty());
-    }
-
-    #[test]
-    fn remove_pr_link_drops_one_and_prunes_empty_lists() {
-        let mut st = ClientState::default();
-        let mk = |u: &str| PrLink {
-            url: u.to_string(),
-            status: None,
-            seen_ms: 0,
-        };
-        st.workspace_pr_links.insert(
-            "lab".into(),
-            vec![mk("https://x/pull/1"), mk("https://x/pull/2")],
-        );
-        assert!(st.remove_pr_link("lab", "https://x/pull/1"));
-        assert_eq!(st.pr_links("lab").len(), 1);
-        // Unknown url / unknown circle are no-ops.
-        assert!(!st.remove_pr_link("lab", "https://x/pull/9"));
-        assert!(!st.remove_pr_link("nope", "https://x/pull/2"));
-        // Last one out prunes the key, so the chip disappears entirely.
-        assert!(st.remove_pr_link("lab", "https://x/pull/2"));
-        assert!(st.pr_links("lab").is_empty());
-        assert!(!st.workspace_pr_links.contains_key("lab"));
-        assert!(st.latest_pr_link("lab").is_none());
     }
 
     /// Panes across several circles, as a State push. `busy` marks the ones

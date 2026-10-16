@@ -17,6 +17,7 @@ pub(crate) fn print_ok_human(sub: &str, response: &ControlResponse) {
 
     match sub {
         "list" | "ls" | "brief" | "roster" | "stage" => print_list(data),
+        "space" | "spaces" if data.get("spaces").is_some() => print_spaces(data),
         "task" | "inbox" => {
             if let Some(body) = data.get("body").and_then(|v| v.as_str()) {
                 let id = data.get("id").and_then(|v| v.as_str()).unwrap_or("?");
@@ -39,7 +40,9 @@ pub(crate) fn print_ok_human(sub: &str, response: &ControlResponse) {
                 for k in [
                     "principal",
                     "session",
+                    "pane_id",
                     "workspace",
+                    "workspace_id",
                     "policy",
                     "task_id",
                     "task_status",
@@ -104,23 +107,6 @@ pub(crate) fn print_ok_human(sub: &str, response: &ControlResponse) {
                         e.get("detail").and_then(|v| v.as_str()).unwrap_or(""),
                     );
                 }
-            }
-        }
-        "pr-link" | "pr-links" => {
-            if let Some(n) = data.get("removed").and_then(|v| v.as_u64()) {
-                let ws = data
-                    .get("workspace")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("?");
-                println!("cleared {n} link(s) on {ws}");
-            } else {
-                let ws = data
-                    .get("workspace")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("?");
-                let url = data.get("url").and_then(|v| v.as_str()).unwrap_or("?");
-                let n = data.get("links").and_then(|v| v.as_u64()).unwrap_or(0);
-                println!("{ws}: {url} ({n} link(s))");
             }
         }
         "status" => print_status(data),
@@ -392,10 +378,11 @@ COMMANDS:
          --kinds a,b  --pane P  --actor A  --since-seq N  --no-catch-up
     rename-circle [WS] NAME       set a circle's label (its slug never moves)
     rename-pane [PANE] NAME       set a pane's display name (quote a multi-word NAME)
+    space [list]                  spaces and the circles in each
+    space new NAME · rename SPACE NAME · rm SPACE · default SPACE
+    move [CIRCLE] SPACE           put a circle in a space
     sleep [WS]                    sleep a circle (frees its RAM; wakes on resume)
     wake [WS]                     wake a sleeping circle
-    pr-link add WS URL            seed a PR link on a workspace
-    pr-link clear WS [URL]        drop one link (or all) from a workspace
     whoami / caps / grant / revoke / policy
     seize / release / drive PANE  co-presence ownership
     wait PANE [opts]              block until condition
@@ -427,4 +414,24 @@ EXAMPLES:
     seance ctl roster
     seance ctl doctor"
     );
+}
+
+fn print_spaces(data: &serde_json::Value) {
+    let Some(rows) = data.get("spaces").and_then(|v| v.as_array()) else {
+        return;
+    };
+    for row in rows {
+        let s = |k: &str| row.get(k).and_then(|v| v.as_str()).unwrap_or("");
+        let flag = |k: &str| row.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+        let circles = row.get("circles").and_then(|v| v.as_array());
+        let mut head = format!("{} [{}]", s("name"), s("id"));
+        if flag("default") {
+            head.push_str(" (default)");
+        }
+        println!("{head}");
+        for c in circles.into_iter().flatten() {
+            let label = c.get("label").and_then(|v| v.as_str()).unwrap_or("");
+            println!("  {label}");
+        }
+    }
 }

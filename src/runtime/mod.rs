@@ -6,7 +6,6 @@
 pub mod engine;
 pub mod osc_notify;
 pub mod outqueue;
-pub mod pr_scrape;
 pub mod protocol;
 pub mod pty_session;
 pub mod recorder;
