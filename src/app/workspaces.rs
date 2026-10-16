@@ -602,8 +602,8 @@ impl SeanceApp {
         }
     }
 
-    /// Badge for a rail row. The rail has no `needs` state (removed 0.27 —
-    /// it lit up for too many reasons to mean anything).
+    /// Badge for a rail row. `NeedsHuman` comes only from a live
+    /// needs-human, blocked or risky pane, never from a sticky unread.
     pub(super) fn row_attention(&self, ws: &str) -> Option<WorkspaceAttention> {
         self.workspace_attention_cx(ws)
     }

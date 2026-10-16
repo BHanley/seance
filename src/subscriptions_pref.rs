@@ -13,10 +13,10 @@
 //! circle, so an `active` key in an older blob parses and is discarded.
 //!
 //! Shape: `{ "seen": [...], "pinned": [...], "spaces": {...}, "flipped":
-//! "slug", "docked": [...] }`. `pinned` is the ★ set (0.27; the pinned band is gone), `spaces`
-//! is `seance_core::spaces::Spaces`. `seen` marks circles this GUI has
-//! selected; one that appears without ever being selected badges `needs`.
-//! `docked` lists file panes shown in their circle's right-side dock panel.
+//! "slug", "docked": [...] }`. `pinned` is the pin set (0.27; the pinned
+//! band is gone), `spaces` is `seance_core::spaces::Spaces`. `seen` marks
+//! circles this GUI has selected. `docked` lists file panes shown in their
+//! circle's right-side dock panel.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;

@@ -19,6 +19,10 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **Needs-you dot kept (this fork).** 0.27.0 dropped the rail's `needs`
+  state; here a circle, its space and the pane row still blink while one of
+  its panes is live needs-human, blocked or risky. Nothing sticky comes
+  back: it clears as soon as the pane's status does.
 - **Tick task boxes in a markdown file pane.** Clicking a `- [ ]` / `- [x]`
   box flips that one line in the file on disk; nothing else in the pane is
   editable. The click writes only if the file still matches what the pane

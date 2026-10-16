@@ -77,12 +77,8 @@ impl SeanceApp {
         if self.selected_workspace.as_deref() == Some(ws.as_str()) {
             return;
         }
-        // Done replaces a leftover `working` mark (which never draws); only
-        // `needs` outranks it.
-        let cur = self.workspace_unread.get(&ws).copied();
-        if !matches!(cur, Some(WorkspaceAttention::NeedsHuman)) {
-            self.workspace_unread.insert(ws, WorkspaceAttention::Done);
-        }
+        // Done replaces a leftover `working` mark (which never draws).
+        self.workspace_unread.insert(ws, WorkspaceAttention::Done);
     }
 
     /// What a notification calls a pane: "circle · name", the names the human
