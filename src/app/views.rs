@@ -106,6 +106,8 @@ impl SeanceApp {
         }
         if mode == ViewMode::Wall {
             self.view.before_wall = self.view.mode;
+        } else if self.view.mode == ViewMode::Wall {
+            self.wall_leave();
         }
         if mode == ViewMode::Stage {
             self.stage_enter();

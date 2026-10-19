@@ -308,34 +308,65 @@ pub fn read_ex(
 const TAIL_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Recent events of some kinds, oldest first, at most `limit` (the newest
-/// kept). With a `since_seq` cursor the in-memory ring answers when it
-/// still holds everything after it, so a client polling for new events
-/// costs no disk read; otherwise the log's tail is read.
-pub fn recent(since_ms: u64, since_seq: u64, kinds: &[String], limit: usize) -> Vec<Event> {
+/// kept), and the cursor to ask from next: the newest seq actually looked
+/// at, so an event still being written is fetched next time, not skipped.
+/// With a `since_seq` cursor the in-memory ring answers when it still holds
+/// everything after it, so a client polling for new events costs no disk
+/// read; otherwise the log's tail is read.
+pub fn recent(since_ms: u64, since_seq: u64, kinds: &[String], limit: usize) -> (Vec<Event>, u64) {
     if since_seq > 0 {
-        if let Some(ring) = ring_after(since_seq) {
-            return trim_to_limit(
-                ring.into_iter()
-                    .filter(|e| {
-                        e.ts >= since_ms && matches_filter(e, None, None, None, Some(kinds))
-                    })
-                    .collect(),
-                limit,
-            );
+        if let Some((events, cursor)) = ring_after(since_seq, since_ms, kinds) {
+            return (trim_to_limit(events, limit), cursor);
         }
     }
-    read_tail_at(&log_path(), since_ms, since_seq, kinds, limit, TAIL_BYTES)
+    let path = log_path();
+    let events = read_tail_at(&path, since_ms, since_seq, kinds, limit, TAIL_BYTES);
+    let cursor = last_seq_at(&path).max(events.last().map_or(0, |e| e.seq));
+    (events, cursor)
 }
 
-/// The ring's events after `since_seq`, or None when the ring no longer
-/// reaches back that far (the daemon restarted, or the ring rolled over).
-fn ring_after(since_seq: u64) -> Option<Vec<Event>> {
+/// The ring's matching events after `since_seq` and the newest seq in it,
+/// or None when the ring no longer reaches back that far (the daemon
+/// restarted, or the ring rolled over). Filtered under the lock so the copy
+/// is only what was asked for.
+fn ring_after(since_seq: u64, since_ms: u64, kinds: &[String]) -> Option<(Vec<Event>, u64)> {
     let ring = bus().ring.lock().ok()?;
     let covered = match ring.front() {
         Some(first) => first.seq <= since_seq + 1,
         None => current_seq() == since_seq,
     };
-    covered.then(|| ring.iter().filter(|e| e.seq > since_seq).cloned().collect())
+    if !covered {
+        return None;
+    }
+    let events = ring
+        .iter()
+        .filter(|e| e.seq > since_seq && e.ts >= since_ms)
+        .filter(|e| matches_filter(e, None, None, None, Some(kinds)))
+        .cloned()
+        .collect();
+    let cursor = ring.back().map_or(since_seq, |e| e.seq.max(since_seq));
+    Some((events, cursor))
+}
+
+/// The seq on the log's last whole line (0 when there is none).
+fn last_seq_at(path: &std::path::Path) -> u64 {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return 0;
+    };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let mut buf = Vec::new();
+    if f.seek(SeekFrom::Start(len.saturating_sub(64 * 1024)))
+        .is_err()
+        || f.read_to_end(&mut buf).is_err()
+    {
+        return 0;
+    }
+    String::from_utf8_lossy(&buf)
+        .lines()
+        .rev()
+        .find_map(|l| serde_json::from_str::<Event>(l).ok())
+        .map_or(0, |e| e.seq)
 }
 
 /// [`read_ex`] over only the last `tail_bytes` of `path`, with a cheap text

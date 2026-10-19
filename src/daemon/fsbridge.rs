@@ -151,8 +151,8 @@ fn run_inner(op: FsOp, engine: &SharedEngine) -> Result<Value, String> {
         } => {
             // A client asks for what it shows; the cap keeps a bad request
             // from shipping the whole log.
-            let events = crate::events::recent(since_ms, since_seq, &kinds, limit.min(5000));
-            Ok(json!({ "events": events, "seq": crate::events::current_seq() }))
+            let (events, seq) = crate::events::recent(since_ms, since_seq, &kinds, limit.min(5000));
+            Ok(json!({ "events": events, "seq": seq }))
         }
         FsOp::HostSelect { widget, item } => {
             // Fresh load: select is rare and config may have changed on disk.
@@ -340,7 +340,8 @@ mod tests {
         let kinds: Vec<&str> = ours.iter().map(|e| e["kind"].as_str().unwrap()).collect();
         assert_eq!(kinds, ["pane_exited", "status_set"]);
         assert_eq!(ours[1]["workspace"], "w");
-        assert!(data["seq"].is_u64());
+        // The cursor is the log's last line, not a seq handed out since.
+        assert!(data["seq"].as_u64().is_some_and(|s| s >= 3));
 
         match prev {
             Some(v) => std::env::set_var("SEANCE_STATE_DIR", v),

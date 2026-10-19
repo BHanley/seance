@@ -100,6 +100,23 @@ impl SeanceApp {
         )
     }
 
+    /// Focus from the Wall: Stage on `ws`, with the pane waiting on you up
+    /// front when there is one, else the lead.
+    fn wall_focus(&mut self, ws: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let asking = self
+            .stage_waiting()
+            .into_iter()
+            .find(|w| w.circle == ws && w.pane.is_some())
+            .and_then(|w| w.pane);
+        self.focus_on_stage(ws, asking.as_deref(), window, cx);
+    }
+
+    /// Leaving the Wall: what it saw of the Mac goes stale once it stops
+    /// looking, so the next visit starts fresh rather than log old news.
+    pub(super) fn wall_leave(&mut self) {
+        self.wall.mac_seen.clear();
+    }
+
     /// Plain arrows move the selection, Enter focuses it. True when used.
     pub(super) fn wall_key(
         &mut self,
@@ -118,7 +135,7 @@ impl SeanceApp {
             "down" => Dir::Down,
             "enter" => {
                 if let Some(ws) = self.selected_workspace.clone() {
-                    self.focus_on_stage(&ws, None, window, cx);
+                    self.wall_focus(&ws, window, cx);
                 }
                 return true;
             }
@@ -283,7 +300,10 @@ impl SeanceApp {
                         || self.statuses.get(l).is_some_and(|s| s.state == "done")
                 }),
         });
-        self.note_mac(ws, mac);
+        // No lines yet means no grid yet: nothing to compare.
+        if !lines.is_empty() {
+            self.note_mac(ws, mac);
+        }
         let footer = self.wall.lead_lines.get(ws).and_then(|l| {
             l.next
                 .as_ref()
@@ -330,7 +350,10 @@ impl SeanceApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let circles = self.visible_workspaces();
+        let circles = self
+            .subs_pref
+            .spaces
+            .circles_in(&self.current_space(), &self.workspaces());
         self.health_feed(cx);
         self.wall_feeds(&circles, cx);
         let size = window.viewport_size();
@@ -555,7 +578,7 @@ impl SeanceApp {
                     .tooltip(tip("open the selected circle on Stage (enter)"))
                     .on_click(cx.listener(|this, _, window, cx| {
                         if let Some(ws) = this.selected_workspace.clone() {
-                            this.focus_on_stage(&ws, None, window, cx);
+                            this.wall_focus(&ws, window, cx);
                         }
                     })),
             );
@@ -580,6 +603,7 @@ impl SeanceApp {
             }
         }
         let wide = width >= 1200.;
+        let roomy = width >= 900.;
         let shortcut = if cfg!(target_os = "macos") {
             "⌘⇧J"
         } else {
@@ -659,7 +683,13 @@ impl SeanceApp {
                 div()
                     .id("wall-jump")
                     .flex_none()
-                    .w(px(if wide { 240. } else { 150. }))
+                    .w(px(if wide {
+                        240.
+                    } else if roomy {
+                        150.
+                    } else {
+                        34.
+                    }))
                     .flex()
                     .items_center()
                     .gap(px(8.))
@@ -677,7 +707,9 @@ impl SeanceApp {
                         this.open_jump(window, cx);
                     }))
                     .child("⌕")
-                    .child(div().flex_1().min_w_0().truncate().child("Jump anywhere"))
+                    .when(roomy, |d| {
+                        d.child(div().flex_1().min_w_0().truncate().child("Jump anywhere"))
+                    })
                     .when(wide, |d| {
                         d.child(
                             div()
@@ -720,6 +752,13 @@ impl SeanceApp {
             TileState::Needs => ("● needs you".to_string(), SeancePalette::violet()),
             TileState::LeadExited => ("lead exited".to_string(), SeancePalette::danger()),
             TileState::MacAsleep => ("Mac asleep".to_string(), SeancePalette::text_faint()),
+            // The crew can be working or done while the lead idles.
+            TileState::Working if state.as_ref().is_none_or(|s| !s.label.starts_with('◐')) => {
+                ("◐ working".to_string(), SeancePalette::flame())
+            }
+            TileState::Done if state.as_ref().is_none_or(|s| !s.label.starts_with('✓')) => {
+                ("✓ done".to_string(), SeancePalette::success())
+            }
             _ => state
                 .map(|s| (s.label, s.color))
                 .unwrap_or(("idle".into(), SeancePalette::text_faint())),
@@ -752,7 +791,7 @@ impl SeanceApp {
             .shadow(vec![ring(flame.opacity(0.16))])
             .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, window, cx| {
                 if ev.click_count() >= 2 {
-                    this.focus_on_stage(&ws, None, window, cx);
+                    this.wall_focus(&ws, window, cx);
                 }
             }))
             .child(
@@ -798,7 +837,7 @@ impl SeanceApp {
                             .tooltip(tip("open on Stage (enter)"))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
-                                this.focus_on_stage(&ws2, None, window, cx);
+                                this.wall_focus(&ws2, window, cx);
                             })),
                     ),
             )
@@ -871,7 +910,7 @@ impl SeanceApp {
                         .id(SharedString::from(format!("wall-open-{}", tile.ws)))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             cx.stop_propagation();
-                            this.focus_on_stage(&ws, None, window, cx);
+                            this.wall_focus(&ws, window, cx);
                         }))
                         .into_any_element(),
                 )
@@ -907,7 +946,11 @@ impl SeanceApp {
             .hover(|s| s.border_color(SeancePalette::flame_dim()))
             .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, window, cx| {
                 if ev.click_count() >= 2 {
-                    this.focus_on_stage(&ws, None, window, cx);
+                    // The first click made this circle the big tile and the
+                    // grid moved: the second lands elsewhere, so open the
+                    // circle the first one picked.
+                    let pick = this.selected_workspace.clone().unwrap_or(ws.clone());
+                    this.wall_focus(&pick, window, cx);
                 } else {
                     this.select_workspace(&ws, window, cx);
                     cx.notify();

@@ -438,7 +438,7 @@ pub enum FsOp {
     /// watch` does), oldest first, the newest `limit` of those with
     /// `ts >= since_ms` and `seq > since_seq`. The Wall's Today feed polls
     /// this with its last seq. → `{events: [Event], seq}`, `seq` being the
-    /// daemon's current high-water mark.
+    /// newest seq the daemon looked at: the next poll's `since_seq`.
     Events {
         #[serde(default)]
         since_ms: u64,

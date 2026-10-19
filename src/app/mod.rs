@@ -1583,11 +1583,16 @@ impl SeanceApp {
                 if matches!(&self.renaming, Some((RenameTarget::Pane(s), _)) if s == &slug) {
                     return;
                 }
-                if !self.is_flipped(&slug) && pane.focus_content(window, cx) {
+                // The Wall shows no pane: focusing one would strand the
+                // keyboard on a handle outside the frame, so recover instead.
+                if self.view.mode != views::ViewMode::Wall
+                    && !self.is_flipped(&slug)
+                    && pane.focus_content(window, cx)
+                {
                     self.pending_focus = None;
                     return;
                 }
-                // File pane — nothing focusable. Clear pending and fall
+                // File pane (or the Wall), nothing focusable. Clear pending and fall
                 // through to recovery so the keyboard doesn't stay stranded
                 // wherever the last circle left it.
                 self.pending_focus = None;

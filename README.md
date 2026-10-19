@@ -283,7 +283,8 @@ right side.
   behind a "Today" button.
 
 Keys on the Wall: arrows move the selection between tiles, Enter (or a
-double click, or Focus) opens the selected circle on stage, esc goes back.
+double click, or Focus) opens the selected circle on stage, with the pane
+that is waiting on you up front when there is one, esc goes back.
 A single click selects. Typing reaches no pane while the Wall is up; the
 app chords still work. Every circle's grid streams to the Wall while it is
 showing and stops when it is not.

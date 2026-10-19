@@ -20,8 +20,9 @@ pub(super) const FEED_KINDS: [&str; 5] = [
     "workspace_slept",
     "workspace_woke",
 ];
-/// Raw events kept between polls. A busy day is a few thousand.
-pub(super) const RAW_CAP: usize = 6000;
+/// Raw events kept between polls, and the most one poll asks for (the
+/// daemon's own cap). A busy day is a few thousand.
+pub(super) const RAW_CAP: usize = 5000;
 /// Below this window width the feed folds behind a button.
 pub(super) const FEED_FOLD_BELOW: f32 = 1100.;
 
