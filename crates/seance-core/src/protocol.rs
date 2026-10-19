@@ -46,6 +46,23 @@ mod hello_tests {
         assert_eq!(hello.role, "gui");
         assert!(hello.build.is_none());
     }
+
+    #[test]
+    fn ctl_request_roundtrips() {
+        let req = GuiRequest::Ctl {
+            req: ControlRequest::Theme {
+                id: Some("tarot".into()),
+                scope: None,
+                from: None,
+            },
+        };
+        let line = serde_json::to_string(&req).unwrap();
+        let back: GuiRequest = serde_json::from_str(&line).unwrap();
+        assert!(matches!(
+            back,
+            GuiRequest::Ctl { req: ControlRequest::Theme { id: Some(id), .. } } if id == "tarot"
+        ));
+    }
 }
 
 /// Client → daemon on a GUI connection (JSON lines after hello).
@@ -205,7 +222,9 @@ pub enum GuiRequest {
         answer: String,
     },
     /// Classic control plane ops from the GUI (status-set, etc.).
-    Ctl(ControlRequest),
+    Ctl {
+        req: ControlRequest,
+    },
     /// Daemon-side filesystem/config bridge (thin client: file panes, pads,
     /// layout, host widgets all live on the daemon's machine). Correlated by
     /// `id`; the reply is a [`GuiEvent::FsResult`] with the same id. Executed

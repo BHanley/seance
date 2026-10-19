@@ -1660,7 +1660,7 @@ impl Engine {
                 self.broadcast(GuiEvent::AskResolved { id });
                 None
             }
-            GuiRequest::Ctl(req) => {
+            GuiRequest::Ctl { req } => {
                 let resp = self.handle_control(req);
                 Some(GuiEvent::Ack {
                     ok: resp.ok,

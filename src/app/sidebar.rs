@@ -1328,11 +1328,13 @@ impl SeanceApp {
                             .bg(SeancePalette::surface())
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        let _ = this.client.send(GuiRequest::Ctl(ControlRequest::Theme {
-                            id: Some(id.to_string()),
-                            scope: None,
-                            from: None,
-                        }));
+                        let _ = this.client.send(GuiRequest::Ctl {
+                            req: ControlRequest::Theme {
+                                id: Some(id.to_string()),
+                                scope: None,
+                                from: None,
+                            },
+                        });
                         cx.notify();
                     }))
                     .child(
