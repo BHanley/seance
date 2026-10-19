@@ -232,7 +232,8 @@ impl SeanceApp {
                     .px_4()
                     .flex()
                     .items_center()
-                    .justify_between()
+                    // Toggle beside the title, not at the far right: a docked
+                    // file panel draws over the right edge and hid it.
                     .gap_4()
                     .border_b_1()
                     .border_color(SeancePalette::border())
