@@ -317,22 +317,14 @@ impl Engine {
         old: &seance_core::schemes::TermColors,
         new: &seance_core::schemes::TermColors,
     ) -> Vec<String> {
-        let map: Vec<(u32, u32)> = old
-            .ansi
-            .iter()
-            .copied()
-            .zip(new.ansi.iter().copied())
-            .chain([(old.fg, new.fg), (old.bg, new.bg)])
-            .collect();
-        let swap = |c: u32| map.iter().find(|(o, _)| *o == c).map_or(c, |(_, n)| *n);
         let slugs: Vec<String> = self.frozen_grids.keys().cloned().collect();
         for slug in &slugs {
             let Some(mut snap) = self.frozen_grids.remove(slug) else {
                 continue;
             };
             for cell in &mut snap.cells {
-                cell.fg = swap(cell.fg);
-                cell.bg = swap(cell.bg);
+                cell.fg = retheme_color(cell.fg, (old.fg, new.fg), &old.ansi, &new.ansi);
+                cell.bg = retheme_color(cell.bg, (old.bg, new.bg), &old.ansi, &new.ansi);
             }
             // Clients drop a frame that isn't newer than the one they have.
             snap.rev += 1;
@@ -360,5 +352,39 @@ impl Engine {
                 }
             }
         }
+    }
+}
+
+/// One frozen cell color after a theme switch: an exact old palette color
+/// becomes the new one, anything else (a program's own truecolor) stays.
+/// Palettes reuse colors (Monokai Pro's black is its background, its white
+/// its foreground), so the cell's own default slot is tried before ANSI.
+fn retheme_color(c: u32, own: (u32, u32), old: &[u32; 16], new: &[u32; 16]) -> u32 {
+    std::iter::once(own)
+        .chain(old.iter().copied().zip(new.iter().copied()))
+        .find(|(o, _)| *o == c)
+        .map_or(c, |(_, n)| n)
+}
+
+#[cfg(test)]
+mod retheme_tests {
+    use super::retheme_color;
+
+    #[test]
+    fn own_default_wins_over_a_matching_ansi_slot() {
+        // Old: black (0) == bg, white (7) == fg, as in Monokai Pro.
+        let mut old = [0u32; 16];
+        old[0] = 0x2d2a2e;
+        old[7] = 0xfcfcfa;
+        let mut new = [0u32; 16];
+        new[0] = 0x111111;
+        new[7] = 0x777777;
+        let (bg, fg) = ((0x2d2a2e, 0x0a1018), (0xfcfcfa, 0xd8e6f0));
+        assert_eq!(retheme_color(0x2d2a2e, bg, &old, &new), 0x0a1018);
+        assert_eq!(retheme_color(0xfcfcfa, fg, &old, &new), 0xd8e6f0);
+        // The same color as a foreground still maps through ANSI black.
+        assert_eq!(retheme_color(0x2d2a2e, fg, &old, &new), 0x111111);
+        // A program's own color is left alone.
+        assert_eq!(retheme_color(0x123456, fg, &old, &new), 0x123456);
     }
 }
