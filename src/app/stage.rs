@@ -21,7 +21,7 @@ use crate::runtime::snapshot::GridSnapshot;
 use crate::theme::SeancePalette;
 
 use super::stage_parse::{
-    circle_folder, crew_order, ellipsize, fit_pills, is_bare_shell, last_output_line,
+    circle_folder, crew_order, ellipsize, fit_pills, is_bare_shell, last_output_lines,
     lead_log_path, pane_host, parse_health, parse_lead_log, pill_width, CrewBand, Health,
     HealthLevel, LeadLine,
 };
@@ -54,7 +54,8 @@ pub(super) struct StageState {
     lead_log: Option<(String, Option<LeadLine>)>,
     lead_log_asked: Option<(String, Instant)>,
     lead_log_busy: bool,
-    health: Option<Health>,
+    /// The health report: Stage's footer, and the Wall's too.
+    pub(super) health: Option<Health>,
     health_asked: Option<Instant>,
     health_busy: bool,
     /// Narrow windows: the crew column is open.
@@ -62,25 +63,44 @@ pub(super) struct StageState {
     /// circle → the file tab Stage shows. Kept apart from the dock's pick
     /// so Stage's tiled files never overwrite Classic's dock tab.
     file_tab: HashMap<String, String>,
-    /// pane slug → (grid rev, last output line), so a card reads its grid
-    /// only when the grid changed.
-    last_lines: HashMap<String, (u64, Option<String>)>,
+    /// Crew cards' last output lines.
+    last_lines: LineCache,
+}
+
+/// pane slug → (grid rev, its last two output lines), so a card or tile
+/// reads its grid only when the grid changed.
+#[derive(Default)]
+pub(super) struct LineCache(HashMap<String, (u64, Vec<String>)>);
+
+impl LineCache {
+    pub(super) fn lines(&mut self, slug: &str, snap: &GridSnapshot) -> &[String] {
+        let stale = self.0.get(slug).is_none_or(|(rev, _)| *rev != snap.rev);
+        if stale {
+            let lines = last_output_lines(&bottom_rows(snap, LAST_LINE_ROWS), 2);
+            self.0.insert(slug.to_string(), (snap.rev, lines));
+        }
+        self.0.get(slug).map_or(&[], |(_, l)| l.as_slice())
+    }
+
+    pub(super) fn retain(&mut self, keep: impl Fn(&str) -> bool) {
+        self.0.retain(|s, _| keep(s));
+    }
 }
 
 /// What a pane is doing, for its header or card.
-struct PaneState {
-    label: String,
-    color: Hsla,
+pub(super) struct PaneState {
+    pub(super) label: String,
+    pub(super) color: Hsla,
     band: CrewBand,
     /// A shell with nothing in it, or a sleeping pane: the dashed card.
     quiet: bool,
 }
 
 /// One chip in the needs-you bar.
-struct Waiting {
-    circle: String,
-    pane: Option<String>,
-    what: String,
+pub(super) struct Waiting {
+    pub(super) circle: String,
+    pub(super) pane: Option<String>,
+    pub(super) what: String,
     ask: Option<(String, Vec<String>)>,
 }
 
@@ -90,8 +110,8 @@ impl SeanceApp {
         self.stage.want_lead = true;
     }
 
-    /// Repaint now and then while on Stage: elapsed labels move and the
-    /// lead log and health report come due.
+    /// Repaint now and then on Stage and Wall: elapsed labels move and the
+    /// lead logs, health report and Today feed come due.
     pub(super) fn start_stage_ticker(&self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| loop {
             cx.background_executor()
@@ -99,7 +119,7 @@ impl SeanceApp {
                 .await;
             let Some(this) = this.upgrade() else { break };
             this.update(cx, |app: &mut SeanceApp, cx| {
-                if app.view.mode == ViewMode::Stage {
+                if matches!(app.view.mode, ViewMode::Stage | ViewMode::Wall) {
                     cx.notify();
                 }
             });
@@ -109,7 +129,7 @@ impl SeanceApp {
 
     /// The circle's lead: the daemon's pick while it is a terminal here,
     /// else the circle's first terminal pane.
-    fn stage_lead(&self, ws: &str) -> Option<String> {
+    pub(super) fn stage_lead(&self, ws: &str) -> Option<String> {
         let ok = |p: &&Pane| p.workspace == ws && stageable(p);
         self.stage
             .leads
@@ -164,6 +184,25 @@ impl SeanceApp {
         }
     }
 
+    /// Leave the Wall for Stage on `ws`: its lead, or `pane` when given
+    /// (a needs-you tile's Open puts the pane that asked up front).
+    pub(super) fn focus_on_stage(
+        &mut self,
+        ws: &str,
+        pane: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected_workspace.as_deref() != Some(ws) {
+            self.select_workspace(ws, window, cx);
+        }
+        self.set_view(ViewMode::Stage, cx);
+        if let Some(slug) = pane {
+            self.stage.want_lead = false;
+            self.set_active(slug, window, cx);
+        }
+    }
+
     /// Put a pane on stage, switching circle first when it lives elsewhere.
     fn stage_show(&mut self, ws: &str, slug: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected_workspace.as_deref() != Some(ws) {
@@ -199,7 +238,7 @@ impl SeanceApp {
         self.set_active(&list[next], window, cx);
     }
 
-    fn stage_open_jump(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn open_jump(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.palette = PaletteMode::Jump {
             query: String::new(),
             selected: 0,
@@ -212,6 +251,7 @@ impl SeanceApp {
     /// Ask the daemon for the lead log and health report when they're due.
     /// Cheap when nothing is: a few comparisons per frame.
     fn stage_feeds(&mut self, cx: &mut Context<Self>) {
+        self.health_feed(cx);
         let conf = crate::term_config::get();
         if let (Some(map), Some(ws)) = (
             conf.seance_circle_map.as_ref(),
@@ -234,10 +274,7 @@ impl SeanceApp {
                         .background_executor()
                         .spawn(async move {
                             let (text, _) = client.fs_read_string(&map).ok()?;
-                            let folder = circle_folder(&text, &circle)?;
-                            let (log, _) =
-                                client.fs_read_string(&lead_log_path(&map, &folder)).ok()?;
-                            parse_lead_log(&log)
+                            read_lead_line(&client, &map, &text, &circle)
                         })
                         .await;
                     let Some(this) = this.upgrade() else { return };
@@ -258,6 +295,12 @@ impl SeanceApp {
                 .detach();
             }
         }
+    }
+
+    /// Re-read the health report when it's due (Stage's footer, the Wall's
+    /// feed and footer).
+    pub(super) fn health_feed(&mut self, cx: &mut Context<Self>) {
+        let conf = crate::term_config::get();
         if let Some(path) = conf.seance_health_file.as_ref() {
             let due = !self.stage.health_busy
                 && self
@@ -291,7 +334,7 @@ impl SeanceApp {
         }
     }
 
-    fn pane_state(&self, p: &Pane, cx: &Context<Self>) -> PaneState {
+    pub(super) fn pane_state(&self, p: &Pane, cx: &Context<Self>) -> PaneState {
         let st = |label: &str, color, band, quiet| PaneState {
             label: label.to_string(),
             color,
@@ -344,7 +387,7 @@ impl SeanceApp {
 
     /// Everything waiting on you, in every circle: panes that say they need
     /// you and questions agents asked.
-    fn stage_waiting(&self) -> Vec<Waiting> {
+    pub(super) fn stage_waiting(&self) -> Vec<Waiting> {
         let mut out = Vec::new();
         for p in &self.panes {
             let ask = self
@@ -467,16 +510,7 @@ impl SeanceApp {
 
     /// ✦ mark, circle pills, the layout toggle and the jump box.
     fn render_stage_top(&self, width: f32, cx: &Context<Self>) -> AnyElement {
-        // Renames edit in the strip: Stage has no rail to hold the field,
-        // and a focused field outside the frame would strand the keyboard.
-        let rename = self.renaming.as_ref().map(|(t, i)| {
-            let what = match t {
-                RenameTarget::Pane(_) => "rename pane",
-                RenameTarget::Workspace(_) => "rename circle",
-                RenameTarget::Space(_) => "rename space",
-            };
-            (what, i.clone())
-        });
+        let rename = self.render_rename_field();
         let renaming = rename.is_some();
         let selected = self.selected_workspace.clone();
         // The selected circle's space, so its own pill is always there.
@@ -549,7 +583,7 @@ impl SeanceApp {
                 .hover(|s| s.text_color(SeancePalette::text()))
                 .tooltip(tip_s(format!("{names} · opens the jump palette")))
                 .on_click(cx.listener(|this, _, window, cx| {
-                    this.stage_open_jump(window, cx);
+                    this.open_jump(window, cx);
                 }))
                 .child(format!("+{} more", hidden.len()))
         });
@@ -598,16 +632,7 @@ impl SeanceApp {
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .when_some(rename, |d, (what, input)| {
-                        d.child(
-                            div()
-                                .flex_none()
-                                .text_xs()
-                                .text_color(SeancePalette::text_faint())
-                                .child(what),
-                        )
-                        .child(div().w(px(260.)).child(Input::new(&input)))
-                    })
+                    .children(rename)
                     .when(!renaming, |d| d.children(pills).children(more)),
             )
             .child(
@@ -635,7 +660,7 @@ impl SeanceApp {
                     .cursor_pointer()
                     .hover(|s| s.border_color(SeancePalette::flame_dim()))
                     .on_click(cx.listener(|this, _, window, cx| {
-                        this.stage_open_jump(window, cx);
+                        this.open_jump(window, cx);
                     }))
                     .child("⌕")
                     .child(
@@ -657,6 +682,33 @@ impl SeanceApp {
                     ),
             )
             .into_any_element()
+    }
+
+    /// The rename field, for layouts with no rail to hold it (Stage, Wall):
+    /// a focused field outside the frame would strand the keyboard.
+    pub(super) fn render_rename_field(&self) -> Option<AnyElement> {
+        let (target, input) = self.renaming.as_ref()?;
+        let what = match target {
+            RenameTarget::Pane(_) => "rename pane",
+            RenameTarget::Workspace(_) => "rename circle",
+            RenameTarget::Space(_) => "rename space",
+        };
+        Some(
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(SeancePalette::text_faint())
+                        .child(what),
+                )
+                .child(div().w(px(260.)).child(Input::new(input)))
+                .into_any_element(),
+        )
     }
 
     /// A pill's status mark: needs you, working, done, exited or idle.
@@ -1029,7 +1081,9 @@ impl SeanceApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let slugs = self.stage_crew_slugs(on_stage, cx);
-        self.stage.last_lines.retain(|s, _| slugs.contains(s));
+        self.stage
+            .last_lines
+            .retain(|s| slugs.iter().any(|x| x == s));
         let mono = cx.theme().mono_font_family.clone();
         let mut cards = Vec::with_capacity(slugs.len());
         for slug in &slugs {
@@ -1043,7 +1097,8 @@ impl SeanceApp {
             let host = host.map(str::to_string);
             let p_slug = pane.slug.clone();
             let snap = pane.remote_terminal().map(|t| t.read(cx).snapshot.clone());
-            let last = snap.and_then(|snap| self.cached_last_line(&p_slug, &snap));
+            let last =
+                snap.and_then(|snap| self.stage.last_lines.lines(&p_slug, &snap).last().cloned());
             let quiet = state.quiet;
             let click = p_slug.clone();
             cards.push(
@@ -1157,20 +1212,6 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    /// A card's last line, read from the grid only when the grid changed.
-    fn cached_last_line(&mut self, slug: &str, snap: &Arc<GridSnapshot>) -> Option<String> {
-        if let Some((rev, line)) = self.stage.last_lines.get(slug) {
-            if *rev == snap.rev {
-                return line.clone();
-            }
-        }
-        let line = last_output_line(&bottom_rows(snap, LAST_LINE_ROWS));
-        self.stage
-            .last_lines
-            .insert(slug.to_string(), (snap.rev, line.clone()));
-        line
-    }
-
     /// FILES: the circle's file panes as tabs, the open one below. Shares the
     /// dock's open tab, so both layouts agree on which file is up.
     fn render_stage_files(&self, cx: &Context<Self>) -> Option<AnyElement> {
@@ -1266,8 +1307,9 @@ impl SeanceApp {
         )
     }
 
-    /// One line from the health report: XPS, Mac, leads, plan, report time.
-    fn render_stage_footer(&self) -> Option<AnyElement> {
+    /// The health report's facts, a dot for those that have one: XPS, Mac,
+    /// leads, plan. None when there is no report to show.
+    pub(super) fn health_facts(&self) -> Option<Vec<(Option<Hsla>, String)>> {
         crate::term_config::get().seance_health_file.as_ref()?;
         let h = self.stage.health.as_ref()?;
         let level = match h.level {
@@ -1286,6 +1328,16 @@ impl SeanceApp {
                 "Mac asleep · panes waiting".to_string(),
             ),
         };
+        let mut facts = vec![(Some(level), xps), (Some(mac_dot), mac)];
+        facts.extend(h.leads.clone().map(|l| (None, l)));
+        facts.extend(h.plan.clone().map(|p| (None, p)));
+        Some(facts)
+    }
+
+    /// One line from the health report: XPS, Mac, leads, plan, report time.
+    fn render_stage_footer(&self) -> Option<AnyElement> {
+        let facts = self.health_facts()?;
+        let at = self.stage.health.as_ref().and_then(|h| h.at.clone());
         let item = |dot: Option<Hsla>, text: String| {
             div()
                 .flex_none()
@@ -1309,11 +1361,8 @@ impl SeanceApp {
                 .bg(SeancePalette::bg_elevated())
                 .border_t_1()
                 .border_color(SeancePalette::border())
-                .child(item(Some(level), xps))
-                .child(item(Some(mac_dot), mac))
-                .children(h.leads.clone().map(|l| item(None, l)))
-                .children(h.plan.clone().map(|p| item(None, p)))
-                .children(h.at.clone().map(|at| {
+                .children(facts.into_iter().map(|(dot, text)| item(dot, text)))
+                .children(at.map(|at| {
                     div()
                         .ml_auto()
                         .flex_none()
@@ -1324,8 +1373,21 @@ impl SeanceApp {
     }
 }
 
+/// The newest Doing / Next / Waiting on for `circle`, from the circle map
+/// text already read from `map`. Runs off the UI thread.
+pub(super) fn read_lead_line(
+    client: &crate::gui_client::GuiClient,
+    map: &str,
+    map_text: &str,
+    circle: &str,
+) -> Option<LeadLine> {
+    let folder = circle_folder(map_text, circle)?;
+    let (log, _) = client.fs_read_string(&lead_log_path(map, &folder)).ok()?;
+    parse_lead_log(&log)
+}
+
 /// Terminals that can take the stage: not files, not popped out.
-fn stageable(p: &Pane) -> bool {
+pub(super) fn stageable(p: &Pane) -> bool {
     matches!(p.body, PaneBody::Remote { .. }) && p.popped.is_none()
 }
 
@@ -1342,7 +1404,7 @@ fn bottom_rows(snap: &GridSnapshot, n: usize) -> Vec<String> {
         .collect()
 }
 
-fn glyph(text: &'static str, color: Hsla) -> AnyElement {
+pub(super) fn glyph(text: &'static str, color: Hsla) -> AnyElement {
     div()
         .flex_none()
         .text_color(color)
@@ -1354,7 +1416,7 @@ fn host_chip(host: &str) -> gpui::Div {
     host_chip_owned(host.to_string())
 }
 
-fn host_chip_owned(host: String) -> gpui::Div {
+pub(super) fn host_chip_owned(host: String) -> gpui::Div {
     div()
         .flex_none()
         .px(px(7.))
@@ -1368,7 +1430,7 @@ fn host_chip_owned(host: String) -> gpui::Div {
 
 /// The small outlined (or, `strong`, violet-filled) buttons in the strip,
 /// the needs-you chips and the crew header.
-fn chip_button(label: &str, strong: bool) -> gpui::Div {
+pub(super) fn chip_button(label: &str, strong: bool) -> gpui::Div {
     let d = div()
         .flex_none()
         .px(px(9.))

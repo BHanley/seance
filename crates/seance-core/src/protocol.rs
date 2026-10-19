@@ -123,6 +123,43 @@ mod hello_tests {
         ));
     }
 
+    /// The Today feed's poll: one `op` and one `fs_op` tag, the fields flat
+    /// beside them, and a line without the optional fields still parses.
+    #[test]
+    fn events_fs_op_roundtrips_flat_inside_fs() {
+        let req = GuiRequest::Fs {
+            id: 7,
+            fs: FsOp::Events {
+                since_ms: 1000,
+                since_seq: 42,
+                kinds: vec!["status_set".into()],
+                limit: 50,
+            },
+        };
+        let line = serde_json::to_string(&req).unwrap();
+        assert_eq!(
+            line,
+            r#"{"op":"fs","id":7,"fs_op":"events","since_ms":1000,"since_seq":42,"kinds":["status_set"],"limit":50}"#
+        );
+        let back: GuiRequest = serde_json::from_str(&line).unwrap();
+        assert!(matches!(
+            back,
+            GuiRequest::Fs {
+                id: 7,
+                fs: FsOp::Events { since_ms: 1000, since_seq: 42, ref kinds, limit: 50 }
+            } if kinds == &["status_set".to_string()]
+        ));
+        let bare: GuiRequest =
+            serde_json::from_str(r#"{"op":"fs","id":1,"fs_op":"events","limit":5}"#).unwrap();
+        assert!(matches!(
+            bare,
+            GuiRequest::Fs {
+                fs: FsOp::Events { since_ms: 0, since_seq: 0, ref kinds, limit: 5 },
+                ..
+            } if kinds.is_empty()
+        ));
+    }
+
     /// An older client meeting `view` must fail to parse it (and skip the
     /// line), not misread it as some other event.
     #[test]
@@ -396,6 +433,20 @@ pub enum FsOp {
     /// truncated to 64KiB per stream. → `{status, stdout, stderr}`.
     Shell {
         cmd: String,
+    },
+    /// The daemon's recent events of some `kinds` (prefix match, as `ctl
+    /// watch` does), oldest first, the newest `limit` of those with
+    /// `ts >= since_ms` and `seq > since_seq`. The Wall's Today feed polls
+    /// this with its last seq. → `{events: [Event], seq}`, `seq` being the
+    /// daemon's current high-water mark.
+    Events {
+        #[serde(default)]
+        since_ms: u64,
+        #[serde(default)]
+        since_seq: u64,
+        #[serde(default)]
+        kinds: Vec<String>,
+        limit: usize,
     },
 }
 

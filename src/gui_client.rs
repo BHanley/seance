@@ -557,6 +557,30 @@ impl GuiClient {
         })
     }
 
+    /// The daemon's recent events of `kinds` (see `FsOp::Events`), oldest
+    /// first, plus its current seq. Background threads only.
+    pub fn recent_events(
+        &self,
+        since_ms: u64,
+        since_seq: u64,
+        kinds: &[&str],
+        limit: usize,
+    ) -> Result<(Vec<crate::events::Event>, u64)> {
+        let mut v = self.fs_call(
+            crate::runtime::protocol::FsOp::Events {
+                since_ms,
+                since_seq,
+                kinds: kinds.iter().map(|k| k.to_string()).collect(),
+                limit,
+            },
+            FS_TIMEOUT,
+        )?;
+        let seq = v.get("seq").and_then(|s| s.as_u64()).unwrap_or(0);
+        let events = serde_json::from_value(v["events"].take())
+            .map_err(|e| anyhow::anyhow!("events: {e}"))?;
+        Ok((events, seq))
+    }
+
     /// Run a host widget select command daemon-side; returns its stdout.
     pub fn host_select(&self, widget: &str, item: &str) -> Result<String> {
         let v = self.fs_call(

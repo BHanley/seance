@@ -161,7 +161,7 @@ attention routing free.
 | ctrl+shift+k | precanned prompt palette |
 | ctrl+shift+j | fuzzy jump (workspace) |
 | ctrl+shift+z | focus-zoom active pane |
-| ctrl+shift+space | Wall layout (live map of every circle); again or esc goes back |
+| ctrl+shift+space | peek at the Wall (a tile per circle); again or esc goes back |
 | ctrl+shift+t | next layout: classic → stage → wall |
 | ctrl+shift+r | rename selected workspace |
 | ctrl+shift+f | last failed shell command |
@@ -192,9 +192,9 @@ Each window has a layout, picked from the **classic · stage · wall** toggle
 
 - **classic**: the rail and pane grid, exactly as before. The default.
 - **stage**: one circle's lead up front. See below.
-- **wall**: every circle live, the old overview (ctrl+shift+space). Leaving
-  it with esc, ctrl+shift+space or a click on a circle returns to the layout
-  you opened it from.
+- **wall**: a tile per circle and a Today feed. See below. Leaving it with
+  esc or ctrl+shift+space returns to the layout you opened it from; Focus
+  goes to stage.
 
 Windows choose independently, so the laptop can sit on stage while the desk
 stays classic. The last pick is saved on the GUI's own machine in
@@ -253,6 +253,40 @@ lead log's newest `## ` entry supplies the line, from bullets such as
 file is re-read every minute; its first line is
 `# Seance health <date> <time>: <status>`. Leave a key out and its part of
 Stage stays hidden.
+
+### Wall
+
+The Wall replaces the rail and grid with a tile for every circle of the
+current space (the rail's list, in rail order) and a Today feed down the
+right side.
+
+- **Header.** ✦ opens the rail's menu. Then the spaces (click one to show
+  it), a **Wall · Focus** switch (Focus opens the selected circle on stage),
+  a summary such as "9 circles awake · 1 needs you · 1 down", the layout
+  toggle and a jump box for the jump palette (ctrl+shift+j).
+- **Tiles.** The selected circle is a big tile, two columns by two rows,
+  with its lead live (read only) and the lead's name, machine, crew count
+  and state in its header, plus a **Focus** button. Every other circle
+  shows its state, the lead's last two lines of output and, from its
+  `LEAD-LOG.md`, a "Next:" or "Waiting on:" line. A circle that needs you
+  has a violet ring and an **Open** button that opens stage with the pane
+  that asked; a circle whose lead has exited is red with **Open**; a lead
+  waiting on a sleeping Mac (`claude-mac`'s message) is dashed and dimmed.
+  Circles put to sleep fold into one "+N asleep" tile; click it to show
+  them. The grid is four columns, three or two on narrower windows, and
+  scrolls when there are more circles than fit.
+- **Today.** The day's events from the daemon's event log, newest first, up
+  to 50: needs-you raised, done (with how long it worked), panes exited,
+  lead changes, circles put to sleep or woken, the health check report and,
+  while this window watched, a lead's Mac going to sleep or coming back. The
+  health footer from Stage sits under it. Below about 1100px the feed folds
+  behind a "Today" button.
+
+Keys on the Wall: arrows move the selection between tiles, Enter (or a
+double click, or Focus) opens the selected circle on stage, esc goes back.
+A single click selects. Typing reaches no pane while the Wall is up; the
+app chords still work. Every circle's grid streams to the Wall while it is
+showing and stops when it is not.
 
 ## Terminal settings (Ghostty syntax)
 

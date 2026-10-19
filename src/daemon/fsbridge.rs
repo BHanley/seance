@@ -143,6 +143,17 @@ fn run_inner(op: FsOp, engine: &SharedEngine) -> Result<Value, String> {
                 "stderr": clip(&out.stderr),
             }))
         }
+        FsOp::Events {
+            since_ms,
+            since_seq,
+            kinds,
+            limit,
+        } => {
+            // A client asks for what it shows; the cap keeps a bad request
+            // from shipping the whole log.
+            let events = crate::events::recent(since_ms, since_seq, &kinds, limit.min(5000));
+            Ok(json!({ "events": events, "seq": crate::events::current_seq() }))
+        }
         FsOp::HostSelect { widget, item } => {
             // Fresh load: select is rare and config may have changed on disk.
             let mut host = HostState::load();
@@ -282,6 +293,61 @@ pub fn start_host_poller(engine: SharedEngine) {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt as _;
+
+    /// The Today feed's exact request line, parsed the way `serve_gui`
+    /// parses it and run by the same handler, reads the daemon's own log.
+    #[test]
+    fn events_line_runs_through_the_daemon_handler() {
+        let _g = crate::state::test_env_lock();
+        let prev = std::env::var("SEANCE_STATE_DIR").ok();
+        let dir = std::env::temp_dir().join(format!("seance-fs-events-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("SEANCE_STATE_DIR", &dir);
+        std::fs::write(
+            dir.join("events.jsonl"),
+            concat!(
+                r#"{"id":"evt_1","seq":1,"ts":5,"actor":"daemon","pane":"a","kind":"pane_exited","detail":"x"}"#,
+                "\n",
+                r#"{"id":"evt_2","seq":2,"ts":6,"actor":"human","pane":"a","kind":"terminal.input","detail":"k"}"#,
+                "\n",
+                r#"{"id":"evt_3","seq":3,"ts":7,"actor":"agent:a","workspace":"w","pane":"a","kind":"status_set","detail":"done: ok"}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+
+        let line = r#"{"op":"fs","id":3,"fs_op":"events","since_ms":0,"since_seq":0,"kinds":["status_set","pane_exited"],"limit":50}"#;
+        let req: crate::runtime::protocol::GuiRequest = serde_json::from_str(line).unwrap();
+        let crate::runtime::protocol::GuiRequest::Fs { id, fs } = req else {
+            panic!("not an fs request");
+        };
+        assert_eq!(id, 3);
+        let scratch = dir.join("scratch");
+        let (eng, _rx) = crate::runtime::engine::Engine::bare_for_test(scratch);
+        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(eng));
+        let (ok, data, error) = run(fs, &engine);
+        assert!(ok, "{error:?}");
+        let data = data.unwrap();
+        // Tests running beside this one may log real events into the same
+        // state dir; ours are the ones stamped in 1970.
+        let ours: Vec<&Value> = data["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["ts"].as_u64().is_some_and(|t| t < 100))
+            .collect();
+        let kinds: Vec<&str> = ours.iter().map(|e| e["kind"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["pane_exited", "status_set"]);
+        assert_eq!(ours[1]["workspace"], "w");
+        assert!(data["seq"].is_u64());
+
+        match prev {
+            Some(v) => std::env::set_var("SEANCE_STATE_DIR", v),
+            None => std::env::remove_var("SEANCE_STATE_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn write_if_unchanged_follows_symlinks_keeps_mode_and_refuses_stale() {

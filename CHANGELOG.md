@@ -21,7 +21,7 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 - **Layouts.** A classic · stage · wall toggle sits under the logo in the
   rail (and in the top bar of the other two); ctrl+shift+t cycles them.
-  Classic is today's layout, unchanged. Wall is the live overview
+  Classic is today's layout, unchanged. Wall replaces the live overview
   (ctrl+shift+space still toggles it, and leaving it returns to the layout
   you came from). Each window
   keeps its own layout and the GUI machine remembers the last pick in
@@ -42,6 +42,17 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   files; both are optional. The daemon now sends each circle's lead in
   State and pushes a fresh State when `ctl lead --set` changes it. See
   README, "Stage".
+
+- **Wall layout.** A tile per circle of the current space, in rail order,
+  with the selected circle big (its lead live) and a Today feed on the
+  right, replacing the old overview. Tiles show each circle's state (needs
+  you with an Open button, done, working, lead exited, waiting on a sleeping
+  Mac, idle), the lead's last two output lines and the LEAD-LOG's Next or
+  Waiting on; sleeping circles fold into a "+N asleep" tile. Arrows move the
+  selection, Enter or a double click opens Stage on it (Focus), and typing
+  no longer reaches a hidden pane while the Wall is up. The feed reads the
+  day's needs-you, done, exit, lead and sleep events from a new fs bridge op
+  (`fs_op: "events"`), plus the health report. See README, "Wall".
 
 - **Color schemes.** Nine looks for the whole app, chrome and terminal
   colors together: candlelit (the default, unchanged), abyssal, ectoplasm,

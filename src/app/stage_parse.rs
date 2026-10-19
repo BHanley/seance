@@ -136,6 +136,8 @@ pub(super) struct Health {
     pub status: String,
     /// "11:48" from the title.
     pub at: Option<String>,
+    /// "2026-10-19" from the title, so the Wall's feed shows only today's.
+    pub day: Option<String>,
     /// "memory 34% free".
     pub xps_memory: Option<String>,
     /// None = the report has no Mac line or says it is out of reach.
@@ -157,6 +159,10 @@ pub(super) fn parse_health(text: &str) -> Option<Health> {
         .split_whitespace()
         .last()
         .filter(|t| t.contains(':'))
+        .map(str::to_string);
+    let day = stamp
+        .split_whitespace()
+        .find(|t| t.len() == 10 && t.as_bytes()[4] == b'-' && t.as_bytes()[7] == b'-')
         .map(str::to_string);
     let status = status
         .split(',')
@@ -182,6 +188,7 @@ pub(super) fn parse_health(text: &str) -> Option<Health> {
             ellipsize(&status, 24)
         },
         at,
+        day,
         xps_memory: None,
         mac: None,
         leads: None,
@@ -348,9 +355,10 @@ pub(super) fn pane_host<'a>(name: &'a str, command: &str) -> (&'a str, Option<&'
     (name, mac.then_some("Mac"))
 }
 
-/// The pane's last line of real output, skipping blank lines and a TUI's
-/// input box at the bottom (rules, the `❯` prompt, the hints under it).
-pub(super) fn last_output_line(rows: &[String]) -> Option<String> {
+/// The pane's last `n` lines of real output, oldest first, skipping blank
+/// lines and a TUI's input box at the bottom (rules, the `❯` prompt, the
+/// hints under it).
+pub(super) fn last_output_lines(rows: &[String], n: usize) -> Vec<String> {
     let is_rule = |l: &str| {
         let t = l.trim();
         t.chars().count() >= 3
@@ -365,12 +373,16 @@ pub(super) fn last_output_line(rows: &[String]) -> Option<String> {
         .position(|l| is_rule(l))
         .map(|i| floor + i)
         .unwrap_or(rows.len());
-    rows[..end]
+    let mut out: Vec<String> = rows[..end]
         .iter()
         .rev()
         .map(|l| l.trim())
-        .find(|l| !l.is_empty() && !is_rule(l))
+        .filter(|l| !l.is_empty() && !is_rule(l))
+        .take(n)
         .map(|l| ellipsize(l, 120))
+        .collect();
+    out.reverse();
+    out
 }
 
 #[cfg(test)]
@@ -494,6 +506,7 @@ The circle lead's running log, newest first. Doing / Done / Next / Waiting on.\n
         assert_eq!(h.level, HealthLevel::Healthy);
         assert_eq!(h.status, "healthy");
         assert_eq!(h.at.as_deref(), Some("11:48"));
+        assert_eq!(h.day.as_deref(), Some("2026-10-19"));
         assert_eq!(h.xps_memory.as_deref(), Some("memory 34% free"));
         assert_eq!(h.mac.as_deref(), Some("Mac up · memory 34% free"));
         assert_eq!(h.leads.as_deref(), Some("every circle has a lead"));
@@ -528,6 +541,7 @@ The circle lead's running log, newest first. Doing / Done / Next / Waiting on.\n
         let bare = parse_health("# Seance health\n").unwrap();
         assert_eq!(bare.status, "unknown");
         assert_eq!(bare.at, None);
+        assert_eq!(bare.day, None);
     }
 
     #[test]
@@ -586,6 +600,10 @@ The circle lead's running log, newest first. Doing / Done / Next / Waiting on.\n
         );
     }
 
+    fn last_output_line(rows: &[String]) -> Option<String> {
+        last_output_lines(rows, 1).pop()
+    }
+
     fn rows(s: &[&str]) -> Vec<String> {
         s.iter().map(|r| r.to_string()).collect()
     }
@@ -617,6 +635,11 @@ The circle lead's running log, newest first. Doing / Done / Next / Waiting on.\n
             last_output_line(&shell).as_deref(),
             Some("bhanley@omarchy:~$")
         );
+        assert_eq!(
+            last_output_lines(&claude, 2),
+            ["  Three ideas, ranked".trim(), "✻ Cooked for 48s"]
+        );
+        assert_eq!(last_output_lines(&shell, 5).len(), 3);
         assert_eq!(last_output_line(&rows(&["", "   "])), None);
         assert_eq!(last_output_line(&[]), None);
     }

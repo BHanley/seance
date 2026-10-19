@@ -302,6 +302,119 @@ pub fn read_ex(
     events
 }
 
+/// How far back from the end of the log [`recent`] reads. A day of the
+/// kinds the Wall asks for is well under this; the whole log can be far
+/// bigger, and reading all of it every refresh is wasted work.
+const TAIL_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Recent events of some kinds, oldest first, at most `limit` (the newest
+/// kept). With a `since_seq` cursor the in-memory ring answers when it
+/// still holds everything after it, so a client polling for new events
+/// costs no disk read; otherwise the log's tail is read.
+pub fn recent(since_ms: u64, since_seq: u64, kinds: &[String], limit: usize) -> Vec<Event> {
+    if since_seq > 0 {
+        if let Some(ring) = ring_after(since_seq) {
+            return trim_to_limit(
+                ring.into_iter()
+                    .filter(|e| {
+                        e.ts >= since_ms && matches_filter(e, None, None, None, Some(kinds))
+                    })
+                    .collect(),
+                limit,
+            );
+        }
+    }
+    read_tail_at(&log_path(), since_ms, since_seq, kinds, limit, TAIL_BYTES)
+}
+
+/// The ring's events after `since_seq`, or None when the ring no longer
+/// reaches back that far (the daemon restarted, or the ring rolled over).
+fn ring_after(since_seq: u64) -> Option<Vec<Event>> {
+    let ring = bus().ring.lock().ok()?;
+    let covered = match ring.front() {
+        Some(first) => first.seq <= since_seq + 1,
+        None => current_seq() == since_seq,
+    };
+    covered.then(|| ring.iter().filter(|e| e.seq > since_seq).cloned().collect())
+}
+
+/// [`read_ex`] over only the last `tail_bytes` of `path`, with a cheap text
+/// check before each line is parsed: most lines are keystrokes nobody asked
+/// for.
+pub fn read_tail_at(
+    path: &std::path::Path,
+    since_ms: u64,
+    since_seq: u64,
+    kinds: &[String],
+    limit: usize,
+    tail_bytes: u64,
+) -> Vec<Event> {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let start = len.saturating_sub(tail_bytes);
+    if f.seek(SeekFrom::Start(start)).is_err() {
+        return Vec::new();
+    }
+    let mut buf = Vec::new();
+    if f.read_to_end(&mut buf).is_err() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&buf);
+    // A cut into the middle of a line leaves a fragment: skip it.
+    let body = if start > 0 {
+        text.split_once('\n').map_or("", |(_, rest)| rest)
+    } else {
+        &text
+    };
+    let needles: Vec<String> = kinds.iter().map(|k| format!("\"kind\":\"{k}")).collect();
+    let events = body
+        .lines()
+        .filter(|l| needles.is_empty() || needles.iter().any(|n| l.contains(n.as_str())))
+        .filter_map(|l| serde_json::from_str::<Event>(l).ok())
+        .filter(|e| e.ts >= since_ms && (since_seq == 0 || e.seq > since_seq))
+        .filter(|e| matches_filter(e, None, None, None, Some(kinds)))
+        .collect();
+    trim_to_limit(events, limit)
+}
+
+fn trim_to_limit(mut events: Vec<Event>, limit: usize) -> Vec<Event> {
+    let skip = events.len().saturating_sub(limit);
+    events.drain(..skip);
+    events
+}
+
+/// Unix ms of this machine's most recent local midnight.
+pub fn local_day_start_ms(now_ms: u64) -> u64 {
+    let offset = local_offset_secs();
+    let local = (now_ms / 1000) as i64 + offset;
+    let midnight = local - local.rem_euclid(86_400) - offset;
+    midnight.max(0) as u64 * 1000
+}
+
+/// The local calendar date of `ts_ms` as `YYYY-MM-DD`.
+pub fn local_date(ts_ms: u64) -> String {
+    let local = (ts_ms / 1000) as i64 + local_offset_secs();
+    let (y, m, d) = civil_from_days(local.div_euclid(86_400));
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Days since 1970-01-01 to (year, month, day), proleptic Gregorian
+/// (Howard Hinnant's algorithm).
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (yoe + era * 400 + i64::from(m <= 2), m, d)
+}
+
 /// Does `event` match a watch filter?
 pub fn matches_filter(
     e: &Event,
@@ -380,7 +493,10 @@ mod tests {
 
     #[test]
     fn log_assigns_seq_and_id() {
-        // Isolated state dir so we don't pollute the real log.
+        // Isolated state dir so we don't pollute the real log, under the
+        // lock every test that moves SEANCE_STATE_DIR shares.
+        let _g = crate::state::test_env_lock();
+        let prev = std::env::var("SEANCE_STATE_DIR").ok();
         let dir = std::env::temp_dir().join(format!("seance-events-test-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         std::env::set_var("SEANCE_STATE_DIR", &dir);
@@ -390,6 +506,10 @@ mod tests {
         assert!(!e.id.is_empty() || e.seq > 0 || e.ts > 0);
         assert_eq!(e.kind, "test_kind");
         assert_eq!(e.actor, "cli");
+        match prev {
+            Some(v) => std::env::set_var("SEANCE_STATE_DIR", v),
+            None => std::env::remove_var("SEANCE_STATE_DIR"),
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -412,6 +532,58 @@ mod tests {
         assert!(matches_filter(&e, Some("lab"), None, None, Some(&kinds)));
         let kinds2 = vec!["status_set".into()];
         assert!(!matches_filter(&e, None, None, None, Some(&kinds2)));
+    }
+
+    #[test]
+    fn civil_dates_and_midnights() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(20_745), (2026, 10, 19));
+        assert_eq!(civil_from_days(-1), (1969, 12, 31));
+        assert_eq!(civil_from_days(11_016), (2000, 2, 29));
+        let now = 1_792_439_251_966;
+        let start = local_day_start_ms(now);
+        assert!(start <= now && now - start < 86_400_000);
+        assert_eq!(start % 1000, 0);
+        assert_eq!(local_date(start), local_date(now));
+        assert_ne!(local_date(start - 1), local_date(now));
+    }
+
+    #[test]
+    fn tail_reads_skip_the_cut_line_and_filter_kinds() {
+        let dir = std::env::temp_dir().join(format!("seance-tail-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("events.jsonl");
+        let line = |seq: u64, ts: u64, kind: &str| {
+            format!(
+                r#"{{"id":"evt_{seq}","seq":{seq},"ts":{ts},"actor":"daemon","pane":"p","kind":"{kind}","detail":"d"}}"#
+            )
+        };
+        let lines = [
+            line(1, 100, "status_set"),
+            line(2, 200, "terminal.input"),
+            line(3, 300, "status_set"),
+            line(4, 400, "pane_exited"),
+            line(5, 500, "status_set"),
+        ];
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+        let kinds = vec!["status_set".to_string(), "pane_exited".to_string()];
+        let seqs = |v: Vec<Event>| v.iter().map(|e| e.seq).collect::<Vec<_>>();
+        assert_eq!(
+            seqs(read_tail_at(&path, 0, 0, &kinds, 10, 1 << 20)),
+            [1, 3, 4, 5]
+        );
+        // since_ms, since_seq and limit (newest kept).
+        assert_eq!(
+            seqs(read_tail_at(&path, 300, 0, &kinds, 10, 1 << 20)),
+            [3, 4, 5]
+        );
+        assert_eq!(seqs(read_tail_at(&path, 0, 3, &kinds, 10, 1 << 20)), [4, 5]);
+        assert_eq!(seqs(read_tail_at(&path, 0, 0, &kinds, 2, 1 << 20)), [4, 5]);
+        // A tail that starts mid-line drops the fragment, keeps whole lines.
+        let tail = (lines[3].len() + lines[4].len() + 2 + 5) as u64;
+        assert_eq!(seqs(read_tail_at(&path, 0, 0, &kinds, 10, tail)), [4, 5]);
+        assert!(read_tail_at(&dir.join("missing"), 0, 0, &kinds, 10, 1 << 20).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

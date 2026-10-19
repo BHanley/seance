@@ -3,9 +3,9 @@
 //! `ctl layout`, and the last pick is saved on this machine
 //! (`~/.config/seance/view.json`), never in the daemon's shared layout.
 //!
-//! Wall is the live overview (ctrl+shift+space toggles it) and draws over
-//! the Classic tree. Stage (`stage.rs`) takes the rail and grid's place, so
-//! the pane on stage is the only place its terminal renders.
+//! Stage (`stage.rs`) and Wall (`wall.rs`) take the rail and grid's place:
+//! on Stage the pane on stage is the only place its terminal renders, and
+//! on Wall none does. ctrl+shift+space peeks at the Wall.
 
 use std::path::PathBuf;
 
@@ -123,6 +123,16 @@ impl SeanceApp {
         cx.notify();
     }
 
+    /// On opens the Wall as a peek; off goes back to the layout it was
+    /// opened from.
+    pub(super) fn set_overview(&mut self, on: bool, cx: &mut Context<Self>) {
+        if on {
+            self.peek_wall(cx);
+        } else {
+            self.leave_wall(cx);
+        }
+    }
+
     /// Back to whichever layout Wall was opened from.
     pub(super) fn leave_wall(&mut self, cx: &mut Context<Self>) {
         if self.view.mode == ViewMode::Wall {
@@ -135,18 +145,6 @@ impl SeanceApp {
     pub(super) fn apply_view_event(&mut self, view: &str, cx: &mut Context<Self>) {
         if let Some(mode) = ViewMode::parse(view) {
             self.set_view(mode, cx);
-        }
-    }
-
-    /// What draws over the Classic tree: only the Wall. Stage replaces the
-    /// tree instead (see `render`).
-    pub(super) fn render_view_overlay(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) -> Option<gpui::AnyElement> {
-        match self.view.mode {
-            ViewMode::Classic | ViewMode::Stage => None,
-            ViewMode::Wall => Some(self.render_overview(cx).into_any_element()),
         }
     }
 

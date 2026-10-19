@@ -34,7 +34,6 @@ mod chrome;
 mod dock;
 mod layout;
 mod menus;
-mod overview;
 mod pads;
 mod palette;
 mod quicklaunch;
@@ -44,6 +43,8 @@ mod stage_parse;
 mod tiles;
 mod util;
 mod views;
+mod wall;
+mod wall_model;
 mod workspaces;
 
 use self::actions::*;
@@ -295,6 +296,8 @@ pub struct SeanceApp {
     view: views::ViewState,
     /// Stage's leads, lead log line, health report and caches.
     stage: stage::StageState,
+    /// The Wall's caches and Today feed.
+    wall: wall::WallState,
     /// This window attached with an empty subscription set (second process).
     empty_window: bool,
     /// Quicklaunch strip entries (~/.config/seance/quicklaunch.json).
@@ -519,6 +522,7 @@ impl SeanceApp {
             overview: view.mode == views::ViewMode::Wall,
             view,
             stage: stage::StageState::default(),
+            wall: wall::WallState::default(),
             empty_window: empty,
             quicklaunch: Vec::new(),
             quicklaunch_mtime: None,
@@ -1507,9 +1511,11 @@ impl SeanceApp {
     /// scarcer (another circle's pane, untiled, popped, hidden by zoom) is
     /// out of the dispatch tree, where focus silently strands the keyboard.
     fn pane_content_rendered(&self, p: &Pane) -> bool {
-        // Stage renders one pane: the one on stage.
-        if self.view.mode == views::ViewMode::Stage {
-            return self.stage_pane().as_deref() == Some(p.slug.as_str());
+        // Stage renders one pane: the one on stage. The Wall renders none.
+        match self.view.mode {
+            views::ViewMode::Stage => return self.stage_pane().as_deref() == Some(p.slug.as_str()),
+            views::ViewMode::Wall => return false,
+            views::ViewMode::Classic => {}
         }
         if let Some(z) = self.zoomed_slug.as_deref() {
             if self.panes.iter().any(|q| q.slug == z) {
@@ -1718,6 +1724,12 @@ impl SeanceApp {
             return;
         }
 
+        // ---- Wall: arrows move the selection, Enter focuses ----
+        if self.wall_key(ks, window, cx) {
+            cx.stop_propagation();
+            return;
+        }
+
         // ---- escape for chrome overlays only; else let terminal get it ----
         if key == "escape" {
             if self.gui_menu_open {
@@ -1740,7 +1752,8 @@ impl SeanceApp {
                 cx.stop_propagation();
                 return;
             }
-            if self.overview {
+            // A rename open on the Wall takes esc first.
+            if self.overview && self.renaming.is_none() {
                 self.set_overview(false, cx);
                 cx.stop_propagation();
                 return;
@@ -2873,8 +2886,11 @@ impl Render for SeanceApp {
 
         // Stage takes the rail and grid's place; building them anyway would
         // render the staged terminal twice.
+        let walled = self.view.mode == views::ViewMode::Wall;
         let body: Vec<gpui::AnyElement> = if staged {
             vec![self.render_stage(window, cx)]
+        } else if walled {
+            vec![self.render_wall(window, cx)]
         } else {
             // Timed section construction (SEANCE_DEBUG_RENDER=1 reports per-section
             // avg/max ms — pinpoints which surface makes frames expensive).
@@ -2932,6 +2948,11 @@ impl Render for SeanceApp {
             // Capture phase: app chords + palette win before focused terminal.
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 this.on_global_key_capture(event, window, cx);
+                // On the Wall no pane is shown, so the keys the chords left
+                // stop here instead of reaching a hidden one.
+                if this.wall_owns_keys() {
+                    cx.stop_propagation();
+                }
             }))
             .on_action(cx.listener(|this, act: &ActToggleTiled, _, cx| {
                 this.toggle_tiled(&act.0, cx);
@@ -3167,7 +3188,6 @@ impl Render for SeanceApp {
                 }),
             )
             .children(body)
-            .children(self.render_view_overlay(cx))
             // Below the (deferred) menu dropdown, above everything else — the
             // click-away catcher for an open host menu.
             .children(self.render_host_menu_scrim(window, cx))
@@ -3175,6 +3195,8 @@ impl Render for SeanceApp {
             .children(self.render_quicklaunch_editor(cx))
             .children(self.render_gui_menu(cx))
             .children(match &self.drawer {
+                // The Wall fills the window, as the overview always did.
+                _ if walled => None,
                 // The pad and activity drawers cover the dock panel while open.
                 // Stage shows the circle's files in its own column instead.
                 Drawer::Closed if staged => None,
