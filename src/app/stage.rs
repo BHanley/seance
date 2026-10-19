@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{div, prelude::*, px, relative, AnyElement, Context, Hsla, SharedString, Window};
-use gpui_component::{ActiveTheme as _, StyledExt as _};
+use gpui_component::{input::Input, ActiveTheme as _, StyledExt as _};
 
 use crate::pane::{Pane, PaneBody};
 use crate::runtime::snapshot::GridSnapshot;
@@ -28,7 +28,7 @@ use super::stage_parse::{
 use super::util::{tip, tip_s};
 use super::views::ViewMode;
 use super::workspaces::{rel_label, WorkspaceAttention};
-use super::{PaletteMode, SeanceApp};
+use super::{PaletteMode, RenameTarget, SeanceApp};
 
 /// The lead log changes a few times an hour; the health check every 2.5h.
 const LEAD_LOG_EVERY: Duration = Duration::from_secs(30);
@@ -59,6 +59,9 @@ pub(super) struct StageState {
     health_busy: bool,
     /// Narrow windows: the crew column is open.
     crew_open: bool,
+    /// circle → the file tab Stage shows. Kept apart from the dock's pick
+    /// so Stage's tiled files never overwrite Classic's dock tab.
+    file_tab: HashMap<String, String>,
     /// pane slug → (grid rev, last output line), so a card reads its grid
     /// only when the grid changed.
     last_lines: HashMap<String, (u64, Option<String>)>,
@@ -137,6 +140,14 @@ impl SeanceApp {
         let Some(ws) = self.selected_workspace.clone() else {
             return;
         };
+        // A jump to one of the circle's files opens its tab here.
+        if let Some(a) = self.active_slug.as_deref() {
+            if self.panes.iter().any(|p| {
+                p.slug == a && p.workspace == ws && matches!(p.body, PaneBody::File { .. })
+            }) {
+                self.stage.file_tab.insert(ws.clone(), a.to_string());
+            }
+        }
         let target = if std::mem::take(&mut self.stage.want_lead) {
             self.stage_lead(&ws)
         } else {
@@ -159,6 +170,33 @@ impl SeanceApp {
             self.select_workspace(ws, window, cx);
         }
         self.set_active(slug, window, cx);
+    }
+
+    /// ctrl+shift+page on Stage: step through the panes Stage can show, the
+    /// lead and its crew, in pane order. Files and popped panes would only
+    /// bounce back to the lead.
+    pub(super) fn stage_cycle(
+        &mut self,
+        ws: &str,
+        delta: i32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let list: Vec<String> = self
+            .panes
+            .iter()
+            .filter(|p| p.workspace == ws && stageable(p))
+            .map(|p| p.slug.clone())
+            .collect();
+        if list.len() < 2 {
+            return;
+        }
+        let cur = self
+            .stage_pane()
+            .and_then(|s| list.iter().position(|x| *x == s))
+            .unwrap_or(0);
+        let next = (cur as i32 + delta).rem_euclid(list.len() as i32) as usize;
+        self.set_active(&list[next], window, cx);
     }
 
     fn stage_open_jump(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -205,6 +243,11 @@ impl SeanceApp {
                     let Some(this) = this.upgrade() else { return };
                     this.update(cx, |app: &mut SeanceApp, cx| {
                         app.stage.lead_log_busy = false;
+                        // The circle changed mid-read: repaint so its own
+                        // read starts now, not on the next tick.
+                        if app.selected_workspace.as_ref() != Some(&ws) {
+                            cx.notify();
+                        }
                         let fresh = Some((ws, line));
                         if app.stage.lead_log != fresh {
                             app.stage.lead_log = fresh;
@@ -370,11 +413,28 @@ impl SeanceApp {
         let top = self.render_stage_top(width, cx);
         let needs = self.render_stage_needs(cx);
         let lead_el = self.render_stage_lead(on_stage.as_deref(), lead.as_deref(), fold, cx);
-        let crew_el = if show_crew {
-            Some(self.render_stage_crew(on_stage.as_deref(), crew_w, cx))
-        } else {
-            None
-        };
+        let crew_el = show_crew.then(|| {
+            let crew = self.render_stage_crew(on_stage.as_deref(), crew_w, cx);
+            if !fold {
+                return crew;
+            }
+            // Folded and opened: the crew floats over the terminal's right
+            // edge rather than narrowing it (a resize would reflow the PTY).
+            div()
+                .id("stage-crew-over")
+                .absolute()
+                .top(px(10.))
+                .right(px(10.))
+                .bottom(px(10.))
+                .p(px(8.))
+                .rounded(px(10.))
+                .bg(SeancePalette::bg())
+                .border_1()
+                .border_color(SeancePalette::border())
+                .occlude()
+                .child(crew)
+                .into_any_element()
+        });
         let footer = self.render_stage_footer();
 
         div()
@@ -391,6 +451,7 @@ impl SeanceApp {
             .children(needs)
             .child(
                 div()
+                    .relative()
                     .flex_1()
                     .min_h_0()
                     .flex()
@@ -406,6 +467,17 @@ impl SeanceApp {
 
     /// ✦ mark, circle pills, the layout toggle and the jump box.
     fn render_stage_top(&self, width: f32, cx: &Context<Self>) -> AnyElement {
+        // Renames edit in the strip: Stage has no rail to hold the field,
+        // and a focused field outside the frame would strand the keyboard.
+        let rename = self.renaming.as_ref().map(|(t, i)| {
+            let what = match t {
+                RenameTarget::Pane(_) => "rename pane",
+                RenameTarget::Workspace(_) => "rename circle",
+                RenameTarget::Space(_) => "rename space",
+            };
+            (what, i.clone())
+        });
+        let renaming = rename.is_some();
         let selected = self.selected_workspace.clone();
         // The selected circle's space, so its own pill is always there.
         let space = match selected.as_deref() {
@@ -526,8 +598,17 @@ impl SeanceApp {
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .children(pills)
-                    .children(more),
+                    .when_some(rename, |d, (what, input)| {
+                        d.child(
+                            div()
+                                .flex_none()
+                                .text_xs()
+                                .text_color(SeancePalette::text_faint())
+                                .child(what),
+                        )
+                        .child(div().w(px(260.)).child(Input::new(&input)))
+                    })
+                    .when(!renaming, |d| d.children(pills).children(more)),
             )
             .child(
                 div()
@@ -1101,10 +1182,10 @@ impl SeanceApp {
                 p.workspace == ws && p.popped.is_none() && matches!(p.body, PaneBody::File { .. })
             })
             .collect();
-        let open = self
-            .dock_tab
-            .get(&ws)
-            .and_then(|s| files.iter().find(|p| &p.slug == s))
+        let open = [self.stage.file_tab.get(&ws), self.dock_tab.get(&ws)]
+            .into_iter()
+            .flatten()
+            .find_map(|s| files.iter().find(|p| &p.slug == s))
             .or(files.first())?;
         let open_slug = open.slug.clone();
         let tabs = files.iter().map(|p| {
@@ -1129,7 +1210,7 @@ impl SeanceApp {
                 .hover(|s| s.text_color(SeancePalette::text()))
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.dock_tab.insert(ws.clone(), slug.clone());
+                    this.stage.file_tab.insert(ws.clone(), slug.clone());
                     cx.notify();
                 }))
                 .child(p.name.clone())

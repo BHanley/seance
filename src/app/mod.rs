@@ -1758,7 +1758,8 @@ impl SeanceApp {
                 cx.stop_propagation();
                 return;
             }
-            if self.zoomed_slug.is_some() {
+            // Stage shows no zoom, so esc must not be spent undoing one.
+            if self.zoomed_slug.is_some() && self.view.mode != views::ViewMode::Stage {
                 self.zoomed_slug = None;
                 cx.notify();
                 cx.stop_propagation();
@@ -1871,7 +1872,7 @@ impl SeanceApp {
                     cx.notify();
                     cx.stop_propagation();
                 }
-                "z" | "m" => {
+                "z" | "m" if self.view.mode != views::ViewMode::Stage => {
                     if let Some(slug) = self.active_slug.clone() {
                         self.toggle_zoom(&slug, cx);
                         cx.stop_propagation();
@@ -2185,6 +2186,9 @@ impl SeanceApp {
         let Some(ws) = ws else {
             return;
         };
+        if self.view.mode == views::ViewMode::Stage {
+            return self.stage_cycle(&ws, delta, window, cx);
+        }
         let tiled: Vec<String> = self
             .panes
             .iter()

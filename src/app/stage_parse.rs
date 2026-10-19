@@ -54,13 +54,21 @@ pub(super) fn parse_lead_log(text: &str) -> Option<LeadLine> {
         let Some((key, value)) = item.split_once(':') else {
             continue;
         };
-        let slot = match key.trim().to_ascii_lowercase().as_str() {
+        let key = key.trim().to_ascii_lowercase();
+        // Older entries wrote "Waiting on Brian: ...": keep who it waits on.
+        let mut value = value.trim().to_string();
+        let slot = match key.as_str() {
             "doing" => &mut out.doing,
             "next" => &mut out.next,
             "waiting on" | "waiting" => &mut out.waiting,
+            k if k.starts_with("waiting on ") => {
+                let who = item.split_once(':').map_or("", |(k, _)| k)["waiting on ".len()..].trim();
+                value = format!("{who}: {value}");
+                &mut out.waiting
+            }
             _ => continue,
         };
-        let value = ellipsize(&strip_markdown(value), LEAD_FIELD_MAX);
+        let value = ellipsize(&strip_markdown(&value), LEAD_FIELD_MAX);
         if slot.is_none() && !value.is_empty() {
             *slot = Some(value);
         }
@@ -442,6 +450,8 @@ The circle lead's running log, newest first. Doing / Done / Next / Waiting on.\n
         assert_eq!(parse_lead_log("## 2026-10-15\n- Done: only done\n"), None);
         assert_eq!(parse_lead_log("no entries at all\n- **Doing:** x\n"), None);
         assert_eq!(parse_lead_log(""), None);
+        let l = parse_lead_log("## d\n- Waiting on Brian: re-try a box\n").unwrap();
+        assert_eq!(l.waiting.as_deref(), Some("Brian: re-try a box"));
         // `**Doing**:` puts the colon outside the bold.
         let l = parse_lead_log("## d\n- **Doing**: bold outside\n").unwrap();
         assert_eq!(l.doing.as_deref(), Some("bold outside"));
