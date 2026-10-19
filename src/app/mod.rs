@@ -1868,6 +1868,11 @@ impl SeanceApp {
                     self.navigate_pane_directional(key, window, cx);
                     cx.stop_propagation();
                 }
+                // The prompts palette injects into the active pane, which
+                // the Wall hides: the chord does nothing there.
+                "k" if !wall_model::may_write_to_active(self.view.mode) => {
+                    cx.stop_propagation();
+                }
                 "k" => {
                     self.palette = PaletteMode::Prompts {
                         query: String::new(),
@@ -2808,6 +2813,13 @@ impl SeanceApp {
     }
 
     fn inject_prompt_into_active(&mut self, body: &str, cx: &mut Context<Self>) {
+        // A palette left open across a switch to the Wall must not type
+        // into a pane nobody can see.
+        if !wall_model::may_write_to_active(self.view.mode) {
+            self.palette = PaletteMode::Closed;
+            cx.notify();
+            return;
+        }
         let Some(slug) = self.active_slug.clone() else {
             return;
         };
