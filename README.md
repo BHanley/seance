@@ -192,7 +192,7 @@ Each window has a layout, picked from the **classic · stage · wall** toggle
 
 - **classic**: the rail and pane grid, exactly as before. The default.
 - **stage**: one circle's lead up front. Placeholder screen for now; your
-  panes keep running underneath.
+  panes keep running underneath, and esc goes back to classic.
 - **wall**: every circle live, the old overview (ctrl+shift+space). Leaving
   it with esc, ctrl+shift+space or a click on a circle returns to the layout
   you opened it from.
@@ -200,7 +200,8 @@ Each window has a layout, picked from the **classic · stage · wall** toggle
 Windows choose independently, so the laptop can sit on stage while the desk
 stays classic. The last pick is saved on the GUI's own machine in
 `~/.config/seance/view.json` (`$XDG_CONFIG_HOME/seance/` when set) and
-restored on launch; the daemon does not store it. `seance ctl layout` lists
+restored on launch; the daemon does not store it. A ctrl+shift+space peek at
+the wall is not saved, and a blank second window always opens on classic. `seance ctl layout` lists
 the layouts and each attached window's current one; `seance ctl layout NAME`
 switches every attached window at once.
 

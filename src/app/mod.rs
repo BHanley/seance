@@ -449,7 +449,7 @@ impl SeanceApp {
         let empty = empty || client.is_empty_window();
         let subs_seeded = pref.is_some() && !empty;
         let remote_cache = Arc::new(crate::remote_cache::RemoteCache::new(Arc::clone(&client)));
-        let view = views::ViewState::restore();
+        let view = views::ViewState::restore(empty);
 
         let mut app = SeanceApp {
             panes: Vec::new(),
@@ -1728,6 +1728,11 @@ impl SeanceApp {
             }
             if self.overview {
                 self.set_overview(false, cx);
+                cx.stop_propagation();
+                return;
+            }
+            if self.view.mode == views::ViewMode::Stage {
+                self.set_view(views::ViewMode::Classic, cx);
                 cx.stop_propagation();
                 return;
             }

@@ -25,7 +25,7 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   (ctrl+shift+space still toggles it, and leaving it returns to the layout
   you came from). Stage shows a placeholder until it is built. Each window
   keeps its own layout and the GUI machine remembers the last pick in
-  `~/.config/seance/view.json`. `seance ctl layout` lists the layouts and
+  `~/.config/seance/view.json` (a ctrl+shift+space peek is not saved). `seance ctl layout` lists the layouts and
   each window's current one; `seance ctl layout NAME` switches every
   attached window.
 

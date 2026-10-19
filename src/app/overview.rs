@@ -16,7 +16,7 @@ impl SeanceApp {
     /// layout it was opened from.
     pub(super) fn set_overview(&mut self, on: bool, cx: &mut Context<Self>) {
         if on {
-            self.set_view(super::views::ViewMode::Wall, cx);
+            self.peek_wall(cx);
         } else {
             self.leave_wall(cx);
         }

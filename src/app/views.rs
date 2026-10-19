@@ -23,17 +23,26 @@ use super::SeanceApp;
 pub(super) struct ViewState {
     pub(super) mode: ViewMode,
     before_wall: ViewMode,
+    /// Off for blank windows, which show nothing on Wall and, like their
+    /// rail list, must not overwrite this machine's pick.
+    persist: bool,
 }
 
 impl ViewState {
-    /// This machine's last pick; Classic when there is none.
-    pub(super) fn restore() -> Self {
-        let mode = std::fs::read_to_string(config_path())
-            .map(|s| decode(&s))
-            .unwrap_or_default();
+    /// This machine's last pick; Classic when there is none, and always
+    /// for a blank window.
+    pub(super) fn restore(empty: bool) -> Self {
+        let mode = if empty {
+            ViewMode::Classic
+        } else {
+            std::fs::read_to_string(config_path())
+                .map(|s| decode(&s))
+                .unwrap_or_default()
+        };
         ViewState {
             mode,
             before_wall: ViewMode::Classic,
+            persist: !empty,
         }
     }
 }
@@ -81,7 +90,18 @@ impl SeanceApp {
         }
     }
 
+    /// A deliberate pick (toggle, ctrl+shift+l, `ctl layout`): saved.
     pub(super) fn set_view(&mut self, mode: ViewMode, cx: &mut Context<Self>) {
+        self.switch_view(mode, true, cx);
+    }
+
+    /// ctrl+shift+space is a peek, as the overview always was: it does not
+    /// change the layout the next launch opens on.
+    pub(super) fn peek_wall(&mut self, cx: &mut Context<Self>) {
+        self.switch_view(ViewMode::Wall, false, cx);
+    }
+
+    fn switch_view(&mut self, mode: ViewMode, persist: bool, cx: &mut Context<Self>) {
         if mode == self.view.mode {
             return;
         }
@@ -94,7 +114,9 @@ impl SeanceApp {
             self.overview = wall;
             let _ = self.client.set_overview(wall);
         }
-        save(mode);
+        if persist && self.view.persist {
+            save(mode);
+        }
         let _ = self.client.set_view(mode.id());
         cx.notify();
     }
@@ -205,7 +227,11 @@ impl SeanceApp {
                             .text_color(SeancePalette::text())
                             .child("stage"),
                     )
-                    .child(div().w(px(220.)).child(self.render_view_switch("stage", cx))),
+                    .child(
+                        div()
+                            .w(px(220.))
+                            .child(self.render_view_switch("stage", cx)),
+                    ),
             )
             .child(
                 div()
@@ -225,7 +251,9 @@ impl SeanceApp {
                         div()
                             .text_sm()
                             .text_color(SeancePalette::text_faint())
-                            .child("your panes keep running · pick classic or wall above, or press ctrl+shift+l"),
+                            .child(
+                                "your panes keep running · esc for classic, or pick a layout above",
+                            ),
                     ),
             )
     }
