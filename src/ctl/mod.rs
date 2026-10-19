@@ -472,6 +472,11 @@ fn run_local(args: Vec<String>) -> i32 {
             scope: None,
             from: None,
         }),
+        "layout" | "layouts" => Ok(ControlRequest::Layout {
+            name: sub_args.first().cloned(),
+            scope: None,
+            from: None,
+        }),
         "sleep" => parse_sleep(sub_args, false),
         "wake" | "awaken" => parse_sleep(sub_args, true),
         "seize" => parse_seize(sub_args),

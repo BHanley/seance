@@ -1266,3 +1266,89 @@ fn theme_reaches_every_window_and_is_saved() {
         assert!(saved.contains("candlelit"));
     });
 }
+
+/// Layouts end to end: the exact lines a GUI writes (a toggle click's
+/// `set_view`, a `ctl layout` wrapped in `ctl`) parse the way the daemon's
+/// reader parses them and are accepted; `ctl layout` lists each window's
+/// layout, refuses an unknown name, and a switch reaches every window.
+#[test]
+fn layout_lines_are_accepted_and_a_switch_reaches_every_window() {
+    with_test_state_dir("layout", || {
+        let (mut eng, _rx) = Engine::bare_for_test(temp_scratch("layout"));
+        let a = FakeGui::attach_to(&mut eng);
+        let b = FakeGui::attach_to(&mut eng);
+
+        // What `GuiClient::set_view` writes for a click on "stage".
+        let click = serde_json::to_string(&GuiRequest::SetView {
+            view: "stage".into(),
+        })
+        .unwrap();
+        assert_eq!(click, r#"{"op":"set_view","view":"stage"}"#);
+        let req: GuiRequest = serde_json::from_str(&click).expect("daemon parses the click");
+        assert!(eng.handle_gui(req, &a.id).is_none());
+
+        let layout = |name: Option<&str>| ControlRequest::Layout {
+            name: name.map(str::to_string),
+            scope: None,
+            from: None,
+        };
+        let by_window = |data: &serde_json::Value| -> Vec<(String, serde_json::Value)> {
+            data["windows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|w| (w["id"].as_str().unwrap().to_string(), w["layout"].clone()))
+                .collect()
+        };
+        let list = eng.handle_control(layout(None));
+        assert!(list.ok);
+        let data = list.data.unwrap();
+        assert_eq!(
+            data["layouts"],
+            serde_json::json!(["classic", "stage", "wall"])
+        );
+        assert_eq!(
+            by_window(&data),
+            [
+                (a.id.clone(), serde_json::json!("stage")),
+                (b.id.clone(), serde_json::Value::Null),
+            ]
+        );
+
+        let views = |g: &FakeGui| -> Vec<String> {
+            g.drain()
+                .into_iter()
+                .filter_map(|ev| match ev {
+                    GuiEvent::View { view } => Some(view),
+                    _ => None,
+                })
+                .collect()
+        };
+        let _ = (a.drain(), b.drain());
+        let bad = eng.handle_control(layout(Some("plaid")));
+        assert!(!bad.ok);
+        assert!(bad.error.unwrap().contains("classic, stage, wall"));
+        assert!(views(&a).is_empty() && views(&b).is_empty());
+
+        // `seance ctl layout Wall` as the GUI plane would carry it.
+        let line = r#"{"op":"ctl","req":{"op":"layout","name":"Wall"}}"#;
+        let req: GuiRequest = serde_json::from_str(line).expect("daemon parses ctl layout");
+        match eng.handle_gui(req, &a.id) {
+            Some(GuiEvent::Ack { ok: true, data, .. }) => {
+                let data = data.unwrap();
+                // b never reported a layout (as a phone wouldn't), so it
+                // stays unlisted rather than claimed.
+                assert_eq!(
+                    by_window(&data),
+                    [
+                        (a.id.clone(), serde_json::json!("wall")),
+                        (b.id.clone(), serde_json::Value::Null),
+                    ]
+                );
+            }
+            other => panic!("ctl layout refused: {other:?}"),
+        }
+        assert_eq!(views(&a), ["wall"]);
+        assert_eq!(views(&b), ["wall"]);
+    });
+}

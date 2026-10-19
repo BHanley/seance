@@ -315,6 +315,7 @@ pub fn op_name(req: &crate::control::ControlRequest) -> &'static str {
         Task { .. } => "task",
         Space { .. } => "space",
         Theme { .. } => "theme",
+        Layout { .. } => "layout",
     }
 }
 

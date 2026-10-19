@@ -588,6 +588,18 @@ pub enum ControlRequest {
         from: Option<String>,
     },
 
+    /// List the window layouts and each attached window's current one
+    /// (`name` absent), or switch every attached window to `name`. Nothing
+    /// is saved daemon-side: each window remembers its own layout.
+    Layout {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        scope: Option<String>,
+        #[serde(default)]
+        from: Option<String>,
+    },
+
     /// One-shot workspace brief for orchestrators (dense pane rows + focus).
     Brief {
         #[serde(default)]
@@ -733,6 +745,7 @@ impl ControlRequest {
             | Self::Roster { from, .. }
             | Self::Space { from, .. }
             | Self::Theme { from, .. }
+            | Self::Layout { from, .. }
             | Self::Sleep { from, .. }
             | Self::Wake { from, .. }
             | Self::RenameCircle { from, .. }
@@ -775,6 +788,7 @@ impl ControlRequest {
             | Self::RenamePane { scope, .. }
             | Self::Space { scope, .. }
             | Self::Theme { scope, .. }
+            | Self::Layout { scope, .. }
             | Self::Send { scope, .. }
             | Self::TaskFail { scope, .. }
             | Self::MsgSend { scope, .. }

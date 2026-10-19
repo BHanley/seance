@@ -1500,7 +1500,8 @@ impl SeanceApp {
                                     ))
                                     .child("+ circle"),
                             ),
-                    ),
+                    )
+                    .child(div().pt_1().child(self.render_view_switch("rail", cx))),
             )
             .child(self.render_rail_chips(cx))
             .child({

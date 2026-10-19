@@ -41,6 +41,7 @@ pub struct GuiClient {
     /// In-flight fs bridge calls awaiting their FsResult, keyed by id.
     fs_pending: FsPending,
     fs_next_id: std::sync::atomic::AtomicU64,
+    replay: ReplaySeed,
 }
 
 /// Result of a daemon-side `sh -lc`. `stderr` is carried because a host
@@ -58,6 +59,16 @@ type FsPending = Arc<Mutex<std::collections::HashMap<u64, Sender<FsReply>>>>;
 /// `Attach` subscription seed, re-read on every (re)connect. `None` = "give me
 /// everything", which is every window except a blank one.
 type SubscriptionSeed = Arc<Mutex<Option<Vec<String>>>>;
+
+/// Per-connection daemon state this window set, re-sent after a reconnect's
+/// `Attach`: a fresh connection starts with no layout and no overview stream,
+/// and a Wall left up across a daemon upgrade would otherwise freeze.
+#[derive(Default)]
+struct Replay {
+    view: Option<String>,
+    overview: bool,
+}
+type ReplaySeed = Arc<Mutex<Replay>>;
 
 impl GuiClient {
     /// Connect, spawn the connection supervisor, return client + event receiver.
@@ -95,10 +106,21 @@ impl GuiClient {
         let fs_pending_sup = Arc::clone(&fs_pending);
         // A blank window subscribes to nothing; everyone else takes the lot.
         let seed_sup: SubscriptionSeed = Arc::new(Mutex::new(empty.then(Vec::new)));
+        let replay: ReplaySeed = Arc::default();
+        let replay_sup = Arc::clone(&replay);
 
         thread::Builder::new()
             .name("seance-gui-conn".into())
-            .spawn(move || connection_supervisor(req_rx, ev_tx, seed_sup, stop_sup, fs_pending_sup))
+            .spawn(move || {
+                connection_supervisor(
+                    req_rx,
+                    ev_tx,
+                    seed_sup,
+                    replay_sup,
+                    stop_sup,
+                    fs_pending_sup,
+                )
+            })
             .context("spawn gui connection supervisor")?;
 
         let client = Arc::new(Self {
@@ -107,6 +129,7 @@ impl GuiClient {
             empty,
             fs_pending,
             fs_next_id: std::sync::atomic::AtomicU64::new(1),
+            replay,
         });
         Ok((client, ev_rx))
     }
@@ -232,7 +255,16 @@ impl GuiClient {
 
     /// Enable/disable multi-workspace live grid streaming (overview mode).
     pub fn set_overview(&self, enabled: bool) -> Result<()> {
+        self.replay.lock().unwrap().overview = enabled;
         self.send(GuiRequest::SetOverview { enabled })
+    }
+
+    /// Report this window's layout (for `ctl layout`); re-sent on reconnect.
+    pub fn set_view(&self, view: &str) -> Result<()> {
+        self.replay.lock().unwrap().view = Some(view.to_string());
+        self.send(GuiRequest::SetView {
+            view: view.to_string(),
+        })
     }
 
     /// Request a FULL grid frame for one pane (repair after damage desync).
@@ -585,12 +617,15 @@ fn connection_supervisor(
     req_rx: Receiver<GuiRequest>,
     ev_tx: Sender<GuiEvent>,
     subscription_seed: SubscriptionSeed,
+    replay: ReplaySeed,
     stop: Arc<std::sync::atomic::AtomicBool>,
     fs_pending: FsPending,
 ) {
     use std::sync::atomic::Ordering;
     let mut pending: Option<GuiRequest> = None;
     let mut first = true;
+    // Requests queued before the first Attach already carry the replay state.
+    let mut attached_once = false;
     loop {
         if stop.load(Ordering::SeqCst) {
             return;
@@ -708,6 +743,22 @@ fn connection_supervisor(
             thread::sleep(RECONNECT_BACKOFF);
             continue;
         }
+        if attached_once {
+            let (view, overview) = {
+                let r = replay.lock().unwrap();
+                (r.view.clone(), r.overview)
+            };
+            let replayed = view
+                .map(|view| GuiRequest::SetView { view })
+                .into_iter()
+                .chain(overview.then_some(GuiRequest::SetOverview { enabled: true }));
+            for req in replayed {
+                if write_request(&mut writer, &req).is_err() {
+                    break;
+                }
+            }
+        }
+        attached_once = true;
 
         // Flush any request that failed mid-write on the previous connection.
         if let Some(req) = pending.take() {

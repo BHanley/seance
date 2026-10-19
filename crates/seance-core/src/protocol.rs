@@ -63,6 +63,79 @@ mod hello_tests {
             GuiRequest::Ctl { req: ControlRequest::Theme { id: Some(id), .. } } if id == "tarot"
         ));
     }
+
+    // Layouts: every new or changed variant goes through the real enums, and
+    // each JSON line carries its tag exactly once.
+    #[test]
+    fn set_view_roundtrips_with_one_op() {
+        let line = serde_json::to_string(&GuiRequest::SetView {
+            view: "stage".into(),
+        })
+        .unwrap();
+        assert_eq!(line, r#"{"op":"set_view","view":"stage"}"#);
+        let back: GuiRequest = serde_json::from_str(&line).unwrap();
+        assert!(matches!(back, GuiRequest::SetView { view } if view == "stage"));
+    }
+
+    #[test]
+    fn view_event_roundtrips_with_one_tag() {
+        let line = serde_json::to_string(&GuiEvent::View {
+            view: "wall".into(),
+        })
+        .unwrap();
+        assert_eq!(line, r#"{"event":"view","view":"wall"}"#);
+        let back: GuiEvent = serde_json::from_str(&line).unwrap();
+        assert!(matches!(back, GuiEvent::View { view } if view == "wall"));
+    }
+
+    #[test]
+    fn layout_control_roundtrips_bare_and_inside_ctl() {
+        let req = ControlRequest::Layout {
+            name: Some("wall".into()),
+            scope: None,
+            from: Some("lead".into()),
+        };
+        let line = serde_json::to_string(&req).unwrap();
+        assert_eq!(line.matches("\"op\"").count(), 1, "{line}");
+        let back: ControlRequest = serde_json::from_str(&line).unwrap();
+        assert!(matches!(
+            back,
+            ControlRequest::Layout { name: Some(n), from: Some(f), .. } if n == "wall" && f == "lead"
+        ));
+        // A bare `ctl layout` line, as the CLI sends it.
+        let bare: ControlRequest = serde_json::from_str(r#"{"op":"layout"}"#).unwrap();
+        assert!(matches!(bare, ControlRequest::Layout { name: None, .. }));
+
+        let wrapped = serde_json::to_string(&GuiRequest::Ctl {
+            req: ControlRequest::Layout {
+                name: None,
+                scope: None,
+                from: None,
+            },
+        })
+        .unwrap();
+        let back: GuiRequest = serde_json::from_str(&wrapped).unwrap();
+        assert!(matches!(
+            back,
+            GuiRequest::Ctl {
+                req: ControlRequest::Layout { name: None, .. }
+            }
+        ));
+    }
+
+    /// An older client meeting `view` must fail to parse it (and skip the
+    /// line), not misread it as some other event.
+    #[test]
+    fn unknown_event_is_an_error_not_a_misparse() {
+        #[derive(Debug, Deserialize)]
+        #[serde(tag = "event", rename_all = "snake_case")]
+        #[allow(dead_code)]
+        enum OldEvent {
+            Theme { id: String },
+            Pong,
+        }
+        assert!(serde_json::from_str::<OldEvent>(r#"{"event":"view","view":"wall"}"#).is_err());
+    }
 }
 
 /// Client → daemon on a GUI connection (JSON lines after hello).
@@ -195,6 +268,11 @@ pub enum GuiRequest {
     /// stay live without thrashing the GUI.
     SetOverview {
         enabled: bool,
+    },
+    /// This window's layout (`seance_core::views` id), sent on attach and on
+    /// every switch so `ctl layout` can list it. The daemon only records it.
+    SetView {
+        view: String,
     },
     /// Force a FULL grid frame for one pane (GUI resync after damage desync).
     RefreshGrid {
@@ -392,6 +470,11 @@ pub enum GuiEvent {
     /// re-sends full grids right after, since cell colors are resolved there.
     Theme {
         id: String,
+    },
+    /// Switch to this layout (`ctl layout NAME`, broadcast to every window).
+    /// A window that does not know the name ignores it.
+    View {
+        view: String,
     },
     /// Legacy JSON grid (debug / fallback). Live path prefers [`Self::GridBin`].
     Grid(GridSnapshot),

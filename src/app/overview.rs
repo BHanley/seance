@@ -12,10 +12,14 @@ use super::util::{status_color, tip};
 use super::SeanceApp;
 
 impl SeanceApp {
+    /// The overview is the Wall layout: on opens it, off goes back to the
+    /// layout it was opened from.
     pub(super) fn set_overview(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.overview = on;
-        let _ = self.client.set_overview(on);
-        cx.notify();
+        if on {
+            self.set_view(super::views::ViewMode::Wall, cx);
+        } else {
+            self.leave_wall(cx);
+        }
     }
 
     fn overview_thumb_for(
@@ -50,6 +54,7 @@ impl SeanceApp {
                     .flex()
                     .items_center()
                     .justify_between()
+                    .gap_4()
                     .border_b_1()
                     .border_color(SeancePalette::border())
                     .child(
@@ -57,8 +62,9 @@ impl SeanceApp {
                             .text_sm()
                             .font_semibold()
                             .text_color(SeancePalette::text())
-                            .child("overview · all workspaces"),
+                            .child("wall · all workspaces"),
                     )
+                    .child(div().w(px(220.)).child(self.render_view_switch("wall", cx)))
                     .child(
                         div()
                             .id("overview-close")
@@ -68,7 +74,7 @@ impl SeanceApp {
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.set_overview(false, cx);
                             }))
-                            .tooltip(tip("exit overview (esc · ctrl+shift+space)"))
+                            .tooltip(tip("back to the previous layout (esc · ctrl+shift+space)"))
                             .child("esc · ctrl+shift+space"),
                     ),
             )

@@ -161,7 +161,8 @@ attention routing free.
 | ctrl+shift+k | precanned prompt palette |
 | ctrl+shift+j | fuzzy jump (workspace) |
 | ctrl+shift+z | focus-zoom active pane |
-| ctrl+shift+space | overview (live map) |
+| ctrl+shift+space | Wall layout (live map of every circle); again or esc goes back |
+| ctrl+shift+l | next layout: classic → stage → wall |
 | ctrl+shift+r | rename selected workspace |
 | ctrl+shift+f | last failed shell command |
 | ctrl+pageup / pagedown | cycle circles in the rail's list |
@@ -182,6 +183,26 @@ attention routing free.
 | sash drag | resize 2-pane ratio or multi-pane weights |
 | macOS: cmd+backspace / cmd+←→ / option+←→ | kill to line start / line start, end / word back, forward (as in Ghostty) |
 | option+backspace (alt on Linux) | delete previous word |
+
+## Layouts
+
+Each window has a layout, picked from the **classic · stage · wall** toggle
+(under the logo in the rail, in the top bar elsewhere), with ctrl+shift+l
+(cmd+shift+l on macOS), or with `seance ctl layout NAME`.
+
+- **classic**: the rail and pane grid, exactly as before. The default.
+- **stage**: one circle's lead up front. Placeholder screen for now; your
+  panes keep running underneath.
+- **wall**: every circle live, the old overview (ctrl+shift+space). Leaving
+  it with esc, ctrl+shift+space or a click on a circle returns to the layout
+  you opened it from.
+
+Windows choose independently, so the laptop can sit on stage while the desk
+stays classic. The last pick is saved on the GUI's own machine in
+`~/.config/seance/view.json` (`$XDG_CONFIG_HOME/seance/` when set) and
+restored on launch; the daemon does not store it. `seance ctl layout` lists
+the layouts and each attached window's current one; `seance ctl layout NAME`
+switches every attached window at once.
 
 ## Terminal settings (Ghostty syntax)
 

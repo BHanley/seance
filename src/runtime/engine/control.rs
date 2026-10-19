@@ -1152,6 +1152,23 @@ impl Engine {
                 }
                 ok(theme_json())
             }
+            Layout { name, scope, from } => {
+                if let Some(name) = name {
+                    match self.set_layout(&name) {
+                        Ok(m) => {
+                            events::log(
+                                &actor(&from),
+                                scope.as_deref(),
+                                None,
+                                "layout",
+                                format!("layout -> {m}"),
+                            );
+                        }
+                        Err(e) => return err(e),
+                    }
+                }
+                ok(self.layout_json())
+            }
             RenamePane {
                 name,
                 pane,

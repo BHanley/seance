@@ -19,6 +19,7 @@ pub(crate) fn print_ok_human(sub: &str, response: &ControlResponse) {
         "list" | "ls" | "brief" | "roster" | "stage" => print_list(data),
         "space" | "spaces" if data.get("spaces").is_some() => print_spaces(data),
         "theme" | "themes" if data.get("schemes").is_some() => print_themes(data),
+        "layout" | "layouts" if data.get("layouts").is_some() => print_layouts(data),
         "task" | "inbox" => {
             if let Some(body) = data.get("body").and_then(|v| v.as_str()) {
                 let id = data.get("id").and_then(|v| v.as_str()).unwrap_or("?");
@@ -385,6 +386,7 @@ COMMANDS:
     sleep [WS]                    sleep a circle (frees its RAM; wakes on resume)
     wake [WS]                     wake a sleeping circle
     theme [ID]                    color scheme: show the list, or switch every window
+    layout [NAME]                 classic / stage / wall: list windows, or switch every window
     whoami / caps / grant / revoke / policy
     seize / release / drive PANE  co-presence ownership
     wait PANE [opts]              block until condition
@@ -453,5 +455,25 @@ fn print_themes(data: &serde_json::Value) {
             ""
         };
         println!("{mark} {:<10} {}{light}", s("id"), s("label"));
+    }
+}
+
+/// `layout`: the choices, then one row per window with its layout.
+fn print_layouts(data: &serde_json::Value) {
+    let names: Vec<&str> = data
+        .get("layouts")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+    println!("layouts: {}", names.join(" · "));
+    let rows = data.get("windows").and_then(|v| v.as_array());
+    match rows {
+        Some(rows) if !rows.is_empty() => {
+            for row in rows {
+                let s = |k: &str| row.get(k).and_then(|v| v.as_str()).unwrap_or("?");
+                println!("  {:<8} {:<8} {}", s("id"), s("layout"), s("label"));
+            }
+        }
+        _ => println!("  (no windows attached)"),
     }
 }

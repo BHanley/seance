@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use seance_core::views::ViewMode;
 use serde_json::json;
 
 use super::helpers::{base64_decode, now_ms};
@@ -31,6 +32,9 @@ pub(super) struct GuiConn {
     selected_workspace: Option<String>,
     focused_pane: Option<String>,
     overview: bool,
+    /// Layout this window last reported (`GuiRequest::SetView`); None until
+    /// it does. Only for `ctl layout` listings.
+    view: Option<String>,
     subscriptions: HashSet<String>,
     /// Panes this connection has been sent a full frame for, and can therefore
     /// have damage applied against.
@@ -71,6 +75,7 @@ impl Engine {
             selected_workspace: None,
             focused_pane: None,
             overview: false,
+            view: None,
             subscriptions: HashSet::new(),
             based: HashSet::new(),
         });
@@ -647,6 +652,41 @@ impl Engine {
             self.push_grid_full(slug);
         }
         Ok(scheme)
+    }
+
+    /// `ctl layout NAME`: every window switches. Recorded here at once so
+    /// the reply already lists the new layout; each window confirms with
+    /// `SetView` when it applies it. Connections that never reported one
+    /// (the phone) ignore the event, so they stay unlisted.
+    pub(super) fn set_layout(&mut self, name: &str) -> Result<ViewMode, String> {
+        let mode = ViewMode::parse(name).ok_or_else(|| {
+            let ids: Vec<&str> = ViewMode::ALL.iter().map(|m| m.id()).collect();
+            format!("unknown layout '{name}' (one of: {})", ids.join(", "))
+        })?;
+        for c in self.gui_conns.iter_mut().filter(|c| c.view.is_some()) {
+            c.view = Some(mode.id().to_string());
+        }
+        self.broadcast(GuiEvent::View {
+            view: mode.id().to_string(),
+        });
+        Ok(mode)
+    }
+
+    /// `ctl layout` payload: the layouts in toggle order and each window's.
+    pub(super) fn layout_json(&self) -> serde_json::Value {
+        let windows: Vec<serde_json::Value> = self
+            .gui_conns
+            .iter()
+            .map(|c| {
+                json!({
+                    "id": c.id,
+                    "label": self.window_label(&c.id),
+                    "layout": c.view,
+                })
+            })
+            .collect();
+        let layouts: Vec<&str> = ViewMode::ALL.iter().map(|m| m.id()).collect();
+        json!({"layouts": layouts, "windows": windows})
     }
 
     /// Give one window whole grids for a circle it just brought on screen.
@@ -1613,6 +1653,12 @@ impl Engine {
                     for slug in slugs {
                         self.send_full_to(window_id, &slug);
                     }
+                }
+                None
+            }
+            GuiRequest::SetView { view } => {
+                if let Some(c) = self.gui_conns.iter_mut().find(|c| c.id == window_id) {
+                    c.view = Some(view);
                 }
                 None
             }

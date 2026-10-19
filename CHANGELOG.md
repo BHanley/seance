@@ -19,6 +19,16 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **Layouts.** A classic · stage · wall toggle sits under the logo in the
+  rail (and in the top bar of the other two); ctrl+shift+l cycles them.
+  Classic is today's layout, unchanged. Wall is the live overview
+  (ctrl+shift+space still toggles it, and leaving it returns to the layout
+  you came from). Stage shows a placeholder until it is built. Each window
+  keeps its own layout and the GUI machine remembers the last pick in
+  `~/.config/seance/view.json`. `seance ctl layout` lists the layouts and
+  each window's current one; `seance ctl layout NAME` switches every
+  attached window.
+
 - **Color schemes.** Nine looks for the whole app, chrome and terminal
   colors together: candlelit (the default, unchanged), abyssal, ectoplasm,
   ouija (light), Monokai Seance, tarot, Mojave Dusk, riso (light) and Synth

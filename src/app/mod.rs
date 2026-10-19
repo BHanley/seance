@@ -41,6 +41,7 @@ mod quicklaunch;
 mod sidebar;
 mod tiles;
 mod util;
+mod views;
 mod workspaces;
 
 use self::actions::*;
@@ -285,8 +286,11 @@ pub struct SeanceApp {
     circle_modes: std::collections::HashMap<String, Vec<String>>,
     /// Sticky attention on inactive circles until selected (done/needs).
     workspace_unread: std::collections::HashMap<String, WorkspaceAttention>,
-    /// Full-window live overview (ctrl+shift+space).
+    /// Full-window live overview (ctrl+shift+space). On exactly while the
+    /// layout is Wall.
     overview: bool,
+    /// This window's layout (Classic / Stage / Wall).
+    view: views::ViewState,
     /// This window attached with an empty subscription set (second process).
     empty_window: bool,
     /// Quicklaunch strip entries (~/.config/seance/quicklaunch.json).
@@ -445,6 +449,7 @@ impl SeanceApp {
         let empty = empty || client.is_empty_window();
         let subs_seeded = pref.is_some() && !empty;
         let remote_cache = Arc::new(crate::remote_cache::RemoteCache::new(Arc::clone(&client)));
+        let view = views::ViewState::restore();
 
         let mut app = SeanceApp {
             panes: Vec::new(),
@@ -507,7 +512,8 @@ impl SeanceApp {
             circle_mode_defs: Vec::new(),
             circle_modes: std::collections::HashMap::new(),
             workspace_unread: std::collections::HashMap::new(),
-            overview: false,
+            overview: view.mode == views::ViewMode::Wall,
+            view,
             empty_window: empty,
             quicklaunch: Vec::new(),
             quicklaunch_mtime: None,
@@ -524,6 +530,7 @@ impl SeanceApp {
             render_probe: RenderProbe::default(),
             nav: workspaces::NavHistory::default(),
         };
+        app.announce_view();
         // Seed the prompt-library user file on the DAEMON machine (write-if-
         // missing) and pre-warm the cache so the palette has user prompts by
         // the first refresh tick. Plain thread: bridge calls block.
@@ -1321,6 +1328,7 @@ impl SeanceApp {
                     cx.refresh_windows();
                 }
             }
+            GuiEvent::View { view } => self.apply_view_event(&view, cx),
             GuiEvent::HostWidgets { widgets } => {
                 // Daemon-side poller push: replace chip state wholesale.
                 if let Ok(snaps) =
@@ -1815,6 +1823,10 @@ impl SeanceApp {
                 }
                 " " | "space" => {
                     self.set_overview(!self.overview, cx);
+                    cx.stop_propagation();
+                }
+                "l" => {
+                    self.set_view(self.view.mode.next(), cx);
                     cx.stop_propagation();
                 }
                 "up" | "down" | "left" | "right" => {
@@ -3122,10 +3134,7 @@ impl Render for SeanceApp {
                     .child(awaken_el)
                     .child(tiles_el),
             )
-            .children(
-                self.overview
-                    .then(|| self.render_overview(cx).into_any_element()),
-            )
+            .children(self.render_view_overlay(cx))
             // Below the (deferred) menu dropdown, above everything else — the
             // click-away catcher for an open host menu.
             .children(self.render_host_menu_scrim(window, cx))

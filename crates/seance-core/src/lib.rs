@@ -24,3 +24,4 @@ pub mod schemes;
 pub mod snapshot;
 pub mod spaces;
 pub mod util;
+pub mod views;

@@ -921,6 +921,8 @@ impl ClientState {
             // Native-only for now: web chrome stays candlelit, though cell
             // colors (resolved by the daemon) follow the scheme.
             GuiEvent::Theme { .. } => Applied::Nothing,
+            // The phone has one layout; `ctl layout` is for desktop windows.
+            GuiEvent::View { .. } => Applied::Nothing,
         }
     }
 }

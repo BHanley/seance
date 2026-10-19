@@ -1136,6 +1136,8 @@ pub(super) fn render_help() -> gpui::AnyElement {
         .child(row("ctrl+shift+j", "fuzzy jump to workspace"))
         .child(row("ctrl+shift+z", "focus-zoom active pane (esc unzoom)"))
         .child(row("ctrl+shift+f", "jump to last failed shell command"))
+        .child(row("ctrl+shift+space", "wall: every circle live (again or esc to go back)"))
+        .child(row("ctrl+shift+l", "next layout: classic → stage → wall (each window keeps its own)"))
         .child(row("ctrl+pgup / pgdn", "previous / next workspace (sidebar order, wraps)"))
         .child(row("ctrl+shift+pgup / pgdn", "previous / next pane in this workspace"))
         .child(row("ctrl+shift+arrows", "navigate panes spatially (grid directions)"))

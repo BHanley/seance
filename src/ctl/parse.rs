@@ -160,6 +160,7 @@ pub(crate) fn with_identity(
             from,
         },
         Theme { id, .. } => Theme { id, scope, from },
+        Layout { name, .. } => Layout { name, scope, from },
         Sleep { workspace, .. } => Sleep {
             workspace,
             scope,
