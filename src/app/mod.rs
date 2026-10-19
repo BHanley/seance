@@ -2883,6 +2883,7 @@ impl Render for SeanceApp {
             // Capture phase: app chords + palette win before focused terminal.
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 this.on_global_key_capture(event, window, cx);
+                this.stage_swallow_keys(cx);
             }))
             .on_action(cx.listener(|this, act: &ActToggleTiled, _, cx| {
                 this.toggle_tiled(&act.0, cx);

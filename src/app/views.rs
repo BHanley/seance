@@ -56,6 +56,12 @@ fn config_path() -> PathBuf {
     PathBuf::from(shellexpand::tilde("~/.config/seance/view.json").as_ref())
 }
 
+/// Keys stop at the root on Stage (still a placeholder) unless a visible
+/// editor above it is open. Wall keeps the overview's old behavior.
+fn placeholder_owns_keys(mode: ViewMode, editor_open: bool) -> bool {
+    mode == ViewMode::Stage && !editor_open
+}
+
 fn encode(mode: ViewMode) -> String {
     serde_json::json!({ "layout": mode.id() }).to_string()
 }
@@ -133,6 +139,16 @@ impl SeanceApp {
     pub(super) fn apply_view_event(&mut self, view: &str, cx: &mut Context<Self>) {
         if let Some(mode) = ViewMode::parse(view) {
             self.set_view(mode, cx);
+        }
+    }
+
+    /// The Stage placeholder hides the panes but not their focus: without
+    /// this, typing (and Enter) would reach a pane nobody can see. Runs after
+    /// the app chords, so those still work. The quicklaunch editor draws
+    /// above the placeholder and keeps its keys.
+    pub(super) fn stage_swallow_keys(&self, cx: &mut Context<Self>) {
+        if placeholder_owns_keys(self.view.mode, self.quicklaunch_editor.is_some()) {
+            cx.stop_propagation();
         }
     }
 
@@ -262,6 +278,14 @@ impl SeanceApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_stage_placeholder_swallows_keys() {
+        assert!(placeholder_owns_keys(ViewMode::Stage, false));
+        assert!(!placeholder_owns_keys(ViewMode::Stage, true));
+        assert!(!placeholder_owns_keys(ViewMode::Classic, false));
+        assert!(!placeholder_owns_keys(ViewMode::Wall, false));
+    }
 
     #[test]
     fn codec_roundtrips_every_layout() {
