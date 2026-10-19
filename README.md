@@ -162,7 +162,7 @@ attention routing free.
 | ctrl+shift+j | fuzzy jump (workspace) |
 | ctrl+shift+z | focus-zoom active pane |
 | ctrl+shift+space | Wall layout (live map of every circle); again or esc goes back |
-| ctrl+shift+l | next layout: classic → stage → wall |
+| ctrl+shift+t | next layout: classic → stage → wall |
 | ctrl+shift+r | rename selected workspace |
 | ctrl+shift+f | last failed shell command |
 | ctrl+pageup / pagedown | cycle circles in the rail's list |
@@ -187,8 +187,8 @@ attention routing free.
 ## Layouts
 
 Each window has a layout, picked from the **classic · stage · wall** toggle
-(under the logo in the rail, in the top bar elsewhere), with ctrl+shift+l
-(cmd+shift+l on macOS), or with `seance ctl layout NAME`.
+(under the logo in the rail, in the top bar elsewhere), with ctrl+shift+t
+(cmd+shift+t on macOS), or with `seance ctl layout NAME`.
 
 - **classic**: the rail and pane grid, exactly as before. The default.
 - **stage**: one circle's lead up front. Placeholder screen for now; your

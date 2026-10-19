@@ -1,5 +1,5 @@
 //! Window layouts: Classic (the rail and pane grid), Stage and Wall. Each
-//! window keeps its own, switched from the toggle, ctrl+shift+l or
+//! window keeps its own, switched from the toggle, ctrl+shift+t or
 //! `ctl layout`, and the last pick is saved on this machine
 //! (`~/.config/seance/view.json`), never in the daemon's shared layout.
 //!
@@ -96,7 +96,7 @@ impl SeanceApp {
         }
     }
 
-    /// A deliberate pick (toggle, ctrl+shift+l, `ctl layout`): saved.
+    /// A deliberate pick (toggle, ctrl+shift+t, `ctl layout`): saved.
     pub(super) fn set_view(&mut self, mode: ViewMode, cx: &mut Context<Self>) {
         self.switch_view(mode, true, cx);
     }
@@ -202,7 +202,7 @@ impl SeanceApp {
                     })
                     .tooltip(tip(match mode {
                         ViewMode::Classic => {
-                            "classic: the rail and pane grid (ctrl+shift+l cycles)"
+                            "classic: the rail and pane grid (ctrl+shift+t cycles)"
                         }
                         ViewMode::Stage => "stage: one circle's lead up front (coming next)",
                         ViewMode::Wall => "wall: every circle live (ctrl+shift+space)",

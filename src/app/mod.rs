@@ -1830,7 +1830,9 @@ impl SeanceApp {
                     self.set_overview(!self.overview, cx);
                     cx.stop_propagation();
                 }
-                "l" => {
+                // Not l: macOS takes cmd+shift+l for its "Search With Google"
+                // service before the app ever sees it.
+                "t" => {
                     self.set_view(self.view.mode.next(), cx);
                     cx.stop_propagation();
                 }

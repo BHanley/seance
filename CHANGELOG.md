@@ -20,7 +20,7 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 ### Added
 
 - **Layouts.** A classic · stage · wall toggle sits under the logo in the
-  rail (and in the top bar of the other two); ctrl+shift+l cycles them.
+  rail (and in the top bar of the other two); ctrl+shift+t cycles them.
   Classic is today's layout, unchanged. Wall is the live overview
   (ctrl+shift+space still toggles it, and leaving it returns to the layout
   you came from). Stage shows a placeholder until it is built. Each window
@@ -566,7 +566,7 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
   The cost is that `cmd+shift+up`/`down` no longer navigates the tile grid
   vertically — spatial nav is `ctrl+shift+arrows` on macOS, and
-  `cmd+shift+left`/`right` still reaches it since only the vertical pair is
+  `cmd+shift+teft`/`right` still reaches it since only the vertical pair is
   claimed.
 
 ## [0.25.5] — 2026-08-28
