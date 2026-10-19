@@ -1,5 +1,8 @@
 # seance — theme & branding
 
+seance ships nine color schemes (see [Schemes](#schemes)); the default, and
+the one this page's palette tables describe, is **candlelit**.
+
 Aesthetic: **candlelit**. A dark room lit by one candle — deep warm charcoal
 grounds, amber candle-glow accents, muted violet highlights. Elegant and
 understated, not gothic kitsch. The séance metaphor (a circle of agents and a
@@ -7,7 +10,7 @@ human working in one shared space) is carried by two accents only: the
 **flame** (amber — presence / human attention) and the **violet** counterpoint
 (agent affordances: ghost propose, notes, history).
 
-All colors are `gpui::Hsla`. Source of truth is the HSL in `src/theme.rs`;
+All colors are `gpui::Hsla`. Candlelit's source of truth is the HSL in `src/theme.rs`;
 hex below is computed from that HSL (sRGB round). Authored with
 `gpui_component::hsl(h: 0..360, s: 0..100, l: 0..100)`.
 
@@ -38,9 +41,64 @@ hex below is computed from that HSL (sRGB round). Authored with
 > `status_running` / `status_idle` were removed 2026-07-22 (dead code); live
 > "working" state is drawn from observed TUI title spinners, not theme tokens.
 
+## Schemes
+
+Every scheme defines the same chrome tokens as the table above (`flame` is
+its primary accent, `violet` its second) plus, except candlelit, a terminal
+palette. The table lives in `crates/seance-core/src/schemes.rs` (packed
+`0xRRGGBB`, wasm-safe, so the web client can read it later);
+`SeancePalette::*()` returns the active scheme's color, so call sites never
+name a scheme.
+
+| id | label | ground | accent | second |
+|----|-------|--------|--------|--------|
+| `candlelit` | Candlelit (default) | `#131111` | `#E9A03A` | `#A790D5` |
+| `abyssal` | Abyssal | `#0A1018` | `#3FE0D0` | `#FF8A6B` |
+| `ectoplasm` | Ectoplasm | `#0B0F0C` | `#7CFF9E` | `#D6B8FF` |
+| `ouija` | Ouija (light) | `#F3EBDD` | `#8E2A1F` | `#2F3F7A` |
+| `monokai` | Monokai Seance | `#19181A` | `#FFD866` | `#AB9DF2` |
+| `tarot` | Tarot | `#120D1C` | `#E4B94C` | `#E0457B` |
+| `mojave` | Mojave Dusk | `#1E1416` | `#FF8C42` | `#3FC1B0` |
+| `riso` | Riso (light) | `#F7F4EC` | `#E6007E` | `#00838A` |
+| `synth` | Synth Seance | `#0D0B1F` | `#FF3DCB` | `#2DE2FF` |
+
+**Who owns the choice.** The daemon. It saves it in the state dir
+(`theme.json`, `{"scheme": ID}`), sends it to each window on attach and
+broadcasts `GuiEvent::Theme` on every switch, so the Mac thin client and the
+XPS GUI change together. At boot the saved choice wins, then `seance-theme`
+in `terminal.conf`, then candlelit; an unknown id falls back to candlelit.
+
+**Switching.** The ✦ menu at the top of the rail lists the nine, active one
+marked; `seance ctl theme` lists them and `seance ctl theme ID` switches (an
+unknown ID is refused with the list). A window that hears the switch sets
+the active scheme, re-runs `theme::init` and refreshes every window.
+
+**Terminal colors.** Cells are resolved daemon-side, so on a switch the
+daemon swaps its palette (`pty_session::set_term_colors`), recolors each live
+pane's seeded palette (slots a program set itself via OSC 4/10/11 are kept)
+and re-sends every pane as a full frame, idle panes included. OSC color
+queries answer from the active palette. The 16 ANSI slots come from each
+scheme's named colors: 1 to 6 and 9 to 14 are its red, green, yellow, blue,
+magenta, cyan; 8 is its gray; on dark schemes 0 = `bg_elevated`, 7 =
+`text_dim`, 15 = `text`, on light schemes 0 = `text`, 7 = `surface`, 15 =
+`bg_elevated`. Cursor = accent. Candlelit keeps `terminal.conf` exactly.
+
+**Light schemes** (ouija, riso) put gpui-component in `ThemeMode::Light`
+before the palette is applied, use the light code-highlight theme in
+markdown panes, and put the ground color on top of filled red (danger). Hovers use
+`theme::lift`, which darkens instead of lightening on a light ground.
+
+**Limits.** Sleeping panes are recolored by swapping exact old palette
+colors in their frozen frame, so a program's own truecolor stays as it was.
+A program that asked for the background once at startup (claude does, via
+OSC 11, to pick its own dark or light look) keeps that pick until it
+restarts. The web client's chrome stays candlelit for now; its cells follow
+the scheme because the daemon resolves them.
+
 ## ANSI terminal palette (16-color)
 
-**Not this module.** Agent CLIs and shells render inside the embedded terminal
+**Not this module** (for candlelit; other schemes bring their own, see
+above). Agent CLIs and shells render inside the embedded terminal
 against a 16-color palette resolved daemon-side from `src/term_config.rs`.
 The default is the ghostty base16 set (`#181818` bg / `#d8d8d8` fg,
 `#ab4642 #a1b56c #f7ca88 #7cafc2 #ba8baf #86c1b9` …);
@@ -66,13 +124,16 @@ impl SeancePalette {
     pub fn status_exited() -> Hsla;
 }
 
-pub fn init(cx: &mut gpui::App);             // activate dark theme + overrides
+pub fn init(cx: &mut gpui::App);             // apply the active scheme (dark or light) + overrides
+pub fn set_scheme(id: &str, cx: &mut gpui::App) -> bool; // follow the daemon; re-inits on change
+pub fn active() -> &'static Scheme;          // seance_core::schemes entry in use
+pub fn is_light() -> bool;
+pub fn term_fg_bg() -> Option<(u32, u32)>;   // scheme terminal fg/bg, None = terminal.conf
 ```
 
-Colors are associated **functions** (not consts) because `gpui::hsla` is a
-non-const constructor and `hsl()` clamps — this keeps a single source of truth
-and lets values fall out of the same helper the reference crate uses. Zero
-runtime cost (`#[inline]`, trivial arithmetic).
+Colors are associated **functions** (not consts) because they follow the
+active scheme. Each scheme's chrome is converted to `Hsla` once per process;
+a call is an atomic load and an index.
 
 ## How `init()` applies the theme
 
@@ -83,7 +144,8 @@ open window.
 hygiene on non-macOS — pick the first installed sans/mono rather than letting
 gpui probe, which is load-bearing for typing latency:
 
-1. **`Theme::change(ThemeMode::Dark, None, cx)`** — activates dark mode.
+1. **`Theme::change(ThemeMode::Dark, None, cx)`** (`Light` for a light
+   scheme): activates the mode.
    `Theme::change` lazily creates the `Theme` global if absent and calls
    `apply_config(dark_theme)`, seeding every `ThemeColor` field from the
    built-in *Default Dark* before we override.

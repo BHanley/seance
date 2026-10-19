@@ -368,6 +368,12 @@ pub enum GuiEvent {
     RailPrefs {
         json: String,
     },
+    /// The active color scheme (`seance_core::schemes` id). Sent on attach
+    /// and broadcast to every window when anyone switches it; the daemon
+    /// re-sends full grids right after, since cell colors are resolved there.
+    Theme {
+        id: String,
+    },
     /// Legacy JSON grid (debug / fallback). Live path prefers [`Self::GridBin`].
     Grid(GridSnapshot),
     /// Compact RLE binary grid (SCG3 blob, or an `SCZ3` deflate container

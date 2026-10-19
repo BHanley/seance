@@ -10,7 +10,7 @@ use gpui::{
 };
 use gpui_component::{
     input::{Input, InputState},
-    Colorize as _, StyledExt as _, WindowExt as _,
+    StyledExt as _, WindowExt as _,
 };
 
 use crate::events;
@@ -97,7 +97,7 @@ impl SeanceApp {
                     } else {
                         SeancePalette::text_dim()
                     })
-                    .hover(|s| s.bg(SeancePalette::surface().lighten(0.05)))
+                    .hover(|s| s.bg(crate::theme::lift(SeancePalette::surface(), 0.05)))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         // Click-to-show: re-tile shelved pane.
                         this.toggle_tiled(&slug, cx);
@@ -283,7 +283,7 @@ impl SeanceApp {
                     .cursor_pointer()
                     .bg(SeancePalette::surface())
                     .text_color(SeancePalette::flame())
-                    .hover(|s| s.bg(SeancePalette::surface().lighten(0.06)))
+                    .hover(|s| s.bg(crate::theme::lift(SeancePalette::surface(), 0.06)))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.wake_workspace_focused(&ws_for_click, window, cx);
                     }))

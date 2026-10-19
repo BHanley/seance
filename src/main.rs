@@ -14,6 +14,7 @@ mod gui_client;
 mod host;
 mod latency_probe;
 mod launch;
+mod looks;
 mod mdfold;
 mod mdtask;
 mod pane;

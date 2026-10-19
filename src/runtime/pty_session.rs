@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -27,6 +27,7 @@ use alacritty_terminal::{
     vte::ansi::{Color as AnsiColor, NamedColor, Processor, Rgb as AlacRgb},
 };
 use anyhow::{bail, Context as _, Result};
+use seance_core::schemes::TermColors;
 
 use super::snapshot::{CellSnap, GhostSnap, GridSnapshot};
 use super::upgrade_in_progress;
@@ -381,6 +382,29 @@ impl PtySession {
         });
     }
 
+    /// Move the seeded palette from `old` to `new` after a scheme switch. A
+    /// slot the program set itself (OSC 4/10/11) no longer matches `old`, so
+    /// it is left alone: a program's own colors survive a theme change.
+    pub fn retheme(&self, old: &TermColors, new: &TermColors) {
+        let mut term = self.term.lock();
+        let cur = term.colors();
+        let seeded = |slot: usize, was: u32| cur[slot].is_none_or(|c| pack_rgb(c) == was);
+        let mut seq = String::new();
+        for i in 0..16 {
+            if seeded(i, old.ansi[i]) {
+                push_osc_color(&mut seq, &format!("4;{i}"), new.ansi[i]);
+            }
+        }
+        if seeded(NamedColor::Foreground as usize, old.fg) {
+            push_osc_color(&mut seq, "10", new.fg);
+        }
+        if seeded(NamedColor::Background as usize, old.bg) {
+            push_osc_color(&mut seq, "11", new.bg);
+        }
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut *term, seq.as_bytes());
+    }
+
     fn from_parts(
         slug: String,
         master: OwnedFd,
@@ -642,6 +666,9 @@ impl PtySession {
         let cursor = term.grid().cursor.point;
         let display_offset = grid.display_offset() as i32;
         let colors = term.colors();
+        // Once per frame: the fallbacks below would otherwise take the
+        // palette lock per cell.
+        let pal = term_colors();
 
         let mut cells = Vec::with_capacity((cols as usize) * (rows as usize));
         let mut hyperlinks: Vec<super::snapshot::HyperlinkSpan> = Vec::new();
@@ -660,8 +687,8 @@ impl PtySession {
             }
             for col in 0..cols as usize {
                 let cell = &grid[line][Column(col)];
-                let fg = resolve_color(colors, &cell.fg, cell.flags, false);
-                let bg = resolve_color(colors, &cell.bg, Flags::empty(), true);
+                let fg = resolve_color(colors, &pal, &cell.fg, cell.flags, false);
+                let bg = resolve_color(colors, &pal, &cell.bg, Flags::empty(), true);
                 let has_link = cell.hyperlink().map(|h| h.uri().to_string());
                 match (&mut open_link, has_link) {
                     (Some((r, cs, uri)), Some(u)) if *r == row_u && *uri == u => {
@@ -1091,28 +1118,38 @@ fn set_nonblocking(fd: RawFd) -> Result<()> {
     Ok(())
 }
 
-/// Terminal *content* colors from `~/.config/seance/terminal.conf` (see
-/// `term_config`); chrome stays candlelit separately.
-fn ansi16() -> &'static [u32; 16] {
-    &crate::term_config::get().palette
+/// The active scheme's terminal colors; `None` = `terminal.conf`. Switched
+/// at runtime by the daemon (`ctl theme`), so it can't be a `OnceLock`.
+static SCHEME_TERM: RwLock<Option<TermColors>> = RwLock::new(None);
+
+/// Switch terminal content colors daemon-wide (`None` = `terminal.conf`).
+/// Returns the colors in effect before, so live panes can be reseeded.
+pub fn set_term_colors(colors: Option<TermColors>) -> TermColors {
+    let old = term_colors();
+    *SCHEME_TERM.write().unwrap_or_else(|e| e.into_inner()) = colors;
+    old
 }
 
-fn default_fg() -> u32 {
-    crate::term_config::get().foreground
-}
-
-fn default_bg() -> u32 {
-    crate::term_config::get().background
-}
-
-fn cursor_color() -> u32 {
-    crate::term_config::get().cursor
+/// Terminal *content* colors in effect: the active scheme's, else
+/// `~/.config/seance/terminal.conf` (see `term_config`).
+pub fn term_colors() -> TermColors {
+    if let Some(t) = *SCHEME_TERM.read().unwrap_or_else(|e| e.into_inner()) {
+        return t;
+    }
+    let c = crate::term_config::get();
+    TermColors {
+        ansi: c.palette,
+        fg: c.foreground,
+        bg: c.background,
+        cursor: c.cursor,
+    }
 }
 
 /// Answer OSC color queries (claude probes these to pick its dark theme).
 fn color_for_index(index: usize) -> AlacRgb {
+    let pal = term_colors();
     let pack = match index {
-        0..=15 => ansi16()[index],
+        0..=15 => pal.ansi[index],
         16..=231 => {
             let i = index - 16;
             let steps = [0u32, 95, 135, 175, 215, 255];
@@ -1122,10 +1159,10 @@ fn color_for_index(index: usize) -> AlacRgb {
             let v = (8 + (index - 232) * 10) as u32;
             (v << 16) | (v << 8) | v
         }
-        256 => default_fg(),   // foreground
-        257 => default_bg(),   // background
-        258 => cursor_color(), // cursor
-        _ => default_fg(),
+        256 => pal.fg,     // foreground
+        257 => pal.bg,     // background
+        258 => pal.cursor, // cursor
+        _ => pal.fg,
     };
     AlacRgb {
         r: ((pack >> 16) & 0xff) as u8,
@@ -1148,34 +1185,27 @@ fn unpack_rgb(pack: u32) -> AlacRgb {
 
 /// Initialize term.colors via OSC so the palette is non-empty from the start.
 fn seed_term_palette(term: &mut Term<Listener>) {
-    let mut parser: Processor = Processor::new();
+    let pal = term_colors();
     let mut seq = String::new();
-    for (i, &pack) in ansi16().iter().enumerate() {
-        let c = unpack_rgb(pack);
-        // OSC 4 ; idx ; rgb:RR/GG/BB ST
-        seq.push_str(&format!(
-            "\x1b]4;{i};rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}\x1b\\",
-            r = c.r,
-            g = c.g,
-            b = c.b,
-        ));
+    for (i, &pack) in pal.ansi.iter().enumerate() {
+        push_osc_color(&mut seq, &format!("4;{i}"), pack);
     }
-    let fg = unpack_rgb(default_fg());
-    let bg = unpack_rgb(default_bg());
     // OSC 10 default fg, OSC 11 default bg
-    seq.push_str(&format!(
-        "\x1b]10;rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}\x1b\\",
-        r = fg.r,
-        g = fg.g,
-        b = fg.b,
-    ));
-    seq.push_str(&format!(
-        "\x1b]11;rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}\x1b\\",
-        r = bg.r,
-        g = bg.g,
-        b = bg.b,
-    ));
+    push_osc_color(&mut seq, "10", pal.fg);
+    push_osc_color(&mut seq, "11", pal.bg);
+    let mut parser: Processor = Processor::new();
     parser.advance(term, seq.as_bytes());
+}
+
+/// Append `OSC <code> ; rgb:RR/GG/BB ST`.
+fn push_osc_color(seq: &mut String, code: &str, pack: u32) {
+    let c = unpack_rgb(pack);
+    seq.push_str(&format!(
+        "\x1b]{code};rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}\x1b\\",
+        r = c.r,
+        g = c.g,
+        b = c.b,
+    ));
 }
 
 fn dim_u32(c: u32) -> u32 {
@@ -1186,9 +1216,11 @@ fn dim_u32(c: u32) -> u32 {
 }
 
 /// Resolve a cell color the way alacritty's display does: prefer the term's
-/// live palette (OSC-set), then the configured palette, with bold→bright for 0..=7.
+/// live palette (OSC-set), then `pal` (the active scheme's, else terminal.conf),
+/// with bold→bright for 0..=7.
 fn resolve_color(
     colors: &alacritty_terminal::term::color::Colors,
+    pal: &TermColors,
     color: &AnsiColor,
     flags: Flags,
     is_bg: bool,
@@ -1230,7 +1262,7 @@ fn resolve_color(
             if matches!(n, NamedColor::Foreground) && !is_bg {
                 return DEFAULT;
             }
-            named_fallback(named, is_bg)
+            named_fallback(pal, named, is_bg)
         }
         AnsiColor::Indexed(idx) => {
             let mut idx = *idx as usize;
@@ -1246,50 +1278,50 @@ fn resolve_color(
                     packed
                 };
             }
-            indexed_fallback(idx, flags.contains(Flags::DIM))
+            indexed_fallback(pal, idx, flags.contains(Flags::DIM))
         }
     }
 }
 
-fn named_fallback(n: NamedColor, is_bg: bool) -> u32 {
+fn named_fallback(pal: &TermColors, n: NamedColor, is_bg: bool) -> u32 {
     const DEFAULT: u32 = 0xFFFF_FFFF;
     match n {
         NamedColor::Background if is_bg => DEFAULT,
         NamedColor::Foreground if !is_bg => DEFAULT,
-        NamedColor::Black => ansi16()[0],
-        NamedColor::Red => ansi16()[1],
-        NamedColor::Green => ansi16()[2],
-        NamedColor::Yellow => ansi16()[3],
-        NamedColor::Blue => ansi16()[4],
-        NamedColor::Magenta => ansi16()[5],
-        NamedColor::Cyan => ansi16()[6],
-        NamedColor::White => ansi16()[7],
-        NamedColor::BrightBlack => ansi16()[8],
-        NamedColor::BrightRed => ansi16()[9],
-        NamedColor::BrightGreen => ansi16()[10],
-        NamedColor::BrightYellow => ansi16()[11],
-        NamedColor::BrightBlue => ansi16()[12],
-        NamedColor::BrightMagenta => ansi16()[13],
-        NamedColor::BrightCyan => ansi16()[14],
-        NamedColor::BrightWhite | NamedColor::BrightForeground => ansi16()[15],
-        NamedColor::Foreground => default_fg(),
-        NamedColor::Background => default_bg(),
-        NamedColor::Cursor => cursor_color(),
-        NamedColor::DimBlack => dim_u32(ansi16()[0]),
-        NamedColor::DimRed => dim_u32(ansi16()[1]),
-        NamedColor::DimGreen => dim_u32(ansi16()[2]),
-        NamedColor::DimYellow => dim_u32(ansi16()[3]),
-        NamedColor::DimBlue => dim_u32(ansi16()[4]),
-        NamedColor::DimMagenta => dim_u32(ansi16()[5]),
-        NamedColor::DimCyan => dim_u32(ansi16()[6]),
-        NamedColor::DimWhite => dim_u32(ansi16()[7]),
-        NamedColor::DimForeground => dim_u32(default_fg()),
+        NamedColor::Black => pal.ansi[0],
+        NamedColor::Red => pal.ansi[1],
+        NamedColor::Green => pal.ansi[2],
+        NamedColor::Yellow => pal.ansi[3],
+        NamedColor::Blue => pal.ansi[4],
+        NamedColor::Magenta => pal.ansi[5],
+        NamedColor::Cyan => pal.ansi[6],
+        NamedColor::White => pal.ansi[7],
+        NamedColor::BrightBlack => pal.ansi[8],
+        NamedColor::BrightRed => pal.ansi[9],
+        NamedColor::BrightGreen => pal.ansi[10],
+        NamedColor::BrightYellow => pal.ansi[11],
+        NamedColor::BrightBlue => pal.ansi[12],
+        NamedColor::BrightMagenta => pal.ansi[13],
+        NamedColor::BrightCyan => pal.ansi[14],
+        NamedColor::BrightWhite | NamedColor::BrightForeground => pal.ansi[15],
+        NamedColor::Foreground => pal.fg,
+        NamedColor::Background => pal.bg,
+        NamedColor::Cursor => pal.cursor,
+        NamedColor::DimBlack => dim_u32(pal.ansi[0]),
+        NamedColor::DimRed => dim_u32(pal.ansi[1]),
+        NamedColor::DimGreen => dim_u32(pal.ansi[2]),
+        NamedColor::DimYellow => dim_u32(pal.ansi[3]),
+        NamedColor::DimBlue => dim_u32(pal.ansi[4]),
+        NamedColor::DimMagenta => dim_u32(pal.ansi[5]),
+        NamedColor::DimCyan => dim_u32(pal.ansi[6]),
+        NamedColor::DimWhite => dim_u32(pal.ansi[7]),
+        NamedColor::DimForeground => dim_u32(pal.fg),
     }
 }
 
-fn indexed_fallback(idx: usize, dim: bool) -> u32 {
+fn indexed_fallback(pal: &TermColors, idx: usize, dim: bool) -> u32 {
     let packed = match idx {
-        0..=15 => ansi16()[idx],
+        0..=15 => pal.ansi[idx],
         16..=231 => {
             let j = idx - 16;
             let steps = [0u32, 95, 135, 175, 215, 255];
@@ -1299,7 +1331,7 @@ fn indexed_fallback(idx: usize, dim: bool) -> u32 {
             let v = (8 + (idx - 232) * 10) as u32;
             (v << 16) | (v << 8) | v
         }
-        _ => default_fg(),
+        _ => pal.fg,
     };
     if dim {
         dim_u32(packed)
@@ -1345,6 +1377,35 @@ mod tests {
 
         s.bump_rev();
         assert_eq!(s.rev(), 5002);
+    }
+
+    /// A theme switch recolors the seeded slots but keeps the ones the
+    /// program set for itself.
+    #[test]
+    fn retheme_moves_seeded_slots_and_keeps_program_colors() {
+        let (s, _rx) = idle_session("retheme");
+        let old = term_colors();
+        {
+            let mut term = s.term.lock();
+            let mut seq = String::new();
+            push_osc_color(&mut seq, "4;1", 0x123456);
+            let mut parser: Processor = Processor::new();
+            parser.advance(&mut *term, seq.as_bytes());
+        }
+        let new = seance_core::schemes::find("riso").unwrap().term.unwrap();
+        s.retheme(&old, &new);
+        let term = s.term.lock();
+        let c = term.colors();
+        assert_eq!(c[1].map(pack_rgb), Some(0x123456));
+        assert_eq!(c[2].map(pack_rgb), Some(new.ansi[2]));
+        assert_eq!(
+            c[NamedColor::Background as usize].map(pack_rgb),
+            Some(new.bg)
+        );
+        assert_eq!(
+            c[NamedColor::Foreground as usize].map(pack_rgb),
+            Some(new.fg)
+        );
     }
 
     /// Seeding is a floor, never an assignment — a stale floor arriving after

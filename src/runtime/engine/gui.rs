@@ -619,6 +619,36 @@ impl Engine {
         }
     }
 
+    /// Switch the color scheme for every window (`ctl theme`, the GUI menu).
+    /// Cells are resolved here, so after recoloring each live pane's palette
+    /// (and each sleeping pane's frozen frame) every pane is re-sent whole,
+    /// idle ones too, or nothing would repaint until it next printed.
+    pub(super) fn set_theme(
+        &mut self,
+        id: &str,
+    ) -> Result<&'static seance_core::schemes::Scheme, String> {
+        let (scheme, old, new) = crate::looks::set(id)?;
+        let mut slugs = Vec::new();
+        for p in &self.panes {
+            if let Some(s) = &p.session {
+                if old != new {
+                    s.retheme(&old, &new);
+                }
+                slugs.push(p.slug.clone());
+            }
+        }
+        if old != new {
+            slugs.extend(self.retheme_frozen(&old, &new));
+        }
+        self.broadcast(GuiEvent::Theme {
+            id: scheme.id.to_string(),
+        });
+        for slug in &slugs {
+            self.push_grid_full(slug);
+        }
+        Ok(scheme)
+    }
+
     /// Give one window whole grids for a circle it just brought on screen.
     ///
     /// Sleeping panes are included: they have no session, but they do have a
@@ -1107,6 +1137,14 @@ impl Engine {
                         s.kick_redraw();
                     }
                 }
+                // Before the state, so the first paint is already in the
+                // right colors.
+                self.send_to(
+                    window_id,
+                    GuiEvent::Theme {
+                        id: crate::looks::active().id.to_string(),
+                    },
+                );
                 let state = self.state_for_window(window_id);
                 // Also refresh peers' rosters (window list / labels).
                 self.push_state_to_all();

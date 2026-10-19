@@ -18,6 +18,7 @@
 //! | `bell-features` (`audio`), `bell-audio-path`, `bell-audio-volume` | sound on BEL |
 //! | `notify-on-command-finish` (`never`/`unfocused`/`always`), `notify-on-command-finish-after` | shell command alerts |
 //! | `config-file` | include another file (`?` prefix = optional) |
+//! | `seance-theme` | startup color scheme until one is picked (daemon; see `looks`) |
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -67,6 +68,9 @@ pub struct TermConfig {
     pub bell_audio_volume: f32,
     pub notify_on_command_finish: CommandFinishNotify,
     pub notify_on_command_finish_after_ms: u64,
+    /// `seance-theme`: the scheme a daemon with no saved choice starts on.
+    /// Not Ghostty's; Ghostty ignores keys it doesn't know.
+    pub seance_theme: Option<String>,
 }
 
 impl Default for TermConfig {
@@ -83,6 +87,7 @@ impl Default for TermConfig {
             bell_audio_volume: 1.0,
             notify_on_command_finish: CommandFinishNotify::Never,
             notify_on_command_finish_after_ms: 5_000,
+            seance_theme: None,
         }
     }
 }
@@ -218,6 +223,7 @@ fn apply(cfg: &mut TermConfig, key: &str, value: &str) {
                 cfg.notify_on_command_finish_after_ms = ms;
             }
         }
+        "seance-theme" if !value.is_empty() => cfg.seance_theme = Some(value.to_string()),
         _ => {}
     }
 }
@@ -371,6 +377,15 @@ mod tests {
         assert_eq!(cfg.font_family.as_deref(), Some("Main"));
         assert_eq!(cfg.background, 0x111111);
         assert_eq!(cfg.foreground, 0x333333);
+    }
+
+    #[test]
+    fn seance_theme_key() {
+        let dir = test_dir("scheme");
+        let p = write(&dir, "terminal.conf", "seance-theme = \"Ouija\"\n");
+        assert_eq!(load(&p).seance_theme.as_deref(), Some("Ouija"));
+        let p = write(&dir, "terminal.conf", "seance-theme =\n");
+        assert_eq!(load(&p).seance_theme, None);
     }
 
     #[test]

@@ -80,10 +80,12 @@ use gpui_component::{
 
 use crate::theme::SeancePalette;
 
-/// Candlelit markdown style — dark highlight theme, compact headings, surface
-/// code blocks. Default TextViewStyle is light-themed and reads as "GitHub
-/// paper" on seance grounds.
+/// Seance markdown style: compact headings, surface code blocks, and a code
+/// highlight theme that matches the scheme's ground (dark unless the scheme
+/// is light). Default TextViewStyle is light-themed and reads as "GitHub
+/// paper" on dark seance grounds.
 fn candlelit_markdown_style() -> TextViewStyle {
+    let light = crate::theme::is_light();
     let mut code = StyleRefinement::default();
     code.background = Some(SeancePalette::surface().into());
     TextViewStyle {
@@ -92,11 +94,15 @@ fn candlelit_markdown_style() -> TextViewStyle {
         // Shared with the fold headings we draw ourselves — one source, so a
         // caret can never change a heading's size on the page.
         heading_font_size: Some(Arc::new(|level, _base| heading_px(level))),
-        highlight_theme: HighlightTheme::default_dark(),
+        highlight_theme: if light {
+            HighlightTheme::default_light()
+        } else {
+            HighlightTheme::default_dark()
+        },
         code_block: code,
         table: StyleRefinement::default(),
         table_cell: StyleRefinement::default(),
-        is_dark: true,
+        is_dark: !light,
     }
 }
 

@@ -1000,6 +1000,14 @@ fn open_uri(uri: &str) {
     crate::sysopen::open_detached(uri);
 }
 
+/// Drop every replayable paint, so the next frame reshapes in the current
+/// colors (a theme switch changes the default fg/bg under an unchanged rev).
+pub(crate) fn forget_painted_frames() {
+    if let Ok(mut c) = shaped_paint_caches().lock() {
+        c.clear();
+    }
+}
+
 fn shaped_paint_caches() -> &'static Mutex<HashMap<String, ShapedPaintCache>> {
     static C: OnceLock<Mutex<HashMap<String, ShapedPaintCache>>> = OnceLock::new();
     C.get_or_init(|| Mutex::new(HashMap::new()))
@@ -1105,11 +1113,18 @@ fn cell_metrics(window: &mut Window) -> (Pixels, Pixels) {
     (px(w), px(h))
 }
 
+/// The scheme's terminal fg/bg, else `terminal.conf`'s (candlelit).
 fn term_default_fg() -> Hsla {
-    packed_to_hsla(crate::term_config::get().foreground)
+    let (fg, _) = crate::theme::term_fg_bg().unwrap_or_else(conf_fg_bg);
+    packed_to_hsla(fg)
 }
 fn term_default_bg() -> Hsla {
-    packed_to_hsla(crate::term_config::get().background)
+    let (_, bg) = crate::theme::term_fg_bg().unwrap_or_else(conf_fg_bg);
+    packed_to_hsla(bg)
+}
+fn conf_fg_bg() -> (u32, u32) {
+    let c = crate::term_config::get();
+    (c.foreground, c.background)
 }
 
 /// SEANCE_DEBUG_RENDER=1 paint accounting: (replays, reshapes, reshape ns).

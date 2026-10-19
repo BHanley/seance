@@ -196,7 +196,13 @@ config-file = ?~/.config/ghostty/config   # font-size, bell, notify rules
 theme = Monokai Pro                       # any Ghostty theme name or path
 ```
 
-Read keys: `theme`, `palette`, `background`, `foreground`, `cursor-color`,
+Color schemes sit on top of this: `seance ctl theme` (or the ✦ menu at the
+top of the rail) switches chrome and terminal colors together for every
+window, and the daemon remembers the pick. Candlelit, the default, keeps the
+palette from this file; `seance-theme = ID` here only picks the scheme a
+daemon starts on before anyone has chosen one. See docs/THEME.md.
+
+Read keys: `seance-theme`, `theme`, `palette`, `background`, `foreground`, `cursor-color`,
 `font-family`, `font-size`, `bell-features` (`audio`), `bell-audio-path`,
 `bell-audio-volume`,
 `notify-on-command-finish` (`never` / `unfocused` / `always`),

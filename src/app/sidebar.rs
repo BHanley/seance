@@ -3,10 +3,9 @@
 //! the host-bridge widget strip (claude accounts) above the summon footer.
 
 use gpui::{div, prelude::*, px, Context, SharedString, Window};
-use gpui_component::{
-    input::Input, menu::ContextMenuExt as _, Colorize as _, StyledExt as _, WindowExt as _,
-};
+use gpui_component::{input::Input, menu::ContextMenuExt as _, StyledExt as _, WindowExt as _};
 
+use crate::control::ControlRequest;
 use crate::pane::PaneBody;
 use crate::runtime::protocol::GuiRequest;
 use crate::theme::SeancePalette;
@@ -143,6 +142,15 @@ impl SeanceApp {
                                         .into_any_element()
                                 })
                         }))
+                        .child(div().my_1().h(px(1.)).bg(SeancePalette::border()))
+                        .child(
+                            div()
+                                .px_1()
+                                .text_xs()
+                                .text_color(SeancePalette::text_faint())
+                                .child("theme"),
+                        )
+                        .children(self.render_theme_rows(cx))
                         .child(div().my_1().h(px(1.)).bg(SeancePalette::border()))
                         .child(
                             div()
@@ -309,7 +317,7 @@ impl SeanceApp {
                             .when(selected, |d| d.bg(selected_row_fill()))
                             .hover(|s| {
                                 if selected {
-                                    s.bg(selected_row_fill().lighten(0.04))
+                                    s.bg(crate::theme::lift(selected_row_fill(), 0.04))
                                 } else {
                                     s.bg(SeancePalette::surface())
                                 }
@@ -1288,6 +1296,68 @@ impl SeanceApp {
         rows
     }
 
+    /// One row per color scheme in the ✦ menu, the active one marked. A
+    /// click asks the daemon, which saves it and repaints every window; the
+    /// menu stays open so schemes can be tried one after another.
+    fn render_theme_rows(&self, cx: &Context<Self>) -> Vec<gpui::AnyElement> {
+        let active = crate::theme::active().id;
+        seance_core::schemes::SCHEMES
+            .iter()
+            .map(|s| {
+                let id = s.id;
+                let is_active = id == active;
+                let c = s.chrome;
+                div()
+                    .id(SharedString::from(format!("theme-{id}")))
+                    .px_1()
+                    .py_0p5()
+                    .rounded_md()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .cursor_pointer()
+                    .text_sm()
+                    .text_color(if is_active {
+                        SeancePalette::flame()
+                    } else {
+                        SeancePalette::text_dim()
+                    })
+                    .hover(|st| {
+                        st.text_color(SeancePalette::flame())
+                            .bg(SeancePalette::surface())
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let _ = this.client.send(GuiRequest::Ctl(ControlRequest::Theme {
+                            id: Some(id.to_string()),
+                            scope: None,
+                            from: None,
+                        }));
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(px(10.))
+                            .child(if is_active { "●" } else { "" }),
+                    )
+                    .child(div().flex_1().min_w_0().child(s.label))
+                    // Ground, accent, second: enough to tell them apart.
+                    .child(div().flex_none().flex().gap_0p5().children(
+                        [c.bg, c.flame, c.violet].map(|v| {
+                            div()
+                                .size(px(9.))
+                                .rounded_sm()
+                                .border_1()
+                                .border_color(SeancePalette::border())
+                                .bg(gpui::rgb(v))
+                        }),
+                    ))
+                    .into_any_element()
+            })
+            .collect()
+    }
+
     pub(super) fn render_sidebar(
         &self,
         window_active: bool,
@@ -1366,7 +1436,7 @@ impl SeanceApp {
                                         s.text_color(SeancePalette::flame())
                                             .bg(SeancePalette::surface())
                                     })
-                                    .tooltip(tip("connected guis"))
+                                    .tooltip(tip("connected guis · theme"))
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.gui_menu_open = !this.gui_menu_open;
                                         cx.notify();

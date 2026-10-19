@@ -1312,6 +1312,15 @@ impl SeanceApp {
                     }
                 }
             }
+            GuiEvent::Theme { id } => {
+                // The daemon's scheme, on attach and on every switch. Grids
+                // in the new colors follow right behind; the replay cache
+                // would otherwise keep painting old default fg/bg.
+                if crate::theme::set_scheme(&id, cx) {
+                    crate::remote_term_view::forget_painted_frames();
+                    cx.refresh_windows();
+                }
+            }
             GuiEvent::HostWidgets { widgets } => {
                 // Daemon-side poller push: replace chip state wholesale.
                 if let Ok(snaps) =

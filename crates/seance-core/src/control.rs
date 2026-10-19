@@ -577,6 +577,17 @@ pub enum ControlRequest {
         from: Option<String>,
     },
 
+    /// Show the active color scheme and the list (`id` absent), or switch
+    /// every attached window to `id`. The daemon saves the choice.
+    Theme {
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        scope: Option<String>,
+        #[serde(default)]
+        from: Option<String>,
+    },
+
     /// One-shot workspace brief for orchestrators (dense pane rows + focus).
     Brief {
         #[serde(default)]
@@ -721,6 +732,7 @@ impl ControlRequest {
             | Self::Finish { from, .. }
             | Self::Roster { from, .. }
             | Self::Space { from, .. }
+            | Self::Theme { from, .. }
             | Self::Sleep { from, .. }
             | Self::Wake { from, .. }
             | Self::RenameCircle { from, .. }
@@ -762,6 +774,7 @@ impl ControlRequest {
             Self::List { scope, .. }
             | Self::RenamePane { scope, .. }
             | Self::Space { scope, .. }
+            | Self::Theme { scope, .. }
             | Self::Send { scope, .. }
             | Self::TaskFail { scope, .. }
             | Self::MsgSend { scope, .. }

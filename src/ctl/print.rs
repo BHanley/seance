@@ -18,6 +18,7 @@ pub(crate) fn print_ok_human(sub: &str, response: &ControlResponse) {
     match sub {
         "list" | "ls" | "brief" | "roster" | "stage" => print_list(data),
         "space" | "spaces" if data.get("spaces").is_some() => print_spaces(data),
+        "theme" | "themes" if data.get("schemes").is_some() => print_themes(data),
         "task" | "inbox" => {
             if let Some(body) = data.get("body").and_then(|v| v.as_str()) {
                 let id = data.get("id").and_then(|v| v.as_str()).unwrap_or("?");
@@ -383,6 +384,7 @@ COMMANDS:
     move [CIRCLE] SPACE           put a circle in a space
     sleep [WS]                    sleep a circle (frees its RAM; wakes on resume)
     wake [WS]                     wake a sleeping circle
+    theme [ID]                    color scheme: show the list, or switch every window
     whoami / caps / grant / revoke / policy
     seize / release / drive PANE  co-presence ownership
     wait PANE [opts]              block until condition
@@ -433,5 +435,23 @@ fn print_spaces(data: &serde_json::Value) {
             let label = c.get("label").and_then(|v| v.as_str()).unwrap_or("");
             println!("  {label}");
         }
+    }
+}
+
+/// `theme`: one row per scheme, the active one starred.
+fn print_themes(data: &serde_json::Value) {
+    let active = data.get("active").and_then(|v| v.as_str()).unwrap_or("");
+    let Some(rows) = data.get("schemes").and_then(|v| v.as_array()) else {
+        return;
+    };
+    for row in rows {
+        let s = |k: &str| row.get(k).and_then(|v| v.as_str()).unwrap_or("");
+        let mark = if s("id") == active { "*" } else { " " };
+        let light = if row.get("light").and_then(|v| v.as_bool()) == Some(true) {
+            "  (light)"
+        } else {
+            ""
+        };
+        println!("{mark} {:<10} {}{light}", s("id"), s("label"));
     }
 }

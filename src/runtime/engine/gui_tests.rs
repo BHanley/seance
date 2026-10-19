@@ -8,6 +8,7 @@
 use super::helpers::now_ms;
 use super::tests::with_test_state_dir;
 use super::*;
+use crate::control::ControlRequest;
 use crate::runtime::outqueue::OutQueue;
 use crate::runtime::protocol::{GuiEvent, GuiRequest};
 use crate::runtime::pty_session::SessionEvent;
@@ -1202,5 +1203,66 @@ fn a_window_that_looks_away_gets_a_fresh_base_when_it_returns() {
         assert_eq!(grid_frames(&watcher), vec![Framing::Damage]);
 
         let _ = std::fs::remove_dir_all(&scratch);
+    });
+}
+
+/// Attach tells the window the active scheme; `ctl theme` lists, refuses an
+/// unknown id with the choices, and a switch reaches every window and is
+/// saved in the state dir. Switches to the default so no other test sees a
+/// changed process-wide palette.
+#[test]
+fn theme_reaches_every_window_and_is_saved() {
+    with_test_state_dir("theme", || {
+        let (mut eng, _rx) = Engine::bare_for_test(temp_scratch("theme"));
+        let a = FakeGui::attach_to(&mut eng);
+        let b = FakeGui::attach_to(&mut eng);
+        eng.handle_gui(
+            GuiRequest::Attach {
+                selected_workspace: None,
+                focused_pane: None,
+                subscriptions: None,
+            },
+            &a.id,
+        );
+        let themes = |g: &FakeGui| -> Vec<String> {
+            g.drain()
+                .into_iter()
+                .filter_map(|ev| match ev {
+                    GuiEvent::Theme { id } => Some(id),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(themes(&a), [crate::looks::active().id]);
+        let _ = b.drain();
+
+        let theme = |id: Option<&str>| ControlRequest::Theme {
+            id: id.map(str::to_string),
+            scope: None,
+            from: None,
+        };
+        let list = eng.handle_control(theme(None));
+        assert!(list.ok);
+        assert_eq!(
+            list.data.as_ref().unwrap()["schemes"]
+                .as_array()
+                .unwrap()
+                .len(),
+            9
+        );
+
+        let bad = eng.handle_control(theme(Some("plaid")));
+        assert!(!bad.ok);
+        assert!(bad.error.unwrap().contains("ouija"));
+        assert!(themes(&b).is_empty());
+
+        let ok = eng.handle_control(theme(Some("Candlelit")));
+        assert!(ok.ok);
+        assert_eq!(ok.data.unwrap()["active"], "candlelit");
+        assert_eq!(themes(&a), ["candlelit"]);
+        assert_eq!(themes(&b), ["candlelit"]);
+        let saved =
+            std::fs::read_to_string(crate::runtime::state_data_dir().join("theme.json")).unwrap();
+        assert!(saved.contains("candlelit"));
     });
 }

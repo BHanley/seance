@@ -918,6 +918,9 @@ impl ClientState {
                 Applied::Badges
             }
             GuiEvent::Pong => Applied::Nothing,
+            // Native-only for now: web chrome stays candlelit, though cell
+            // colors (resolved by the daemon) follow the scheme.
+            GuiEvent::Theme { .. } => Applied::Nothing,
         }
     }
 }

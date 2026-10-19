@@ -1135,6 +1135,23 @@ impl Engine {
                 }
                 Err(e) => err(e),
             },
+            Theme { id, scope, from } => {
+                if let Some(id) = id {
+                    match self.set_theme(&id) {
+                        Ok(s) => {
+                            events::log(
+                                &actor(&from),
+                                scope.as_deref(),
+                                None,
+                                "theme",
+                                format!("theme -> {}", s.id),
+                            );
+                        }
+                        Err(e) => return err(e),
+                    }
+                }
+                ok(theme_json())
+            }
             RenamePane {
                 name,
                 pane,
@@ -1795,4 +1812,13 @@ impl Engine {
             ))
         }
     }
+}
+
+/// `ctl theme` payload: the active scheme and every choice, in menu order.
+fn theme_json() -> serde_json::Value {
+    let schemes: Vec<serde_json::Value> = seance_core::schemes::SCHEMES
+        .iter()
+        .map(|s| json!({"id": s.id, "label": s.label, "light": s.light}))
+        .collect();
+    json!({"active": crate::looks::active().id, "schemes": schemes})
 }

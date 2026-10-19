@@ -70,6 +70,8 @@ fn close_inherited_pty_masters() {}
 
 fn run_daemon_inner(args: Vec<String>) -> Result<()> {
     close_inherited_pty_masters();
+    // Before any pane is spawned or adopted: their palettes seed from it.
+    crate::looks::boot();
     // Install shell integration rc.
     let rc = crate::pane::shell_rc_path();
     if let Some(dir) = rc.parent() {

@@ -66,7 +66,21 @@ pub(super) fn tip_s(
 /// the old `border()` (L19) the selected circle was hard to pick out of a long
 /// rail at a glance.
 pub(super) fn selected_row_fill() -> gpui::Hsla {
-    gpui::hsla(345. / 360., 0.14, 0.28, 1.0)
+    if crate::theme::active().id == seance_core::schemes::DEFAULT {
+        return gpui::hsla(345. / 360., 0.14, 0.28, 1.0);
+    }
+    // Other schemes: the border's hue, the same 9 points of lightness away
+    // from it as candlelit's (L19 -> L28), toward the text.
+    let b = SeancePalette::border();
+    let step = if crate::theme::is_light() {
+        -0.09
+    } else {
+        0.09
+    };
+    gpui::Hsla {
+        l: (b.l + step).clamp(0., 1.),
+        ..b
+    }
 }
 
 pub(super) fn ui_debug(msg: &str) {

@@ -159,6 +159,7 @@ pub(crate) fn with_identity(
             scope,
             from,
         },
+        Theme { id, .. } => Theme { id, scope, from },
         Sleep { workspace, .. } => Sleep {
             workspace,
             scope,

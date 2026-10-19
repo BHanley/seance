@@ -307,6 +307,40 @@ impl Engine {
         self.frozen_grids.get(slug).cloned()
     }
 
+    /// Recolor every frozen frame after a theme switch. Its cells hold
+    /// resolved colors, so each one that was exactly an old palette color
+    /// becomes the new one; anything else (a program's own truecolor) stays.
+    /// Re-saved so a restart doesn't bring the old look back. Returns the
+    /// panes recolored, to be re-sent.
+    pub(super) fn retheme_frozen(
+        &mut self,
+        old: &seance_core::schemes::TermColors,
+        new: &seance_core::schemes::TermColors,
+    ) -> Vec<String> {
+        let map: Vec<(u32, u32)> = old
+            .ansi
+            .iter()
+            .copied()
+            .zip(new.ansi.iter().copied())
+            .chain([(old.fg, new.fg), (old.bg, new.bg)])
+            .collect();
+        let swap = |c: u32| map.iter().find(|(o, _)| *o == c).map_or(c, |(_, n)| *n);
+        let slugs: Vec<String> = self.frozen_grids.keys().cloned().collect();
+        for slug in &slugs {
+            let Some(mut snap) = self.frozen_grids.remove(slug) else {
+                continue;
+            };
+            for cell in &mut snap.cells {
+                cell.fg = swap(cell.fg);
+                cell.bg = swap(cell.bg);
+            }
+            // Clients drop a frame that isn't newer than the one they have.
+            snap.rev += 1;
+            self.freeze_grid(slug, snap);
+        }
+        slugs
+    }
+
     /// Load frozen frames off disk for panes that came back asleep (daemon
     /// restart or `seance upgrade`). A frame that won't decode is dropped: the
     /// pane still reads as asleep, just blank, which is honest.
