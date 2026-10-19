@@ -1,0 +1,620 @@
+//! Pure helpers behind Stage: the circle map, the lead log's newest entry,
+//! the health report, pill overflow, crew order and a pane's last line.
+//! No gpui here, so every rule is unit-tested.
+
+/// The folder a circle's project lives in, from a `slug<TAB>folder` map.
+/// `#` lines and blank lines are comments; the first match wins.
+pub(super) fn circle_folder(map: &str, circle: &str) -> Option<String> {
+    map.lines()
+        .map(str::trim_end)
+        .filter(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
+        .filter_map(|l| l.split_once('\t'))
+        .find(|(slug, _)| slug.trim() == circle)
+        .map(|(_, folder)| folder.trim().to_string())
+        .filter(|f| !f.is_empty())
+}
+
+/// Where a circle's LEAD-LOG.md lives. A relative folder sits beside the
+/// map file. Paths stay strings with `~` intact: the daemon expands them.
+pub(super) fn lead_log_path(map_path: &str, folder: &str) -> String {
+    let folder = folder.trim_end_matches('/');
+    if folder.starts_with('/') || folder.starts_with('~') {
+        return format!("{folder}/LEAD-LOG.md");
+    }
+    match map_path.rfind('/') {
+        Some(i) => format!("{}/{folder}/LEAD-LOG.md", &map_path[..i]),
+        None => format!("{folder}/LEAD-LOG.md"),
+    }
+}
+
+/// Doing / Next / Waiting on from the newest dated entry of a lead log.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct LeadLine {
+    pub doing: Option<String>,
+    pub next: Option<String>,
+    pub waiting: Option<String>,
+}
+
+/// Longest a Doing / Next / Waiting value gets before it is cut.
+const LEAD_FIELD_MAX: usize = 90;
+
+/// The top `## ` entry's `- **Doing:**`, `- **Next:**` and `- **Waiting
+/// on:**` bullets (bold optional, as older entries wrote them). None when
+/// the entry has none of the three.
+pub(super) fn parse_lead_log(text: &str) -> Option<LeadLine> {
+    let mut lines = text.lines().skip_while(|l| !l.starts_with("## "));
+    lines.next()?;
+    let mut out = LeadLine::default();
+    for line in lines.take_while(|l| !l.starts_with("## ")) {
+        let Some(item) = line.trim_start().strip_prefix("- ") else {
+            continue;
+        };
+        let item = item.replace("**", "");
+        let item = item.trim();
+        let Some((key, value)) = item.split_once(':') else {
+            continue;
+        };
+        let slot = match key.trim().to_ascii_lowercase().as_str() {
+            "doing" => &mut out.doing,
+            "next" => &mut out.next,
+            "waiting on" | "waiting" => &mut out.waiting,
+            _ => continue,
+        };
+        let value = ellipsize(&strip_markdown(value), LEAD_FIELD_MAX);
+        if slot.is_none() && !value.is_empty() {
+            *slot = Some(value);
+        }
+    }
+    (out != LeadLine::default()).then_some(out)
+}
+
+/// Drop the markdown a one-line label can't show: backticks, emphasis and
+/// link targets (`[text](url)` keeps the text).
+pub(super) fn strip_markdown(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find('[') {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 1..];
+        match after.find("](") {
+            Some(j) if !after[..j].contains('[') => {
+                let tail = &after[j + 2..];
+                match tail.find(')') {
+                    Some(k) => {
+                        out.push_str(&after[..j]);
+                        rest = &tail[k + 1..];
+                    }
+                    None => {
+                        out.push('[');
+                        rest = after;
+                    }
+                }
+            }
+            _ => {
+                out.push('[');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out.replace(['`', '*'], "").trim().to_string()
+}
+
+/// Cut to `max` characters with an ellipsis, on a char boundary.
+pub(super) fn ellipsize(s: &str, max: usize) -> String {
+    let s = s.trim();
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.truncate(out.trim_end().len());
+    out.push('…');
+    out
+}
+
+/// How the health report's title reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum HealthLevel {
+    Healthy,
+    Warning,
+    Critical,
+}
+
+/// The footer's view of a health report.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Health {
+    pub level: HealthLevel,
+    /// "healthy", "1 warning", ... : the title after its timestamp.
+    pub status: String,
+    /// "11:48" from the title.
+    pub at: Option<String>,
+    /// "memory 34% free".
+    pub xps_memory: Option<String>,
+    /// None = the report has no Mac line or says it is out of reach.
+    pub mac: Option<String>,
+    pub leads: Option<String>,
+    /// "plan 24% of 5h".
+    pub plan: Option<String>,
+}
+
+/// Read the health check's `latest.md`. None when the title line is missing,
+/// so a wrong file shows no footer rather than a made-up one.
+pub(super) fn parse_health(text: &str) -> Option<Health> {
+    let title = text
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("# Seance health"))?;
+    // "2026-10-19 11:48: healthy, notes below"
+    let (stamp, status) = title.split_once(": ").unwrap_or((title, ""));
+    let at = stamp
+        .split_whitespace()
+        .last()
+        .filter(|t| t.contains(':'))
+        .map(str::to_string);
+    let status = status
+        .split(',')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let level = if status.starts_with("healthy") || status == "ok" {
+        HealthLevel::Healthy
+    } else if ["critical", "down", "fail", "error"]
+        .iter()
+        .any(|w| status.contains(w))
+    {
+        HealthLevel::Critical
+    } else {
+        HealthLevel::Warning
+    };
+    let mut h = Health {
+        level,
+        status: if status.is_empty() {
+            "unknown".into()
+        } else {
+            ellipsize(&status, 24)
+        },
+        at,
+        xps_memory: None,
+        mac: None,
+        leads: None,
+        plan: None,
+    };
+    for line in text.lines() {
+        let Some(item) = line.trim_start().strip_prefix("- ") else {
+            continue;
+        };
+        let item = strip_markdown(item);
+        let Some((key, value)) = item.split_once(':') else {
+            continue;
+        };
+        let value = value.trim();
+        match key.trim() {
+            "XPS memory" if h.xps_memory.is_none() => {
+                h.xps_memory = percent_before(value, "free")
+                    .map(|p| format!("memory {p}% free"))
+                    .or_else(|| percent_before(value, "used").map(|p| format!("memory {p}% used")));
+            }
+            "Mac" if h.mac.is_none() => {
+                let lower = value.to_ascii_lowercase();
+                let away = ["unreachable", "asleep", "offline", "down", "timed out"]
+                    .iter()
+                    .any(|w| lower.contains(w));
+                if !away {
+                    h.mac = Some(match percent_after(value, "memory ") {
+                        Some(p) => format!("Mac up · memory {p}% free"),
+                        None => "Mac up".into(),
+                    });
+                }
+            }
+            "Leads" if h.leads.is_none() => {
+                let lower = value.to_ascii_lowercase();
+                h.leads = Some(if lower.starts_with("every") {
+                    "every circle has a lead".into()
+                } else {
+                    ellipsize(&format!("leads: {value}"), 48)
+                });
+            }
+            "Seance" if h.plan.is_none() => {
+                h.plan = percent_after(value, "plan used ").map(|p| {
+                    let window = value
+                        .split("plan used ")
+                        .nth(1)
+                        .and_then(|r| r.split_once(" of "))
+                        .and_then(|(_, r)| r.split(" limit").next())
+                        .map(|w| w.replace(" hour", "h").replace(" day", "d"));
+                    match window {
+                        Some(w) if w.len() <= 6 => format!("Claude plan {p}% of {w}"),
+                        _ => format!("Claude plan {p}%"),
+                    }
+                });
+            }
+            _ => {}
+        }
+    }
+    Some(h)
+}
+
+/// The number in "(34%)" nearest before `word`: "2.5G of 7.4G free (34%)".
+fn percent_before(s: &str, word: &str) -> Option<String> {
+    let i = s.find(word)?;
+    let tail = &s[i..];
+    let open = tail.find('(')?;
+    let close = tail[open..].find("%)")?;
+    let n = &tail[open + 1..open + close];
+    n.parse::<f32>().ok().map(|_| n.to_string())
+}
+
+/// The number right after `prefix`, up to its `%`: "memory 34% free".
+fn percent_after(s: &str, prefix: &str) -> Option<String> {
+    let start = s.find(prefix)? + prefix.len();
+    let tail = &s[start..];
+    let end = tail.find('%')?;
+    let n = tail[..end].trim();
+    n.parse::<f32>().ok().map(|_| n.to_string())
+}
+
+/// Which pills fit in `avail` px, in rail order, plus room for a "+N more"
+/// pill when some don't. The selected circle always keeps its pill.
+pub(super) fn fit_pills(
+    widths: &[f32],
+    avail: f32,
+    more_w: f32,
+    gap: f32,
+    selected: Option<usize>,
+) -> Vec<usize> {
+    let total: f32 = widths.iter().sum::<f32>() + gap * widths.len().saturating_sub(1) as f32;
+    if total <= avail {
+        return (0..widths.len()).collect();
+    }
+    let mut budget = avail - more_w - gap;
+    let mut keep = vec![false; widths.len()];
+    if let Some(s) = selected.filter(|s| *s < widths.len()) {
+        keep[s] = true;
+        budget -= widths[s] + gap;
+    }
+    for (i, w) in widths.iter().enumerate() {
+        if keep[i] {
+            continue;
+        }
+        if w + gap > budget {
+            break;
+        }
+        keep[i] = true;
+        budget -= w + gap;
+    }
+    (0..widths.len()).filter(|i| keep[*i]).collect()
+}
+
+/// A pill's width estimate: padding, the status glyph and the label.
+pub(super) fn pill_width(label: &str) -> f32 {
+    24. + 14. + label.chars().count() as f32 * 6.9
+}
+
+/// A crew member's sort band: waiting on you, then working, then finished,
+/// then quiet, then shells and sleepers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum CrewBand {
+    Needs,
+    Working,
+    Done,
+    Idle,
+    Quiet,
+}
+
+/// Crew order: by band, then the circle's own pane order, so cards only move
+/// when a pane's state changes.
+pub(super) fn crew_order(mut crew: Vec<(usize, CrewBand)>) -> Vec<usize> {
+    crew.sort_by_key(|(i, band)| (*band, *i));
+    crew.into_iter().map(|(i, _)| i).collect()
+}
+
+/// A plain shell with nothing running in it: drawn as a dashed card.
+pub(super) fn is_bare_shell(command: &str, title: Option<&str>, busy: bool) -> bool {
+    if busy {
+        return false;
+    }
+    if title.is_some_and(|t| t.starts_with('✳') || super::util::title_looks_busy(t)) {
+        return false;
+    }
+    let prog = command
+        .split_whitespace()
+        .find(|t| *t != "env" && !t.contains('='))
+        .and_then(|t| t.rsplit('/').next())
+        .unwrap_or("");
+    matches!(prog, "" | "bash" | "zsh" | "sh" | "fish" | "nu")
+}
+
+/// Split "lead · Mac" into the name and its host chip. Seance's pane names
+/// carry the machine as a short last word after " · "; `claude-mac` panes
+/// are on the Mac even when the name doesn't say so.
+pub(super) fn pane_host<'a>(name: &'a str, command: &str) -> (&'a str, Option<&'a str>) {
+    if let Some((base, host)) = name.rsplit_once(" · ") {
+        let host = host.trim();
+        if !host.is_empty() && host.len() <= 8 && !host.contains(' ') && !base.trim().is_empty() {
+            return (base.trim(), Some(host));
+        }
+    }
+    let mac = command
+        .split_whitespace()
+        .any(|t| t.rsplit('/').next() == Some("claude-mac"));
+    (name, mac.then_some("Mac"))
+}
+
+/// The pane's last line of real output, skipping blank lines and a TUI's
+/// input box at the bottom (rules, the `❯` prompt, the hints under it).
+pub(super) fn last_output_line(rows: &[String]) -> Option<String> {
+    let is_rule = |l: &str| {
+        let t = l.trim();
+        t.chars().count() >= 3
+            && t.chars()
+                .all(|c| ('\u{2500}'..='\u{257F}').contains(&c) || c == ' ')
+    };
+    // A rule near the bottom opens the input box: read above the highest
+    // one there.
+    let floor = rows.len().saturating_sub(10);
+    let end = rows[floor..]
+        .iter()
+        .position(|l| is_rule(l))
+        .map(|i| floor + i)
+        .unwrap_or(rows.len());
+    rows[..end]
+        .iter()
+        .rev()
+        .map(|l| l.trim())
+        .find(|l| !l.is_empty() && !is_rule(l))
+        .map(|l| ellipsize(l, 120))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MAP: &str = "# circle slug<TAB>project folder under Projects/.\n\
+main\tProduct Management\n\
+l6-leveling\tL6 Harness\n\
+\n\
+circle-2\tFollows Privacy\n";
+
+    #[test]
+    fn circle_map_finds_folders_and_skips_comments() {
+        assert_eq!(
+            circle_folder(MAP, "l6-leveling").as_deref(),
+            Some("L6 Harness")
+        );
+        assert_eq!(
+            circle_folder(MAP, "circle-2").as_deref(),
+            Some("Follows Privacy")
+        );
+        assert_eq!(circle_folder(MAP, "nope"), None);
+        assert_eq!(
+            circle_folder(MAP, "# circle slug<TAB>project folder under Projects/."),
+            None
+        );
+        assert_eq!(circle_folder("x\t\n", "x"), None);
+        assert_eq!(circle_folder("x Projects\n", "x"), None);
+    }
+
+    #[test]
+    fn lead_log_path_sits_beside_the_map_and_keeps_tilde() {
+        assert_eq!(
+            lead_log_path("~/Claude/Projects/circles.tsv", "L6 Harness"),
+            "~/Claude/Projects/L6 Harness/LEAD-LOG.md"
+        );
+        assert_eq!(lead_log_path("circles.tsv", "a"), "a/LEAD-LOG.md");
+        assert_eq!(lead_log_path("/x/m.tsv", "/abs/p/"), "/abs/p/LEAD-LOG.md");
+        assert_eq!(lead_log_path("/x/m.tsv", "~/p"), "~/p/LEAD-LOG.md");
+    }
+
+    const LOG: &str = "# L6 Harness lead log\n\
+\n\
+The circle lead's running log, newest first. Doing / Done / Next / Waiting on.\n\
+\n\
+## 2026-10-19 (The Oracle, pane l6-leveling)\n\
+- **Done:** lead records saved for User Profile.\n\
+- **Doing:** Seance looks: phase 1 themes on `bh/looks-themes` (worktree seance-looks). Plan: [the plan](https://x.y/z)\n\
+- **Next:** both reviews on phase 1\n\
+- **Waiting on:** nothing from Brian until phase 1 is reviewed.\n\
+\n\
+## 2026-10-16 (12:20, The Oracle, pane l6-leveling)\n\
+- **Doing:** an older thing\n";
+
+    #[test]
+    fn lead_log_reads_the_newest_entry_only() {
+        let l = parse_lead_log(LOG).unwrap();
+        assert_eq!(
+            l.doing.as_deref(),
+            Some("Seance looks: phase 1 themes on bh/looks-themes (worktree seance-looks). Plan: the plan")
+        );
+        assert_eq!(l.next.as_deref(), Some("both reviews on phase 1"));
+        assert_eq!(
+            l.waiting.as_deref(),
+            Some("nothing from Brian until phase 1 is reviewed.")
+        );
+    }
+
+    #[test]
+    fn lead_log_missing_fields_and_plain_bullets() {
+        let l = parse_lead_log("## 2026-10-15\n- Done: log started\n- Next: pick up\n").unwrap();
+        assert_eq!(l.doing, None);
+        assert_eq!(l.next.as_deref(), Some("pick up"));
+        assert_eq!(l.waiting, None);
+        // An entry with none of the three hides the line.
+        assert_eq!(parse_lead_log("## 2026-10-15\n- Done: only done\n"), None);
+        assert_eq!(parse_lead_log("no entries at all\n- **Doing:** x\n"), None);
+        assert_eq!(parse_lead_log(""), None);
+        // `**Doing**:` puts the colon outside the bold.
+        let l = parse_lead_log("## d\n- **Doing**: bold outside\n").unwrap();
+        assert_eq!(l.doing.as_deref(), Some("bold outside"));
+    }
+
+    #[test]
+    fn lead_fields_are_cut_to_one_short_line() {
+        let long = format!("## d\n- **Doing:** {}\n", "word ".repeat(40));
+        let doing = parse_lead_log(&long).unwrap().doing.unwrap();
+        assert!(doing.chars().count() <= LEAD_FIELD_MAX, "{doing}");
+        assert!(doing.ends_with('…'));
+    }
+
+    #[test]
+    fn markdown_is_stripped_for_labels() {
+        assert_eq!(
+            strip_markdown("run `cargo test` **now**"),
+            "run cargo test now"
+        );
+        assert_eq!(
+            strip_markdown("see [PR 12](https://g/12) ok"),
+            "see PR 12 ok"
+        );
+        assert_eq!(strip_markdown("a [b] c"), "a [b] c");
+        assert_eq!(strip_markdown("[x](unclosed"), "[x](unclosed");
+    }
+
+    const HEALTH: &str = "# Seance health 2026-10-19 11:48: healthy, notes below\n\
+\n\
+- **info** Personal still says 'working' but is idle\n\
+\n\
+- XPS memory: 2.5G of 7.4G free (34%), swap 5.3G used (36%)\n\
+- Mac: load 5.3 on 10 cores, memory 34% free, swap 6.4G, disk 4% used, 7 Claude processes\n\
+- Seance: 32 panes in 11 circles; Claude plan used 24% of 5 hour limit, 14% of 7 day limit\n\
+- Leads: every project circle has a live Claude lead\n";
+
+    #[test]
+    fn health_report_reads_every_footer_field() {
+        let h = parse_health(HEALTH).unwrap();
+        assert_eq!(h.level, HealthLevel::Healthy);
+        assert_eq!(h.status, "healthy");
+        assert_eq!(h.at.as_deref(), Some("11:48"));
+        assert_eq!(h.xps_memory.as_deref(), Some("memory 34% free"));
+        assert_eq!(h.mac.as_deref(), Some("Mac up · memory 34% free"));
+        assert_eq!(h.leads.as_deref(), Some("every circle has a lead"));
+        assert_eq!(h.plan.as_deref(), Some("Claude plan 24% of 5h"));
+    }
+
+    #[test]
+    fn health_report_handles_a_sleeping_mac_and_problems() {
+        let text = "# Seance health 2026-10-19 12:00: 2 warnings\n\
+- Mac: unreachable (ssh timed out)\n\
+- Leads: 2 circles have no lead: garmin-nav, pm-odd-jobs and more after that\n";
+        let h = parse_health(text).unwrap();
+        assert_eq!(h.level, HealthLevel::Warning);
+        assert_eq!(h.status, "2 warnings");
+        assert_eq!(h.mac, None);
+        assert!(h.leads.as_deref().unwrap().starts_with("leads: 2 circles"));
+        assert!(h.leads.unwrap().chars().count() <= 48);
+        assert_eq!(h.xps_memory, None);
+        assert_eq!(h.plan, None);
+
+        let crit =
+            parse_health("# Seance health 2026-10-19 12:00: critical, daemon down\n").unwrap();
+        assert_eq!(crit.level, HealthLevel::Critical);
+        // No Mac line at all reads as asleep too.
+        assert_eq!(crit.mac, None);
+    }
+
+    #[test]
+    fn health_report_needs_its_title() {
+        assert_eq!(parse_health(""), None);
+        assert_eq!(parse_health("- XPS memory: 1G of 2G free (50%)\n"), None);
+        let bare = parse_health("# Seance health\n").unwrap();
+        assert_eq!(bare.status, "unknown");
+        assert_eq!(bare.at, None);
+    }
+
+    #[test]
+    fn pills_overflow_into_more_and_keep_the_selection() {
+        let w = [100., 100., 100., 100.];
+        // Everything fits: no "+N more".
+        assert_eq!(fit_pills(&w, 430., 60., 6., None), vec![0, 1, 2, 3]);
+        // 300 px: two pills plus the more pill.
+        assert_eq!(fit_pills(&w, 300., 60., 6., None), vec![0, 1]);
+        // The selected circle stays even when it is last in the rail.
+        assert_eq!(fit_pills(&w, 300., 60., 6., Some(3)), vec![0, 3]);
+        // Too narrow for anything but the selection.
+        assert_eq!(fit_pills(&w, 120., 60., 6., Some(2)), vec![2]);
+        assert_eq!(fit_pills(&[], 10., 60., 6., None), Vec::<usize>::new());
+        // A wide pill stops the run; later narrow ones don't jump ahead of it.
+        assert_eq!(fit_pills(&[50., 400., 50.], 300., 60., 6., None), vec![0]);
+    }
+
+    #[test]
+    fn crew_sorts_by_band_then_pane_order() {
+        let order = crew_order(vec![
+            (0, CrewBand::Quiet),
+            (1, CrewBand::Working),
+            (2, CrewBand::Needs),
+            (3, CrewBand::Working),
+            (4, CrewBand::Done),
+            (5, CrewBand::Idle),
+        ]);
+        assert_eq!(order, vec![2, 1, 3, 4, 5, 0]);
+    }
+
+    #[test]
+    fn bare_shells_are_shells_with_nothing_running() {
+        assert!(is_bare_shell("bash -l", Some("bhanley@omarchy:~"), false));
+        assert!(is_bare_shell("", None, false));
+        assert!(is_bare_shell("/usr/bin/zsh", None, false));
+        assert!(!is_bare_shell("bash -l", Some("✳ Claude Code"), false));
+        assert!(!is_bare_shell("bash -l", None, true));
+        assert!(!is_bare_shell("claude", None, false));
+        assert!(!is_bare_shell("env A=1 claude-mac", None, false));
+    }
+
+    #[test]
+    fn host_chip_comes_from_the_name_or_the_command() {
+        assert_eq!(pane_host("lead · Mac", "bash"), ("lead", Some("Mac")));
+        assert_eq!(
+            pane_host("Follow Lead · XPS", "bash"),
+            ("Follow Lead", Some("XPS"))
+        );
+        assert_eq!(pane_host("term-3", "claude-mac"), ("term-3", Some("Mac")));
+        assert_eq!(pane_host("term-3", "bash -l"), ("term-3", None));
+        // Long tails are part of the name, not a host.
+        assert_eq!(
+            pane_host("a · some long words", "bash"),
+            ("a · some long words", None)
+        );
+    }
+
+    fn rows(s: &[&str]) -> Vec<String> {
+        s.iter().map(|r| r.to_string()).collect()
+    }
+
+    #[test]
+    fn last_line_skips_blanks_and_the_input_box() {
+        let claude = rows(&[
+            "● Read src/app/sidebar.rs",
+            "  Three ideas, ranked",
+            "✻ Cooked for 48s",
+            "",
+            "────────────────────",
+            "❯ ",
+            "────────────────────",
+            "  ? for shortcuts",
+        ]);
+        assert_eq!(
+            last_output_line(&claude).as_deref(),
+            Some("✻ Cooked for 48s")
+        );
+        let shell = rows(&[
+            "$ cargo build",
+            "   Finished release",
+            "bhanley@omarchy:~$ ",
+            "",
+            "",
+        ]);
+        assert_eq!(
+            last_output_line(&shell).as_deref(),
+            Some("bhanley@omarchy:~$")
+        );
+        assert_eq!(last_output_line(&rows(&["", "   "])), None);
+        assert_eq!(last_output_line(&[]), None);
+    }
+
+    #[test]
+    fn ellipsize_counts_chars_not_bytes() {
+        assert_eq!(ellipsize("short", 10), "short");
+        assert_eq!(ellipsize("ééééééé", 4), "ééé…");
+        assert_eq!(ellipsize("ab cd ef", 4), "ab…");
+    }
+}

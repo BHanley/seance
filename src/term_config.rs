@@ -19,6 +19,11 @@
 //! | `notify-on-command-finish` (`never`/`unfocused`/`always`), `notify-on-command-finish-after` | shell command alerts |
 //! | `config-file` | include another file (`?` prefix = optional) |
 //! | `seance-theme` | startup color scheme until one is picked (daemon; see `looks`) |
+//! | `seance-circle-map` | TSV of `circle-slug<TAB>folder` for Stage's lead log line (GUI) |
+//! | `seance-health-file` | health report Stage's footer reads (GUI) |
+//!
+//! The two Stage paths are read through the daemon's fs bridge, so they name
+//! files on the daemon's machine and a leading `~` is the daemon's home.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -71,6 +76,10 @@ pub struct TermConfig {
     /// `seance-theme`: the scheme a daemon with no saved choice starts on.
     /// Not Ghostty's; Ghostty ignores keys it doesn't know.
     pub seance_theme: Option<String>,
+    /// `seance-circle-map`, kept unexpanded: the daemon resolves `~`.
+    pub seance_circle_map: Option<String>,
+    /// `seance-health-file`, kept unexpanded like the circle map.
+    pub seance_health_file: Option<String>,
 }
 
 impl Default for TermConfig {
@@ -88,6 +97,8 @@ impl Default for TermConfig {
             notify_on_command_finish: CommandFinishNotify::Never,
             notify_on_command_finish_after_ms: 5_000,
             seance_theme: None,
+            seance_circle_map: None,
+            seance_health_file: None,
         }
     }
 }
@@ -224,8 +235,15 @@ fn apply(cfg: &mut TermConfig, key: &str, value: &str) {
             }
         }
         "seance-theme" if !value.is_empty() => cfg.seance_theme = Some(value.to_string()),
+        "seance-circle-map" => cfg.seance_circle_map = non_empty(value),
+        "seance-health-file" => cfg.seance_health_file = non_empty(value),
         _ => {}
     }
+}
+
+/// An empty value clears the key, as in Ghostty.
+fn non_empty(value: &str) -> Option<String> {
+    (!value.is_empty()).then(|| value.to_string())
 }
 
 fn set_color(slot: &mut u32, value: &str) {
@@ -386,6 +404,30 @@ mod tests {
         assert_eq!(load(&p).seance_theme.as_deref(), Some("Ouija"));
         let p = write(&dir, "terminal.conf", "seance-theme =\n");
         assert_eq!(load(&p).seance_theme, None);
+    }
+
+    #[test]
+    fn stage_paths_stay_unexpanded_for_the_daemon() {
+        let dir = test_dir("stage");
+        let p = write(
+            &dir,
+            "terminal.conf",
+            "seance-circle-map = ~/Claude/Projects/circles.tsv\nseance-health-file = \"~/.local/state/seance-health/latest.md\"\n",
+        );
+        let cfg = load(&p);
+        // `~` must reach the daemon as-is: a Mac GUI expanding it would ask
+        // the XPS for /Users/... .
+        assert_eq!(
+            cfg.seance_circle_map.as_deref(),
+            Some("~/Claude/Projects/circles.tsv")
+        );
+        assert_eq!(
+            cfg.seance_health_file.as_deref(),
+            Some("~/.local/state/seance-health/latest.md")
+        );
+        let p = write(&dir, "terminal.conf", "seance-circle-map =\n");
+        assert_eq!(load(&p).seance_circle_map, None);
+        assert_eq!(load(&p).seance_health_file, None);
     }
 
     #[test]

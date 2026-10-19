@@ -696,6 +696,10 @@ pub struct WorkspaceMeta {
     /// `GuiEvent::State::circle_modes`, e.g. `["afk"]`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub modes: Vec<String>,
+    /// The pane that leads this circle (`ctl lead`, else its earliest
+    /// terminal pane). Stage puts it up front. Absent from older daemons.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead: Option<String>,
 }
 
 /// A circle mode the host machine defines (`host.json` → `circle_modes`).
@@ -795,6 +799,29 @@ mod workspace_meta_tests {
         assert_eq!(workspace_meta[0].last_touch_ms, 0);
         assert_eq!(workspace_meta[1].workspace, "main");
         assert_eq!(workspace_meta[1].last_output_ms, 0);
+    }
+
+    /// Stage reads the circle's lead from here; older daemons send none,
+    /// and a circle with no lead must not put a `lead` key on the wire.
+    #[test]
+    fn workspace_meta_lead_roundtrips_and_is_optional() {
+        let with = WorkspaceMeta {
+            workspace: "lab".into(),
+            lead: Some("term-1".into()),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&with).unwrap();
+        assert!(json.contains(r#""lead":"term-1""#), "{json}");
+        let back: WorkspaceMeta = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.lead.as_deref(), Some("term-1"));
+
+        let without = WorkspaceMeta {
+            workspace: "lab".into(),
+            ..Default::default()
+        };
+        assert!(!serde_json::to_string(&without).unwrap().contains("lead"));
+        let old: WorkspaceMeta = serde_json::from_str(r#"{"workspace":"lab"}"#).unwrap();
+        assert_eq!(old.lead, None);
     }
 
     /// Attach's subscription seed is three-valued: absent/null = "everything",

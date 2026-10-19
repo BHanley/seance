@@ -191,8 +191,7 @@ Each window has a layout, picked from the **classic · stage · wall** toggle
 (cmd+shift+t on macOS), or with `seance ctl layout NAME`.
 
 - **classic**: the rail and pane grid, exactly as before. The default.
-- **stage**: one circle's lead up front. Placeholder screen for now; your
-  panes keep running underneath, and esc goes back to classic.
+- **stage**: one circle's lead up front. See below.
 - **wall**: every circle live, the old overview (ctrl+shift+space). Leaving
   it with esc, ctrl+shift+space or a click on a circle returns to the layout
   you opened it from.
@@ -204,6 +203,56 @@ restored on launch; the daemon does not store it. A ctrl+shift+space peek at
 the wall is not saved, and a blank second window always opens on classic. `seance ctl layout` lists
 the layouts and each attached window's current one; `seance ctl layout NAME`
 switches every attached window at once.
+
+### Stage
+
+Stage trades the rail for a strip across the top and puts one circle's lead
+in the middle of the window, live and typeable. From top to bottom:
+
+- **The strip.** ✦ opens the same menu as the rail's. Then the circles of the
+  current space as pills, in rail order, each with its state: ✓ done,
+  ◐ working, a violet dot when it needs you, ✕ exited, a faint dot when idle.
+  Click one to switch. Pills that don't fit fold into "+N more", which opens
+  the jump palette. Then the layout toggle and a jump box (ctrl+shift+j, the
+  same jump palette).
+- **Needs you.** Only when something waits: one chip per pane, in every
+  circle, that is needs-human, blocked or risky or has asked a question.
+  **Open** switches to that circle and puts the pane on stage.
+- **The lead.** The circle's lead pane (`seance ctl lead`, else its first
+  terminal) is the real terminal: keys, esc and every chord work as in any
+  focused pane. Its header shows the name, the machine (Mac or XPS, from a
+  name ending `· Mac` or a `claude-mac` command), its state and how long.
+  Under it, a **Doing / Next / Waiting on** line from the top entry of the
+  circle's `LEAD-LOG.md` (see `seance-circle-map` below); circles without a
+  log just skip the line.
+- **Crew.** The circle's other terminals as cards: name, machine, state and
+  the pane's last line of output. Shells with nothing running and sleeping
+  panes are dashed. Click a card to put that pane on stage; "back to lead"
+  returns. "+ worker" opens a new pane in the circle. Below the crew, the
+  circle's **files** as tabs (the dock panel stays out of the way on stage).
+- **Health footer.** XPS and Mac state, the leads line, Claude plan use and
+  the report time, from the file named by `seance-health-file`.
+
+On windows narrower than about 1000px the crew folds behind a "crew · N"
+button in the lead's header, so the terminal keeps its width.
+
+Two optional `terminal.conf` keys feed Stage. Both name files **on the
+daemon's machine** and are read through the daemon, so a thin client sees
+the daemon's copies and a leading `~` means the daemon's home:
+
+```
+seance-circle-map = ~/Claude/Projects/circles.tsv          # circle-slug<TAB>folder
+seance-health-file = ~/.local/state/seance-health/latest.md
+```
+
+The circle map is a TSV of `circle-slug<TAB>folder` (`#` lines are comments);
+a relative folder sits beside the map, and Stage reads
+`<folder>/LEAD-LOG.md`, every 30s at most and on each circle switch. The
+lead log's newest `## ` entry supplies the line, from bullets such as
+`- **Doing:** ...`, `- **Next:** ...` and `- **Waiting on:** ...`. The health
+file is re-read every minute; its first line is
+`# Seance health <date> <time>: <status>`. Leave a key out and its part of
+Stage stays hidden.
 
 ## Terminal settings (Ghostty syntax)
 
@@ -224,7 +273,8 @@ window, and the daemon remembers the pick. Candlelit, the default, keeps the
 palette from this file; `seance-theme = ID` here only picks the scheme a
 daemon starts on before anyone has chosen one. See docs/THEME.md.
 
-Read keys: `seance-theme`, `theme`, `palette`, `background`, `foreground`, `cursor-color`,
+Read keys: `seance-theme`, `seance-circle-map`, `seance-health-file` (Stage,
+see above), `theme`, `palette`, `background`, `foreground`, `cursor-color`,
 `font-family`, `font-size`, `bell-features` (`audio`), `bell-audio-path`,
 `bell-audio-volume`,
 `notify-on-command-finish` (`never` / `unfocused` / `always`),

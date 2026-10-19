@@ -23,11 +23,25 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   rail (and in the top bar of the other two); ctrl+shift+t cycles them.
   Classic is today's layout, unchanged. Wall is the live overview
   (ctrl+shift+space still toggles it, and leaving it returns to the layout
-  you came from). Stage shows a placeholder until it is built. Each window
+  you came from). Each window
   keeps its own layout and the GUI machine remembers the last pick in
   `~/.config/seance/view.json` (a ctrl+shift+space peek is not saved). `seance ctl layout` lists the layouts and
   each window's current one; `seance ctl layout NAME` switches every
   attached window.
+
+- **Stage layout.** One circle's lead up front, live and typeable (esc
+  reaches it; esc no longer leaves Stage). A strip of circle pills with
+  their state replaces the rail, with "+N more" when they don't fit and a
+  jump box for the jump palette. A needs-you bar lists every waiting pane in
+  every circle with an Open button. The lead's header shows its machine,
+  state and a Doing / Next / Waiting on line from the circle's LEAD-LOG.md.
+  The crew sits beside it as cards with each pane's last output line (click
+  to put one on stage), the circle's files as tabs below, and a health
+  footer at the bottom. The dock panel hides on Stage. New `terminal.conf`
+  keys `seance-circle-map` and `seance-health-file` point at the daemon-side
+  files; both are optional. The daemon now sends each circle's lead in
+  State and pushes a fresh State when `ctl lead --set` changes it. See
+  README, "Stage".
 
 - **Color schemes.** Nine looks for the whole app, chrome and terminal
   colors together: candlelit (the default, unchanged), abyssal, ectoplasm,

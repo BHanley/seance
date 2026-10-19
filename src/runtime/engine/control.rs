@@ -466,6 +466,8 @@ impl Engine {
                         p.clone(),
                     );
                     self.persist();
+                    // Stage windows show the lead up front; tell them now.
+                    self.push_state_to_all();
                 }
                 let members: Vec<String> = self
                     .panes

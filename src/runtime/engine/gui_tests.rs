@@ -1352,3 +1352,42 @@ fn layout_lines_are_accepted_and_a_switch_reaches_every_window() {
         assert_eq!(views(&b), ["wall"]);
     });
 }
+
+/// Stage needs each circle's lead in State: the earliest terminal pane, an
+/// explicit `ctl lead` once set, and a fresh push the moment it changes.
+#[test]
+fn state_carries_each_circles_lead_and_ctl_lead_pushes_it() {
+    with_test_state_dir("gui-lead", || {
+        let scratch = temp_scratch("gui-lead");
+        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
+        let first = eng.push_stub_pane("first", "lab");
+        let second = eng.push_stub_pane("second", "lab");
+        let gui = FakeGui::attach_to(&mut eng);
+        attach_all(&mut eng, &gui.id);
+        gui.drain();
+
+        let lead_of = |gui: &FakeGui| {
+            gui.drain().into_iter().rev().find_map(|ev| match ev {
+                GuiEvent::State { workspace_meta, .. } => workspace_meta
+                    .into_iter()
+                    .find(|m| m.workspace == "lab")
+                    .map(|m| m.lead),
+                _ => None,
+            })
+        };
+        eng.push_state_to_all();
+        assert_eq!(lead_of(&gui), Some(Some(first.clone())));
+
+        let r = eng.handle_control(ControlRequest::Lead {
+            workspace: Some("lab".into()),
+            pane: Some(second.clone()),
+            scope: None,
+            from: None,
+        });
+        assert!(r.error.is_none(), "{:?}", r.error);
+        // No manual push here: the lead change itself must reach the window.
+        assert_eq!(lead_of(&gui), Some(Some(second)));
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    });
+}

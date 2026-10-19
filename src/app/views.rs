@@ -3,14 +3,13 @@
 //! `ctl layout`, and the last pick is saved on this machine
 //! (`~/.config/seance/view.json`), never in the daemon's shared layout.
 //!
-//! Wall is the live overview (ctrl+shift+space toggles it); Stage is a
-//! placeholder until it is built. Both draw over the Classic tree, so panes
-//! and their streams carry on untouched underneath.
+//! Wall is the live overview (ctrl+shift+space toggles it) and draws over
+//! the Classic tree. Stage (`stage.rs`) takes the rail and grid's place, so
+//! the pane on stage is the only place its terminal renders.
 
 use std::path::PathBuf;
 
 use gpui::{div, prelude::*, px, Context, SharedString};
-use gpui_component::StyledExt as _;
 pub(crate) use seance_core::views::ViewMode;
 
 use crate::theme::SeancePalette;
@@ -54,12 +53,6 @@ fn config_path() -> PathBuf {
         }
     }
     PathBuf::from(shellexpand::tilde("~/.config/seance/view.json").as_ref())
-}
-
-/// Keys stop at the root on Stage (still a placeholder) unless a visible
-/// editor above it is open. Wall keeps the overview's old behavior.
-fn placeholder_owns_keys(mode: ViewMode, editor_open: bool) -> bool {
-    mode == ViewMode::Stage && !editor_open
 }
 
 fn encode(mode: ViewMode) -> String {
@@ -114,6 +107,9 @@ impl SeanceApp {
         if mode == ViewMode::Wall {
             self.view.before_wall = self.view.mode;
         }
+        if mode == ViewMode::Stage {
+            self.stage_enter();
+        }
         self.view.mode = mode;
         let wall = mode == ViewMode::Wall;
         if self.overview != wall {
@@ -142,25 +138,14 @@ impl SeanceApp {
         }
     }
 
-    /// The Stage placeholder hides the panes but not their focus: without
-    /// this, typing (and Enter) would reach a pane nobody can see. Runs after
-    /// the app chords, so those still work. The quicklaunch editor draws
-    /// above the placeholder and keeps its keys.
-    pub(super) fn stage_swallow_keys(&self, cx: &mut Context<Self>) {
-        if placeholder_owns_keys(self.view.mode, self.quicklaunch_editor.is_some()) {
-            cx.stop_propagation();
-        }
-    }
-
-    /// What draws over the Classic tree: nothing, the Stage placeholder, or
-    /// the Wall.
+    /// What draws over the Classic tree: only the Wall. Stage replaces the
+    /// tree instead (see `render`).
     pub(super) fn render_view_overlay(
         &mut self,
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
         match self.view.mode {
-            ViewMode::Classic => None,
-            ViewMode::Stage => Some(self.render_stage_placeholder(cx).into_any_element()),
+            ViewMode::Classic | ViewMode::Stage => None,
             ViewMode::Wall => Some(self.render_overview(cx).into_any_element()),
         }
     }
@@ -204,7 +189,7 @@ impl SeanceApp {
                         ViewMode::Classic => {
                             "classic: the rail and pane grid (ctrl+shift+t cycles)"
                         }
-                        ViewMode::Stage => "stage: one circle's lead up front (coming next)",
+                        ViewMode::Stage => "stage: one circle's lead up front, crew beside it",
                         ViewMode::Wall => "wall: every circle live (ctrl+shift+space)",
                     }))
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -214,79 +199,11 @@ impl SeanceApp {
             }))
             .into_any_element()
     }
-
-    fn render_stage_placeholder(&self, cx: &Context<Self>) -> impl IntoElement {
-        div()
-            .id("stage")
-            .absolute()
-            .inset_0()
-            .flex()
-            .flex_col()
-            .bg(SeancePalette::bg())
-            // Same as the Wall: clicks must not reach the panes underneath.
-            .occlude()
-            .child(
-                div()
-                    .flex_none()
-                    .h(px(40.))
-                    .px_4()
-                    .flex()
-                    .items_center()
-                    // Toggle beside the title, not at the far right: a docked
-                    // file panel draws over the right edge and hid it.
-                    .gap_4()
-                    .border_b_1()
-                    .border_color(SeancePalette::border())
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_semibold()
-                            .text_color(SeancePalette::text())
-                            .child("stage"),
-                    )
-                    .child(
-                        div()
-                            .w(px(220.))
-                            .child(self.render_view_switch("stage", cx)),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .justify_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_lg()
-                            .text_color(SeancePalette::flame())
-                            .child("Stage arrives in the next update"),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(SeancePalette::text_faint())
-                            .child(
-                                "your panes keep running · esc for classic, or pick a layout above",
-                            ),
-                    ),
-            )
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn only_the_stage_placeholder_swallows_keys() {
-        assert!(placeholder_owns_keys(ViewMode::Stage, false));
-        assert!(!placeholder_owns_keys(ViewMode::Stage, true));
-        assert!(!placeholder_owns_keys(ViewMode::Classic, false));
-        assert!(!placeholder_owns_keys(ViewMode::Wall, false));
-    }
 
     #[test]
     fn codec_roundtrips_every_layout() {

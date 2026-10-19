@@ -39,6 +39,8 @@ mod pads;
 mod palette;
 mod quicklaunch;
 mod sidebar;
+mod stage;
+mod stage_parse;
 mod tiles;
 mod util;
 mod views;
@@ -291,6 +293,8 @@ pub struct SeanceApp {
     overview: bool,
     /// This window's layout (Classic / Stage / Wall).
     view: views::ViewState,
+    /// Stage's leads, lead log line, health report and caches.
+    stage: stage::StageState,
     /// This window attached with an empty subscription set (second process).
     empty_window: bool,
     /// Quicklaunch strip entries (~/.config/seance/quicklaunch.json).
@@ -514,6 +518,7 @@ impl SeanceApp {
             workspace_unread: std::collections::HashMap::new(),
             overview: view.mode == views::ViewMode::Wall,
             view,
+            stage: stage::StageState::default(),
             empty_window: empty,
             quicklaunch: Vec::new(),
             quicklaunch_mtime: None,
@@ -531,6 +536,7 @@ impl SeanceApp {
             nav: workspaces::NavHistory::default(),
         };
         app.announce_view();
+        app.start_stage_ticker(cx);
         // Seed the prompt-library user file on the DAEMON machine (write-if-
         // missing) and pre-warm the cache so the palette has user prompts by
         // the first refresh tick. Plain thread: bridge calls block.
@@ -925,7 +931,11 @@ impl SeanceApp {
                 // a circle renamed back to its slug must lose its entry.
                 let mut names = std::collections::HashMap::new();
                 let mut modes = std::collections::HashMap::new();
+                self.stage.leads.clear();
                 for m in workspace_meta {
+                    if let Some(lead) = m.lead.clone() {
+                        self.stage.leads.insert(m.workspace.clone(), lead);
+                    }
                     if !m.modes.is_empty() {
                         modes.insert(m.workspace.clone(), m.modes.clone());
                     }
@@ -1497,6 +1507,10 @@ impl SeanceApp {
     /// scarcer (another circle's pane, untiled, popped, hidden by zoom) is
     /// out of the dispatch tree, where focus silently strands the keyboard.
     fn pane_content_rendered(&self, p: &Pane) -> bool {
+        // Stage renders one pane: the one on stage.
+        if self.view.mode == views::ViewMode::Stage {
+            return self.stage_pane().as_deref() == Some(p.slug.as_str());
+        }
         if let Some(z) = self.zoomed_slug.as_deref() {
             if self.panes.iter().any(|q| q.slug == z) {
                 return p.slug == z;
@@ -1728,11 +1742,6 @@ impl SeanceApp {
             }
             if self.overview {
                 self.set_overview(false, cx);
-                cx.stop_propagation();
-                return;
-            }
-            if self.view.mode == views::ViewMode::Stage {
-                self.set_view(views::ViewMode::Classic, cx);
                 cx.stop_propagation();
                 return;
             }
@@ -2845,6 +2854,10 @@ impl Render for SeanceApp {
         // The shared arrangement may have put a notes face up (boot, or another
         // window) — materialize it before the focus pass reads `flipped`.
         self.sync_notes_flip(window, cx);
+        let staged = self.view.mode == views::ViewMode::Stage;
+        if staged {
+            self.stage_sync();
+        }
         if matches!(self.palette, PaletteMode::Closed)
             && self.renaming.is_none()
             && self.whisper.is_none()
@@ -2854,27 +2867,57 @@ impl Render for SeanceApp {
             self.ensure_keyboard_focus(window, cx);
         }
 
-        // Timed section construction (SEANCE_DEBUG_RENDER=1 reports per-section
-        // avg/max ms — pinpoints which surface makes frames expensive).
-        let active = window.is_window_active();
-        let t0 = std::time::Instant::now();
-        let sidebar_el = self.render_sidebar(active, cx).into_any_element();
-        let t1 = std::time::Instant::now();
-        let asks_el: Vec<gpui::AnyElement> = self
-            .render_asks(cx)
-            .into_iter()
-            .map(|e| e.into_any_element())
-            .collect();
-        let shelf_el = self.render_minimize_shelf(active, cx).into_any_element();
-        let stage_el = self.render_stage_strip(active, cx).into_any_element();
-        let awaken_el = self.render_awaken_bar(cx);
-        let daemon_err_el = self.render_daemon_error_bar(cx);
-        let t2 = std::time::Instant::now();
-        let tiles_el = self.render_tiles(active, cx).into_any_element();
-        let t3 = std::time::Instant::now();
-        self.render_probe.add("sidebar", t1 - t0);
-        self.render_probe.add("strips", t2 - t1);
-        self.render_probe.add("tiles", t3 - t2);
+        // Stage takes the rail and grid's place; building them anyway would
+        // render the staged terminal twice.
+        let body: Vec<gpui::AnyElement> = if staged {
+            vec![self.render_stage(window, cx)]
+        } else {
+            // Timed section construction (SEANCE_DEBUG_RENDER=1 reports per-section
+            // avg/max ms — pinpoints which surface makes frames expensive).
+            let active = window.is_window_active();
+            let t0 = std::time::Instant::now();
+            let sidebar_el = self.render_sidebar(active, cx).into_any_element();
+            let t1 = std::time::Instant::now();
+            let asks_el: Vec<gpui::AnyElement> = self
+                .render_asks(cx)
+                .into_iter()
+                .map(|e| e.into_any_element())
+                .collect();
+            let shelf_el = self.render_minimize_shelf(active, cx).into_any_element();
+            let stage_el = self.render_stage_strip(active, cx).into_any_element();
+            let awaken_el = self.render_awaken_bar(cx);
+            let daemon_err_el = self.render_daemon_error_bar(cx);
+            let t2 = std::time::Instant::now();
+            let tiles_el = self.render_tiles(active, cx).into_any_element();
+            let t3 = std::time::Instant::now();
+            self.render_probe.add("sidebar", t1 - t0);
+            self.render_probe.add("strips", t2 - t1);
+            self.render_probe.add("tiles", t3 - t2);
+
+            vec![
+                sidebar_el,
+                // min_w_0 is load-bearing: without it the main column's
+                // min-content width (sum of tile mins) blocks window shrink
+                // and the right edge of the last pane goes off-screen.
+                div()
+                    .flex_1()
+                    .h_full()
+                    .min_w_0()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .flex()
+                    .flex_col()
+                    // Above everything: if the daemon won't have us, nothing
+                    // below this line is going to explain itself.
+                    .child(daemon_err_el)
+                    .children(asks_el)
+                    .child(shelf_el)
+                    .child(stage_el)
+                    .child(awaken_el)
+                    .child(tiles_el)
+                    .into_any_element(),
+            ]
+        };
 
         div()
             .id("seance-root")
@@ -2885,7 +2928,6 @@ impl Render for SeanceApp {
             // Capture phase: app chords + palette win before focused terminal.
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 this.on_global_key_capture(event, window, cx);
-                this.stage_swallow_keys(cx);
             }))
             .on_action(cx.listener(|this, act: &ActToggleTiled, _, cx| {
                 this.toggle_tiled(&act.0, cx);
@@ -3120,28 +3162,7 @@ impl Render for SeanceApp {
                     this.finish_layout_resize(cx);
                 }),
             )
-            .child(sidebar_el)
-            .child(
-                // min_w_0 is load-bearing: without it the main column's
-                // min-content width (sum of tile mins) blocks window shrink
-                // and the right edge of the last pane goes off-screen.
-                div()
-                    .flex_1()
-                    .h_full()
-                    .min_w_0()
-                    .min_h_0()
-                    .overflow_hidden()
-                    .flex()
-                    .flex_col()
-                    // Above everything: if the daemon won't have us, nothing
-                    // below this line is going to explain itself.
-                    .child(daemon_err_el)
-                    .children(asks_el)
-                    .child(shelf_el)
-                    .child(stage_el)
-                    .child(awaken_el)
-                    .child(tiles_el),
-            )
+            .children(body)
             .children(self.render_view_overlay(cx))
             // Below the (deferred) menu dropdown, above everything else — the
             // click-away catcher for an open host menu.
@@ -3151,6 +3172,8 @@ impl Render for SeanceApp {
             .children(self.render_gui_menu(cx))
             .children(match &self.drawer {
                 // The pad and activity drawers cover the dock panel while open.
+                // Stage shows the circle's files in its own column instead.
+                Drawer::Closed if staged => None,
                 Drawer::Closed => self.render_dock_panel(cx),
                 Drawer::Activity => Some(
                     div()

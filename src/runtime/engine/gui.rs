@@ -414,6 +414,7 @@ impl Engine {
                 last_output_ms: self.workspace_output.get(&ws).copied().unwrap_or(0),
                 last_touch_ms: self.workspace_touch_ms.get(&ws).copied().unwrap_or(0),
                 name: self.workspace_names.get(&ws).cloned(),
+                lead: self.effective_lead(&ws),
                 workspace: ws,
             })
             .collect();
