@@ -511,7 +511,7 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    /// ✦ mark, Wall · Focus, the layout toggle, the summary
+    /// ✦ mark (unless the space row holds it), Wall · Focus, the layout toggle, the summary
     /// and the jump box.
     fn render_wall_header(
         &self,
@@ -599,27 +599,10 @@ impl SeanceApp {
             .bg(SeancePalette::bg_elevated())
             .border_b_1()
             .border_color(SeancePalette::border())
-            .child(
-                div()
-                    .id("wall-mark")
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap(px(7.))
-                    .px_1()
-                    .rounded_md()
-                    .text_sm()
-                    .font_semibold()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(SeancePalette::surface()))
-                    .tooltip(tip("connected guis · theme"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.gui_menu_open = !this.gui_menu_open;
-                        cx.notify();
-                    }))
-                    .child(div().text_color(SeancePalette::flame()).child("✦"))
-                    .child(div().text_color(SeancePalette::text()).child("seance")),
-            )
+            // The space row holds the mark when it shows.
+            .when(!self.space_tabs_shown(), |d| {
+                d.child(self.render_seance_mark("wall", cx))
+            })
             .children(rename)
             .when(!renaming, |d| {
                 d.child(wall_focus)

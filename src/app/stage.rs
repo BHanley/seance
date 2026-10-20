@@ -37,7 +37,7 @@ const HEALTH_EVERY: Duration = Duration::from_secs(60);
 /// its width.
 const CREW_FOLD_BELOW: f32 = 1000.;
 /// Stage and Wall's row of space tabs.
-const SPACE_ROW_H: f32 = 24.;
+const SPACE_ROW_H: f32 = 30.;
 /// Lines a done chip's peek card shows of the finish note.
 const PEEK_LINES: usize = 12;
 /// Bottom rows read for a crew card's last line: enough to clear a TUI's
@@ -719,7 +719,8 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    /// ✦ mark, circle pills, the layout toggle and the jump box.
+    /// ✦ mark (unless the space row holds it), circle pills, the layout
+    /// toggle and the jump box.
     fn render_stage_top(&self, width: f32, cx: &Context<Self>) -> AnyElement {
         let rename = self.render_rename_field();
         let renaming = rename.is_some();
@@ -728,8 +729,11 @@ impl SeanceApp {
         let circles = self.subs_pref.spaces.circles_in(&space, &self.workspaces());
         let jump_w = if width >= 1200. { 270. } else { 190. };
         let switch_w = 190.;
+        // The mark sits on the space row above when that row shows.
+        let tabs = self.space_tabs_shown();
+        let mark_w = if tabs { 0. } else { 84. + 14. };
         // Strip padding, the mark, the toggle, the jump box and the gaps.
-        let avail = width - 28. - 84. - switch_w - jump_w - 14. * 3.;
+        let avail = width - 28. - mark_w - switch_w - jump_w - 14. * 2.;
         let labels: Vec<String> = circles.iter().map(|c| self.workspace_label(c)).collect();
         let widths: Vec<f32> = labels.iter().map(|l| pill_width(l)).collect();
         let sel_idx = selected
@@ -810,27 +814,7 @@ impl SeanceApp {
             .bg(SeancePalette::bg_elevated())
             .border_b_1()
             .border_color(SeancePalette::border())
-            .child(
-                div()
-                    .id("stage-mark")
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap(px(7.))
-                    .px_1()
-                    .rounded_md()
-                    .text_sm()
-                    .font_semibold()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(SeancePalette::surface()))
-                    .tooltip(tip("connected guis · theme"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.gui_menu_open = !this.gui_menu_open;
-                        cx.notify();
-                    }))
-                    .child(div().text_color(SeancePalette::flame()).child("✦"))
-                    .child(div().text_color(SeancePalette::text()).child("seance")),
-            )
+            .when(!tabs, |d| d.child(self.render_seance_mark("stage", cx)))
             .child(
                 div()
                     .flex_1()
@@ -891,9 +875,44 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    /// Stage and Wall draw their row of space tabs: more than one space.
+    /// The ✦ seance mark; a click opens the connected guis and theme menu.
+    pub(super) fn render_seance_mark(&self, key: &str, cx: &Context<Self>) -> AnyElement {
+        div()
+            .id(SharedString::from(format!("{key}-mark")))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(7.))
+            .px_1()
+            .rounded_md()
+            .text_sm()
+            .font_semibold()
+            .cursor_pointer()
+            .hover(|s| s.bg(SeancePalette::surface()))
+            .tooltip(tip("connected guis · theme"))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.gui_menu_open = !this.gui_menu_open;
+                cx.notify();
+            }))
+            .child(div().text_color(SeancePalette::flame()).child("✦"))
+            .child(div().text_color(SeancePalette::text()).child("seance"))
+            .into_any_element()
+    }
+
+    /// Stage and Wall draw their row of space tabs: more than one space
+    /// with circles in it. Empty spaces get no tab; Classic's rail has them.
     pub(super) fn space_tabs_shown(&self) -> bool {
-        self.view.mode != ViewMode::Classic && self.subs_pref.spaces.list.len() > 1
+        if self.view.mode == ViewMode::Classic {
+            return false;
+        }
+        let ordered = self.workspaces();
+        let spaces = &self.subs_pref.spaces;
+        spaces
+            .list
+            .iter()
+            .filter(|sp| !spaces.circles_in(&sp.id, &ordered).is_empty())
+            .nth(1)
+            .is_some()
     }
 
     /// What the space tabs take off the top, for overlays placed below it.
@@ -932,63 +951,80 @@ impl SeanceApp {
         } else {
             "ctrl+alt+page up / down steps"
         };
-        let tabs = spaces.list.iter().map(|sp| {
+        let tabs = spaces.list.iter().filter_map(|sp| {
             let n = spaces.circles_in(&sp.id, &ordered).len();
             let on = sp.id == shown;
+            if n == 0 && !on {
+                return None;
+            }
             let id = sp.id.clone();
             let count = match n {
                 0 => "no circles".to_string(),
                 1 => "1 circle".to_string(),
                 n => format!("{n} circles"),
             };
-            div()
-                .id(SharedString::from(format!("{key}-space-{}", sp.id)))
-                .tooltip(tip_s(format!("{} · {count} ({steps})", sp.name)))
-                .flex_none()
-                .h_full()
-                .flex()
-                .items_center()
-                .gap(px(5.))
-                .border_b_2()
-                .border_color(if on {
-                    SeancePalette::flame()
-                } else {
-                    gpui::transparent_black()
-                })
-                .text_color(if on {
-                    SeancePalette::text()
-                } else if n > 0 {
-                    SeancePalette::text_dim()
-                } else {
-                    SeancePalette::text_faint()
-                })
-                .when(n > 0 && !on, |d| {
-                    d.cursor_pointer()
-                        .hover(|s| s.text_color(SeancePalette::text()))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.pick_space(&id, window, cx);
-                        }))
-                })
-                .child(sp.name.clone())
-                .when_some(self.space_mark(&sp.id), |d, (glyph, color)| {
-                    d.child(div().text_color(color).child(glyph))
-                })
+            Some(
+                div()
+                    .id(SharedString::from(format!("{key}-space-{}", sp.id)))
+                    .tooltip(tip_s(format!("{} · {count} ({steps})", sp.name)))
+                    .flex_none()
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .gap(px(5.))
+                    .border_b_2()
+                    .border_color(if on {
+                        SeancePalette::flame()
+                    } else {
+                        gpui::transparent_black()
+                    })
+                    .text_color(if on {
+                        SeancePalette::text()
+                    } else if n > 0 {
+                        SeancePalette::text_dim()
+                    } else {
+                        SeancePalette::text_faint()
+                    })
+                    .when(n > 0 && !on, |d| {
+                        d.cursor_pointer()
+                            .hover(|s| s.text_color(SeancePalette::text()))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.pick_space(&id, window, cx);
+                            }))
+                    })
+                    .child(sp.name.clone())
+                    .when_some(self.space_mark(&sp.id), |d, (glyph, color)| {
+                        d.child(div().text_color(color).child(glyph))
+                    }),
+            )
         });
+        // The ✦ mark leads the row, so the spaces sit beside it rather than
+        // above it.
         Some(
             div()
-                .id(SharedString::from(format!("{key}-spaces")))
                 .flex_none()
                 .h(px(SPACE_ROW_H))
                 .px(px(14.))
                 .flex()
-                .gap(px(16.))
-                .overflow_x_scroll()
-                .track_scroll(&self.stage.space_tabs)
-                .text_xs()
+                .items_center()
+                .gap(px(14.))
                 .bg(SeancePalette::bg_elevated())
                 .border_b_1()
                 .border_color(SeancePalette::border())
-                .children(tabs)
+                .child(self.render_seance_mark(key, cx))
+                .child(
+                    div()
+                        .id(SharedString::from(format!("{key}-spaces")))
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .flex()
+                        .gap(px(16.))
+                        .overflow_x_scroll()
+                        .track_scroll(&self.stage.space_tabs)
+                        .text_xs()
+                        .children(tabs),
+                )
                 .into_any_element(),
         )
     }

@@ -40,8 +40,12 @@ impl SeanceApp {
             return None;
         }
         let self_id = self.window_id.clone();
-        // Stage and Wall put the ✦ under their row of space tabs.
-        let top = 40. + self.space_tabs_h();
+        // Stage and Wall's space row holds the ✦ when it shows.
+        let top = if self.space_tabs_shown() {
+            self.space_tabs_h() + 2.
+        } else {
+            40.
+        };
         let rows: Vec<(String, String, usize)> = self
             .windows
             .iter()
