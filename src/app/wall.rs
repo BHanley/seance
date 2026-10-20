@@ -6,8 +6,8 @@
 //! view is in the frame and the keyboard parks on the window: arrows move
 //! the selection, Enter focuses, esc goes back, and typing reaches nothing.
 //! The overview stream (`SetOverview`) keeps every circle's grid coming
-//! while the Wall is up. The lead logs and the event feed are read from the
-//! daemon on background tasks when due, never from render.
+//! while the Wall is up. The lead logs, the leads' pads and the event feed
+//! are read from the daemon on background tasks when due, never from render.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,9 +26,9 @@ use super::stage::{chip_button, host_chip_owned, read_lead_line, stageable, Line
 use super::stage_parse::{pane_host, LeadLine};
 use super::util::{now_ms, tip};
 use super::wall_model::{
-    grid_cols, health_row, mac_waiting, merge_rows, move_selection, place_tiles, rows_used,
-    shape_feed, tile_state, wall_takes_keys, Cell, Dir, Dot, FeedRow, TileFacts, TileState,
-    FEED_CAP, FEED_FOLD_BELOW, FEED_KINDS, RAW_CAP,
+    finish_excerpt, grid_cols, health_row, last_real_line, mac_waiting, merge_rows, move_selection,
+    place_tiles, rows_used, shape_feed, task_title, tile_state, wall_takes_keys, Cell, Dir, Dot,
+    FeedRow, TileFacts, TileState, FEED_CAP, FEED_FOLD_BELOW, FEED_KINDS, RAW_CAP,
 };
 use super::workspaces::WorkspaceAttention;
 use super::SeanceApp;
@@ -42,6 +42,8 @@ const HEADER_H: f32 = 46.;
 const GAP: f32 = 10.;
 /// Rows shrink to fill the height down to this, then the grid scrolls.
 const MIN_ROW_H: f32 = 140.;
+/// Lines of a lead's last finish note a small tile shows.
+const RESULT_LINES: usize = 3;
 
 /// The Wall's per-window state: caches and the feed. Nothing is saved.
 #[derive(Default)]
@@ -55,6 +57,13 @@ pub(super) struct WallState {
     lead_busy: bool,
     /// The circles the last lead-log read covered.
     lead_circles: Vec<String>,
+    /// lead pane → the start of its newest finish note, read on the feed's
+    /// clock while the Wall is up.
+    results: HashMap<String, Vec<String>>,
+    results_asked: Option<Instant>,
+    results_busy: bool,
+    /// The leads the last pad read covered.
+    result_leads: Vec<String>,
     /// Today's events (feed kinds only), oldest first, and the cursor.
     raw: Vec<Event>,
     seq: u64,
@@ -83,7 +92,12 @@ struct Tile {
     label: String,
     state: TileState,
     lead: Option<String>,
-    lines: Vec<String>,
+    /// The lead's task, from its terminal title.
+    title: Option<String>,
+    doing: Option<String>,
+    result: Vec<String>,
+    /// The last screen line that isn't chrome, when the rest is empty.
+    fallback: Option<String>,
     footer: Option<String>,
     /// The pane a needs-you tile's Open puts on stage.
     asking: Option<String>,
@@ -115,6 +129,7 @@ impl SeanceApp {
     /// looking, so the next visit starts fresh rather than log old news.
     pub(super) fn wall_leave(&mut self) {
         self.wall.mac_seen.clear();
+        self.wall.results_asked = None;
     }
 
     /// Plain arrows move the selection, Enter focuses it. True when used.
@@ -221,6 +236,52 @@ impl SeanceApp {
             .detach();
         }
 
+        // Each awake circle's lead pad, for its last result. Due with the
+        // feed, or at once when the set of leads changes.
+        let leads: Vec<String> = circles
+            .iter()
+            .filter(|c| !self.workspace_asleep(c))
+            .filter_map(|c| self.stage_lead(c))
+            .collect();
+        let results_due = !self.wall.results_busy
+            && (self.wall.result_leads.len() != leads.len()
+                || leads.iter().any(|l| !self.wall.result_leads.contains(l))
+                || self
+                    .wall
+                    .results_asked
+                    .is_none_or(|at| at.elapsed() >= FEED_EVERY));
+        if results_due {
+            self.wall.results_busy = true;
+            self.wall.results_asked = Some(Instant::now());
+            self.wall.result_leads = leads.clone();
+            let client = Arc::clone(&self.client);
+            cx.spawn(async move |this, cx| {
+                let got = cx
+                    .background_executor()
+                    .spawn(async move {
+                        leads
+                            .into_iter()
+                            .filter_map(|slug| {
+                                let path = Self::scratch_path(&slug, "md");
+                                let (pad, _) = client.fs_read_string(&path).ok()?;
+                                let lines = finish_excerpt(&pad, RESULT_LINES);
+                                (!lines.is_empty()).then_some((slug, lines))
+                            })
+                            .collect::<HashMap<_, _>>()
+                    })
+                    .await;
+                let Some(this) = this.upgrade() else { return };
+                this.update(cx, |app: &mut SeanceApp, cx| {
+                    app.wall.results_busy = false;
+                    if app.wall.results != got {
+                        app.wall.results = got;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
+
         let Some(map) = crate::term_config::get().seance_circle_map.clone() else {
             return;
         };
@@ -280,6 +341,7 @@ impl SeanceApp {
             (Some(l), Some(snap)) => self.wall.lines.lines(l, &snap).to_vec(),
             _ => Vec::new(),
         };
+        let title = lead_pane.and_then(|p| task_title(&p.title(cx)?, &p.command));
         let attention = self.workspace_attention_cx(ws);
         let has_panes = self.panes.iter().any(|p| p.workspace == ws);
         let lead_exited = match &lead {
@@ -287,7 +349,8 @@ impl SeanceApp {
             // Panes but no terminal left to lead it.
             None => has_panes,
         };
-        let mac = mac_waiting(&lines);
+        // claude-mac's message is the bottom of the screen.
+        let mac = mac_waiting(&lines[lines.len().saturating_sub(2)..]);
         let state = tile_state(TileFacts {
             asleep: self.workspace_asleep(ws),
             needs: matches!(attention, Some(WorkspaceAttention::NeedsHuman)) || asking.is_some(),
@@ -304,18 +367,31 @@ impl SeanceApp {
         if !lines.is_empty() {
             self.note_mac(ws, mac);
         }
-        let footer = self.wall.lead_lines.get(ws).and_then(|l| {
+        let log = self.wall.lead_lines.get(ws);
+        let footer = log.and_then(|l| {
             l.next
                 .as_ref()
                 .map(|n| format!("Next: {n}"))
                 .or_else(|| l.waiting.as_ref().map(|w| format!("Waiting on: {w}")))
         });
+        let doing = log.and_then(|l| l.doing.clone());
+        let result = lead
+            .as_deref()
+            .and_then(|l| self.wall.results.get(l))
+            .cloned()
+            .unwrap_or_default();
+        let fallback = (title.is_none() && doing.is_none() && result.is_empty())
+            .then(|| last_real_line(&lines))
+            .flatten();
         Tile {
             ws: ws.to_string(),
             label: self.workspace_label(ws),
             state,
             lead,
-            lines,
+            title,
+            doing,
+            result,
+            fallback,
             footer,
             asking,
         }
@@ -805,7 +881,8 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    /// Any other circle: name, status, the lead's last lines, a footer.
+    /// Any other circle: name, status, the lead's task, Doing and last
+    /// result, then Next or Waiting on.
     fn render_small_tile(
         &self,
         tile: Tile,
@@ -828,10 +905,56 @@ impl SeanceApp {
             TileState::Asleep => status_text("☾ asleep", SeancePalette::text_faint()),
             TileState::Idle => status_text("idle", SeancePalette::text_faint()),
         };
-        let body: Vec<String> = if st == TileState::MacAsleep {
-            vec!["Waiting for the Mac.".into(), "Resumes on wake.".into()]
+        let text = if dim {
+            SeancePalette::text_faint()
         } else {
-            tile.lines.clone()
+            SeancePalette::text_dim()
+        };
+        let line = |l: String| div().min_w_0().truncate().child(l);
+        let body: Vec<AnyElement> = if st == TileState::MacAsleep {
+            ["Waiting for the Mac.", "Resumes on wake."]
+                .map(|l| line(l.into()).into_any_element())
+                .into()
+        } else {
+            let mut body = Vec::new();
+            if let Some(t) = tile.title.clone() {
+                body.push(
+                    line(t)
+                        .text_color(if dim {
+                            SeancePalette::text_dim()
+                        } else {
+                            SeancePalette::text()
+                        })
+                        .into_any_element(),
+                );
+            }
+            if let Some(d) = tile.doing.clone() {
+                body.push(
+                    div()
+                        .min_w_0()
+                        .line_clamp(2)
+                        .text_ellipsis()
+                        .child(format!("Doing: {d}"))
+                        .into_any_element(),
+                );
+            }
+            if !tile.result.is_empty() {
+                body.push(
+                    div()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .text_color(SeancePalette::text_faint())
+                        .children(tile.result.clone().into_iter().map(line))
+                        .into_any_element(),
+                );
+            }
+            body.extend(
+                tile.fallback
+                    .clone()
+                    .map(|l| line(l).font_family(mono).into_any_element()),
+            );
+            body
         };
         let border = match st {
             TileState::Needs => SeancePalette::violet(),
@@ -933,17 +1056,10 @@ impl SeanceApp {
                     .overflow_hidden()
                     .flex()
                     .flex_col()
-                    .font_family(mono)
+                    .gap(px(3.))
                     .text_xs()
-                    .text_color(if dim {
-                        SeancePalette::text_faint()
-                    } else {
-                        SeancePalette::text_dim()
-                    })
-                    .children(
-                        body.into_iter()
-                            .map(|l| div().min_w_0().truncate().child(l)),
-                    ),
+                    .text_color(text)
+                    .children(body),
             )
             .children(footer)
             .into_any_element()

@@ -88,7 +88,7 @@ pub(super) struct Peek {
     pad: Option<String>,
 }
 
-/// pane slug → (grid rev, its last two output lines), so a card or tile
+/// pane slug → (grid rev, its last few output lines), so a card or tile
 /// reads its grid only when the grid changed.
 #[derive(Default)]
 pub(super) struct LineCache(HashMap<String, (u64, Vec<String>)>);
@@ -97,7 +97,7 @@ impl LineCache {
     pub(super) fn lines(&mut self, slug: &str, snap: &GridSnapshot) -> &[String] {
         let stale = self.0.get(slug).is_none_or(|(rev, _)| *rev != snap.rev);
         if stale {
-            let lines = last_output_lines(&bottom_rows(snap, LAST_LINE_ROWS), 2);
+            let lines = last_output_lines(&bottom_rows(snap, LAST_LINE_ROWS), 6);
             self.0.insert(slug.to_string(), (snap.rev, lines));
         }
         self.0.get(slug).map_or(&[], |(_, l)| l.as_slice())

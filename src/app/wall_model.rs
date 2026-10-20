@@ -1,12 +1,13 @@
 //! Pure rules behind the Wall: the Today feed from the daemon's event log,
-//! a tile's state, the grid's columns and placement, and arrow-key moves.
+//! a tile's state and text, the grid's columns and placement, and arrow-key
+//! moves.
 //! No gpui here, so every rule is unit-tested.
 
 use std::collections::HashMap;
 
 use crate::events::Event;
 
-use super::stage_parse::{ellipsize, Health, HealthLevel};
+use super::stage_parse::{ellipsize, latest_finish, strip_markdown, Health, HealthLevel};
 use super::views::ViewMode;
 
 /// Rows the feed shows.
@@ -270,6 +271,80 @@ pub(super) fn mac_waiting(lines: &[String]) -> bool {
     lines.iter().any(|l| {
         l.starts_with("Mac is asleep or out of reach") || l == "(Ctrl-C closes the pane instead.)"
     })
+}
+
+/// A pane title as a task name. Claude titles the terminal with its task
+/// behind a spinner or status glyph; None for an empty title, Claude's own
+/// name, the program itself, a shell or a shell's `user@host:dir`.
+pub(super) fn task_title(title: &str, command: &str) -> Option<String> {
+    let t = title
+        .trim_start_matches(|c: char| c.is_whitespace() || !(c.is_ascii() || c.is_alphanumeric()))
+        .trim();
+    let prog = command
+        .split_whitespace()
+        .find(|t| *t != "env" && !t.contains('='))
+        .and_then(|t| t.rsplit('/').next())
+        .unwrap_or("");
+    let plain = t.is_empty()
+        || t.eq_ignore_ascii_case("claude code")
+        || t == prog
+        || matches!(t, "bash" | "zsh" | "sh" | "fish" | "nu")
+        || (t.contains('@') && t.contains(':') && !t.contains(' '));
+    (!plain).then(|| t.to_string())
+}
+
+/// Claude's TUI chrome: spinner and timing lines, notices, the prompt, box
+/// rules and the status line. None of it says what the pane is doing.
+pub(super) fn is_claude_chrome(line: &str) -> bool {
+    let t = line.trim();
+    let lower = t.to_lowercase();
+    let glyph = |c: char| !(c.is_ascii() || c.is_alphanumeric());
+    let rest = t.trim_start_matches(|c: char| glyph(c) || c.is_whitespace());
+    let mut words = rest.split_whitespace();
+    // "✻ Churned for 59s · done 10:54 AM"
+    let spinner = rest.len() < t.len()
+        && words.next().is_some()
+        && words.next() == Some("for")
+        && words
+            .next()
+            .is_some_and(|d| d.starts_with(|c: char| c.is_ascii_digit()));
+    t.is_empty()
+        || spinner
+        || matches!(t, ">" | "›")
+        || t.starts_with('❯')
+        || t.starts_with(|c: char| ('\u{2500}'..='\u{257F}').contains(&c))
+        || [
+            "update available",
+            "/clear to save",
+            "message hidden",
+            "messages hidden",
+            "auto mode",
+            "shift+tab",
+            "esc to interrupt",
+            "? for shortcuts",
+        ]
+        .iter()
+        .any(|p| lower.contains(p))
+        || ((lower.starts_with("ran ") || lower.contains(" ran "))
+            && lower.contains("shell command"))
+}
+
+/// The newest screen line that is not chrome, for a tile with nothing else.
+pub(super) fn last_real_line(lines: &[String]) -> Option<String> {
+    lines.iter().rev().find(|l| !is_claude_chrome(l)).cloned()
+}
+
+/// The first `n` non-empty lines of a pad's newest finish note, as plain
+/// text: list marks, headings and emphasis dropped.
+pub(super) fn finish_excerpt(pad: &str, n: usize) -> Vec<String> {
+    latest_finish(pad, 64)
+        .unwrap_or_default()
+        .iter()
+        .map(|l| strip_markdown(l.trim().trim_start_matches(['-', '*', '#', '>', ' '])))
+        .filter(|l| !l.is_empty() && l != "…")
+        .take(n)
+        .map(|l| ellipsize(&l, 160))
+        .collect()
 }
 
 /// Keys stop at the window on the Wall, after the app chords, unless a
@@ -632,6 +707,81 @@ mod tests {
             "Mac is back. Resuming the conversation."
         ])));
         assert!(!mac_waiting(&[]));
+    }
+
+    #[test]
+    fn task_titles_drop_the_glyph_and_hide_plain_names() {
+        let t = |title: &str| task_title(title, "claude");
+        assert_eq!(
+            t("✳ Seance Mac app build from brian").as_deref(),
+            Some("Seance Mac app build from brian")
+        );
+        assert_eq!(t("⠂ Fix the tiles").as_deref(), Some("Fix the tiles"));
+        assert_eq!(t("✻  Review").as_deref(), Some("Review"));
+        assert_eq!(t("✳ Claude Code"), None);
+        assert_eq!(t(""), None);
+        assert_eq!(t(" ⠂ "), None);
+        assert_eq!(t("claude"), None);
+        assert_eq!(task_title("bash", "bash -l"), None);
+        assert_eq!(task_title("zsh", "claude-mac"), None);
+        assert_eq!(task_title("bhanley@omarchy:~/x", "bash -l"), None);
+        assert_eq!(task_title("htop", "bash -l").as_deref(), Some("htop"));
+    }
+
+    #[test]
+    fn claude_chrome_is_filtered_and_real_lines_kept() {
+        for l in [
+            "✻ Churned for 59s · done 10:54 AM",
+            "✻ Cooked for 48s",
+            "  Update available! Run: mise upgrade",
+            "new task? /clear to save 136.1k tokens",
+            "⎿  Ran 1 shell command",
+            "Ran 3 shell commands",
+            "message hidden (/focus to show)",
+            "2 messages hidden (/focus to show)",
+            "❯",
+            "❯ ",
+            ">",
+            "›",
+            "────────────────",
+            "╭──────╮",
+            "│ > │",
+            "⏵⏵ auto mode on (shift+tab to cycle)",
+            "· Thinking… (12s · esc to interrupt)",
+            "  ? for shortcuts",
+            "   ",
+        ] {
+            assert!(is_claude_chrome(l), "{l}");
+        }
+        for l in [
+            "● Read src/app/sidebar.rs",
+            "Three ideas, ranked",
+            "Waiting for the build for 2 more minutes",
+            "$ cargo test",
+            "> quoted text",
+        ] {
+            assert!(!is_claude_chrome(l), "{l}");
+        }
+        let lines = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            last_real_line(&lines(&["Built it.", "✻ Cooked for 4s", "❯"])).as_deref(),
+            Some("Built it.")
+        );
+        assert_eq!(last_real_line(&lines(&["❯", "Ran 1 shell command"])), None);
+        assert_eq!(last_real_line(&[]), None);
+    }
+
+    #[test]
+    fn finish_excerpt_is_the_first_plain_lines() {
+        let pad = "notes\n---\n<!-- lead · 10:00 · finish -->\n\n## Shipped\n\n\
+- **Tiles** show the task\n* tests `pass`\n\n- see [PR](https://x)\n- fifth\n";
+        assert_eq!(
+            finish_excerpt(pad, 4),
+            ["Shipped", "Tiles show the task", "tests pass", "see PR"]
+        );
+        assert_eq!(finish_excerpt(pad, 1), ["Shipped"]);
+        assert!(finish_excerpt("no finish here", 4).is_empty());
+        assert!(finish_excerpt("", 4).is_empty());
     }
 
     #[test]
