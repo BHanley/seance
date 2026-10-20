@@ -26,9 +26,10 @@ use super::stage::{chip_button, host_chip_owned, read_lead_line, stageable, Line
 use super::stage_parse::{pane_host, LeadLine};
 use super::util::{now_ms, tip};
 use super::wall_model::{
-    finish_excerpt, grid_cols, health_row, last_real_line, mac_waiting, merge_rows, move_selection,
-    place_tiles, rows_used, shape_feed, task_title, tile_state, wall_takes_keys, Cell, Dir, Dot,
-    FeedRow, TileFacts, TileState, FEED_CAP, FEED_FOLD_BELOW, FEED_KINDS, RAW_CAP,
+    aged_result, finish_excerpt, grid_cols, health_row, last_real_line, mac_waiting, merge_rows,
+    move_selection, place_tiles, result_rows, rows_used, shape_feed, task_title, tile_state,
+    wall_takes_keys, Cell, Dir, Dot, FeedRow, TileFacts, TileState, FEED_CAP, FEED_FOLD_BELOW,
+    FEED_KINDS, RAW_CAP,
 };
 use super::workspaces::WorkspaceAttention;
 use super::SeanceApp;
@@ -57,9 +58,10 @@ pub(super) struct WallState {
     lead_busy: bool,
     /// The circles the last lead-log read covered.
     lead_circles: Vec<String>,
-    /// lead pane → the start of its newest finish note, read on the feed's
-    /// clock while the Wall is up.
-    results: HashMap<String, Vec<String>>,
+    /// lead pane → its pad's mtime and the start of its newest finish
+    /// note, read on the feed's clock while the Wall is up, and only when
+    /// the pad changed.
+    results: HashMap<String, (Option<u64>, Vec<String>)>,
     results_asked: Option<Instant>,
     results_busy: bool,
     /// The leads the last pad read covered.
@@ -255,6 +257,7 @@ impl SeanceApp {
             self.wall.results_asked = Some(Instant::now());
             self.wall.result_leads = leads.clone();
             let client = Arc::clone(&self.client);
+            let mut had = self.wall.results.clone();
             cx.spawn(async move |this, cx| {
                 let got = cx
                     .background_executor()
@@ -263,9 +266,16 @@ impl SeanceApp {
                             .into_iter()
                             .filter_map(|slug| {
                                 let path = Self::scratch_path(&slug, "md");
-                                let (pad, _) = client.fs_read_string(&path).ok()?;
-                                let lines = finish_excerpt(&pad, RESULT_LINES);
-                                (!lines.is_empty()).then_some((slug, lines))
+                                // A missing pad (or a failed stat) has nothing.
+                                let mtime = client.fs_stat(&path).ok()??;
+                                // Unchanged since the last read: keep it.
+                                let same = had.get(&slug).is_some_and(|o| o.0 == mtime);
+                                if same && mtime.is_some() {
+                                    let old = had.remove(&slug)?;
+                                    return Some((slug, old));
+                                }
+                                let (pad, mtime) = client.fs_read_string(&path).ok()?;
+                                Some((slug, (mtime, finish_excerpt(&pad, RESULT_LINES))))
                             })
                             .collect::<HashMap<_, _>>()
                     })
@@ -341,7 +351,9 @@ impl SeanceApp {
             (Some(l), Some(snap)) => self.wall.lines.lines(l, &snap).to_vec(),
             _ => Vec::new(),
         };
-        let title = lead_pane.and_then(|p| task_title(&p.title(cx)?, &p.command));
+        let title = lead_pane
+            .filter(|p| !self.owners.get(&p.slug).is_some_and(|o| o.exited))
+            .and_then(|p| task_title(&p.title(cx)?, &p.command));
         let attention = self.workspace_attention_cx(ws);
         let has_panes = self.panes.iter().any(|p| p.workspace == ws);
         let lead_exited = match &lead {
@@ -378,7 +390,7 @@ impl SeanceApp {
         let result = lead
             .as_deref()
             .and_then(|l| self.wall.results.get(l))
-            .cloned()
+            .map(|(mtime, lines)| aged_result(lines, *mtime, now_ms()))
             .unwrap_or_default();
         let fallback = (title.is_none() && doing.is_none() && result.is_empty())
             .then(|| last_real_line(&lines))
@@ -506,7 +518,7 @@ impl SeanceApp {
                     if Some(i) == big {
                         self.render_big_tile(tile, cx)
                     } else {
-                        self.render_small_tile(tile, mono.clone(), cx)
+                        self.render_small_tile(tile, row_h, mono.clone(), cx)
                     }
                 }
             };
@@ -886,6 +898,7 @@ impl SeanceApp {
     fn render_small_tile(
         &self,
         tile: Tile,
+        row_h: f32,
         mono: SharedString,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -938,14 +951,21 @@ impl SeanceApp {
                         .into_any_element(),
                 );
             }
-            if !tile.result.is_empty() {
+            // Short rows show less, so no line is cut through.
+            let n = result_rows(
+                row_h,
+                tile.title.is_some(),
+                tile.doing.is_some(),
+                RESULT_LINES,
+            );
+            if n > 0 && !tile.result.is_empty() {
                 body.push(
                     div()
                         .min_w_0()
                         .flex()
                         .flex_col()
                         .text_color(SeancePalette::text_faint())
-                        .children(tile.result.clone().into_iter().map(line))
+                        .children(tile.result.iter().take(n).cloned().map(line))
                         .into_any_element(),
                 );
             }

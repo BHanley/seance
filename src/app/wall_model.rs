@@ -273,32 +273,41 @@ pub(super) fn mac_waiting(lines: &[String]) -> bool {
     })
 }
 
-/// A pane title as a task name. Claude titles the terminal with its task
-/// behind a spinner or status glyph; None for an empty title, Claude's own
-/// name, the program itself, a shell or a shell's `user@host:dir`.
+/// A pane title as a task name, glyph stripped. Trusted only while it
+/// looks live: Claude's ✳ or spinner in front, or the title of a program
+/// that isn't a shell or Claude. A Claude that fell back to a shell can
+/// leave its last task behind, so a plain title there is hidden, as are
+/// empty titles, Claude's own name and a shell's `user@host:dir`.
 pub(super) fn task_title(title: &str, command: &str) -> Option<String> {
+    let live = title.trim_start().starts_with('✳') || seance_core::util::title_looks_busy(title);
+    let prog = command
+        .split_whitespace()
+        .filter(|t| !t.contains('='))
+        .map(|t| t.rsplit('/').next().unwrap_or(t))
+        .find(|t| *t != "env")
+        .unwrap_or("");
+    let shell = |p: &str| matches!(p, "" | "bash" | "zsh" | "sh" | "fish" | "nu");
+    if !live && (shell(prog) || prog.starts_with("claude")) {
+        return None;
+    }
     let t = title
         .trim_start_matches(|c: char| c.is_whitespace() || !(c.is_ascii() || c.is_alphanumeric()))
         .trim();
-    let prog = command
-        .split_whitespace()
-        .find(|t| *t != "env" && !t.contains('='))
-        .and_then(|t| t.rsplit('/').next())
-        .unwrap_or("");
-    let plain = t.is_empty()
-        || t.eq_ignore_ascii_case("claude code")
+    let plain = t.eq_ignore_ascii_case("claude code")
         || t == prog
-        || matches!(t, "bash" | "zsh" | "sh" | "fish" | "nu")
+        || shell(t)
         || (t.contains('@') && t.contains(':') && !t.contains(' '));
     (!plain).then(|| t.to_string())
 }
 
-/// Claude's TUI chrome: spinner and timing lines, notices, the prompt, box
-/// rules and the status line. None of it says what the pane is doing.
+/// Claude's TUI chrome: spinner and timing lines, notices, the bare
+/// prompt, box rules and the input box, and the status line. None of it
+/// says what the pane is doing.
 pub(super) fn is_claude_chrome(line: &str) -> bool {
     let t = line.trim();
     let lower = t.to_lowercase();
     let glyph = |c: char| !(c.is_ascii() || c.is_alphanumeric());
+    let boxed = |c: char| ('\u{2500}'..='\u{257F}').contains(&c);
     let rest = t.trim_start_matches(|c: char| glyph(c) || c.is_whitespace());
     let mut words = rest.split_whitespace();
     // "✻ Churned for 59s · done 10:54 AM"
@@ -308,11 +317,14 @@ pub(super) fn is_claude_chrome(line: &str) -> bool {
         && words
             .next()
             .is_some_and(|d| d.starts_with(|c: char| c.is_ascii_digit()));
+    // A rule, or the input box ("│ > │"); a table row has text in its cells.
+    let inner: String = t.chars().filter(|c| !boxed(*c)).collect();
+    let inner = inner.trim();
+    let box_line = t.starts_with(boxed) && (inner.is_empty() || inner.starts_with(['>', '❯', '›']));
     t.is_empty()
         || spinner
-        || matches!(t, ">" | "›")
-        || t.starts_with('❯')
-        || t.starts_with(|c: char| ('\u{2500}'..='\u{257F}').contains(&c))
+        || box_line
+        || matches!(t, ">" | "›" | "❯")
         || [
             "update available",
             "/clear to save",
@@ -335,16 +347,58 @@ pub(super) fn last_real_line(lines: &[String]) -> Option<String> {
 }
 
 /// The first `n` non-empty lines of a pad's newest finish note, as plain
-/// text: list marks, headings and emphasis dropped.
+/// text: heading and list marks, rules and emphasis dropped.
 pub(super) fn finish_excerpt(pad: &str, n: usize) -> Vec<String> {
+    let unmark = |l: &str| {
+        let l = l.trim();
+        let h = l.trim_start_matches('#');
+        let l = if h.len() < l.len() && h.starts_with(' ') {
+            h.trim_start()
+        } else {
+            l
+        };
+        ["- ", "* ", "> "]
+            .iter()
+            .find_map(|m| l.strip_prefix(m))
+            .unwrap_or(l)
+            .to_string()
+    };
     latest_finish(pad, 64)
         .unwrap_or_default()
         .iter()
-        .map(|l| strip_markdown(l.trim().trim_start_matches(['-', '*', '#', '>', ' '])))
-        .filter(|l| !l.is_empty() && l != "…")
+        .map(|l| strip_markdown(&unmark(l)))
+        .filter(|l| !l.is_empty() && l != "…" && !l.chars().all(|c| matches!(c, '-' | '_')))
         .take(n)
         .map(|l| ellipsize(&l, 160))
         .collect()
+}
+
+/// A result as old as its pad: gone after a day, and "3h ago: " in front
+/// once it is an hour old. A pad with no mtime counts as fresh.
+pub(super) fn aged_result(lines: &[String], mtime: Option<u64>, now: u64) -> Vec<String> {
+    const HOUR: u64 = 3_600_000;
+    let age = mtime.map_or(0, |m| now.saturating_sub(m));
+    let mut out = lines.to_vec();
+    if age >= 24 * HOUR {
+        out.clear();
+    } else if age >= HOUR {
+        if let Some(first) = out.first_mut() {
+            *first = format!("{}h ago: {first}", age / HOUR);
+        }
+    }
+    out
+}
+
+/// Result lines a small tile has room for: a short row fits one, or none
+/// beside a task and a Doing line.
+pub(super) fn result_rows(row_h: f32, title: bool, doing: bool, most: usize) -> usize {
+    if row_h >= 180. {
+        most
+    } else if title && doing {
+        0
+    } else {
+        most.min(1)
+    }
 }
 
 /// Keys stop at the window on the Wall, after the app chords, unless a
@@ -710,22 +764,36 @@ mod tests {
     }
 
     #[test]
-    fn task_titles_drop_the_glyph_and_hide_plain_names() {
+    fn task_titles_drop_the_glyph_and_hide_stale_or_plain_names() {
         let t = |title: &str| task_title(title, "claude");
         assert_eq!(
             t("✳ Seance Mac app build from brian").as_deref(),
             Some("Seance Mac app build from brian")
         );
         assert_eq!(t("⠂ Fix the tiles").as_deref(), Some("Fix the tiles"));
-        assert_eq!(t("✻  Review").as_deref(), Some("Review"));
         assert_eq!(t("✳ Claude Code"), None);
         assert_eq!(t(""), None);
-        assert_eq!(t(" ⠂ "), None);
-        assert_eq!(t("claude"), None);
-        assert_eq!(task_title("bash", "bash -l"), None);
-        assert_eq!(task_title("zsh", "claude-mac"), None);
+        assert_eq!(t("✳ "), None);
+        // Claude gone, its task left behind or a shell's title: not live.
+        assert_eq!(t("Fix the tiles"), None);
+        assert_eq!(task_title("Fix the tiles", "claude-mac"), None);
+        assert_eq!(task_title("Fix the tiles", "bash -l"), None);
         assert_eq!(task_title("bhanley@omarchy:~/x", "bash -l"), None);
-        assert_eq!(task_title("htop", "bash -l").as_deref(), Some("htop"));
+        assert_eq!(task_title("zsh", "/usr/bin/env claude-mac"), None);
+        assert_eq!(
+            task_title("✳ Review", "/usr/bin/env A=1 claude").as_deref(),
+            Some("Review")
+        );
+        // Another program's title is its own.
+        assert_eq!(
+            task_title("htop - load", "htop").as_deref(),
+            Some("htop - load")
+        );
+        assert_eq!(task_title("htop", "htop"), None);
+        assert_eq!(
+            task_title("vim notes.md", "/usr/bin/env vim").as_deref(),
+            Some("vim notes.md")
+        );
     }
 
     #[test]
@@ -740,12 +808,13 @@ mod tests {
             "message hidden (/focus to show)",
             "2 messages hidden (/focus to show)",
             "❯",
-            "❯ ",
+            "❯   ",
             ">",
             "›",
             "────────────────",
             "╭──────╮",
             "│ > │",
+            "│ > half typed │",
             "⏵⏵ auto mode on (shift+tab to cycle)",
             "· Thinking… (12s · esc to interrupt)",
             "  ? for shortcuts",
@@ -759,6 +828,8 @@ mod tests {
             "Waiting for the build for 2 more minutes",
             "$ cargo test",
             "> quoted text",
+            "❯ cargo test",
+            "│ tiles │ 3 │",
         ] {
             assert!(!is_claude_chrome(l), "{l}");
         }
@@ -774,14 +845,45 @@ mod tests {
     #[test]
     fn finish_excerpt_is_the_first_plain_lines() {
         let pad = "notes\n---\n<!-- lead · 10:00 · finish -->\n\n## Shipped\n\n\
-- **Tiles** show the task\n* tests `pass`\n\n- see [PR](https://x)\n- fifth\n";
+- **Tiles** show the task\n---\n* tests `pass`\n\n- see [PR](https://x)\n- fifth\n";
         assert_eq!(
             finish_excerpt(pad, 4),
             ["Shipped", "Tiles show the task", "tests pass", "see PR"]
         );
         assert_eq!(finish_excerpt(pad, 1), ["Shipped"]);
+        // A minus sign or a hashtag is text, not a mark.
+        let pad = "<!-- a · 1 · finish -->\n-5% memory\n- -3 panes\n#42 fixed\n";
+        assert_eq!(
+            finish_excerpt(pad, 4),
+            ["-5% memory", "-3 panes", "#42 fixed"]
+        );
         assert!(finish_excerpt("no finish here", 4).is_empty());
         assert!(finish_excerpt("", 4).is_empty());
+    }
+
+    #[test]
+    fn results_age_out_and_say_how_old() {
+        let lines = vec!["Shipped".to_string(), "tests pass".to_string()];
+        let h = 60 * MIN;
+        let now = 100 * h;
+        assert_eq!(aged_result(&lines, Some(now - 5 * MIN), now), lines);
+        assert_eq!(aged_result(&lines, None, now), lines);
+        assert_eq!(
+            aged_result(&lines, Some(now - 3 * h - MIN), now),
+            ["3h ago: Shipped", "tests pass"]
+        );
+        assert!(aged_result(&lines, Some(now - 24 * h), now).is_empty());
+        // A clock behind the pad's is not an age.
+        assert_eq!(aged_result(&lines, Some(now + h), now), lines);
+    }
+
+    #[test]
+    fn short_rows_show_fewer_result_lines() {
+        assert_eq!(result_rows(260., true, true, 3), 3);
+        assert_eq!(result_rows(180., true, true, 3), 3);
+        assert_eq!(result_rows(140., true, true, 3), 0);
+        assert_eq!(result_rows(140., true, false, 3), 1);
+        assert_eq!(result_rows(140., false, false, 3), 1);
     }
 
     #[test]
