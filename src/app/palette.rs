@@ -243,7 +243,7 @@ impl SeanceApp {
             div()
                 .id("palette-overlay")
                 .absolute()
-                .top(px(48.))
+                .top(px(48. + self.space_tabs_h()))
                 .left_0()
                 .right_0()
                 .flex()

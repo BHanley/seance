@@ -22,9 +22,7 @@ use crate::events::{self, Event};
 use crate::remote_term_view::OverviewThumb;
 use crate::theme::SeancePalette;
 
-use super::stage::{
-    chip_button, host_chip_owned, read_lead_line, stageable, LineCache, SPACE_ROW_H,
-};
+use super::stage::{chip_button, host_chip_owned, read_lead_line, stageable, LineCache};
 use super::stage_parse::{pane_host, LeadLine};
 use super::util::{now_ms, tip};
 use super::wall_model::{
@@ -416,12 +414,7 @@ impl SeanceApp {
         let cells = place_tiles(order.len(), big, cols);
         let rows = rows_used(&cells).max(1);
         let fill_rows = rows.max(3) as f32;
-        let tabs_h = if self.subs_pref.spaces.list.len() > 1 {
-            SPACE_ROW_H
-        } else {
-            0.
-        };
-        let avail_h = height - HEADER_H - tabs_h - 2. * GAP;
+        let avail_h = height - HEADER_H - self.space_tabs_h() - 2. * GAP;
         let row_h = ((avail_h - GAP * (fill_rows - 1.)) / fill_rows).max(MIN_ROW_H);
         let grid_h = row_h * rows as f32 + GAP * (rows as f32 - 1.);
 

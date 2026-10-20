@@ -37,7 +37,7 @@ const HEALTH_EVERY: Duration = Duration::from_secs(60);
 /// its width.
 const CREW_FOLD_BELOW: f32 = 1000.;
 /// Stage and Wall's row of space tabs.
-pub(super) const SPACE_ROW_H: f32 = 24.;
+const SPACE_ROW_H: f32 = 24.;
 /// Lines a done chip's peek card shows of the finish note.
 const PEEK_LINES: usize = 12;
 /// Bottom rows read for a crew card's last line: enough to clear a TUI's
@@ -75,6 +75,9 @@ pub(super) struct StageState {
     jump_after: Vec<(String, String)>,
     /// The done chip whose peek card is open.
     pub(super) peek: Option<Peek>,
+    /// The space tabs' scroll, and the space it last brought into view.
+    space_tabs: gpui::ScrollHandle,
+    space_tabs_shown: Option<String>,
 }
 
 /// A done chip's peek card: its circle, the pane it shows and that pane's
@@ -642,6 +645,7 @@ impl SeanceApp {
         let crew_w = if width >= 1200. { 330. } else { 260. };
         let show_crew = !fold || self.stage.crew_open;
 
+        let tabs = self.render_space_tabs("stage", cx);
         let top = self.render_stage_top(width, cx);
         let chips = self.waiting_list();
         // A peek card whose chip went (seen, its pane closed, its circle
@@ -695,7 +699,7 @@ impl SeanceApp {
             .flex_col()
             .bg(SeancePalette::bg())
             .child(self.render_daemon_error_bar(cx))
-            .children(self.render_space_tabs("stage", cx))
+            .children(tabs)
             .child(top)
             .children(needs)
             .child(
@@ -887,23 +891,59 @@ impl SeanceApp {
             .into_any_element()
     }
 
+    /// Stage and Wall draw their row of space tabs: more than one space.
+    pub(super) fn space_tabs_shown(&self) -> bool {
+        self.view.mode != ViewMode::Classic && self.subs_pref.spaces.list.len() > 1
+    }
+
+    /// What the space tabs take off the top, for overlays placed below it.
+    pub(super) fn space_tabs_h(&self) -> f32 {
+        if self.space_tabs_shown() {
+            SPACE_ROW_H
+        } else {
+            0.
+        }
+    }
+
     /// Stage and Wall's space row: a tab per space with the mark its rail
     /// row has (needs you, working, done), the one on show underlined.
     /// Empty spaces can't be picked. Scrolls sideways when they don't fit;
     /// None with only one space.
-    pub(super) fn render_space_tabs(&self, key: &str, cx: &Context<Self>) -> Option<AnyElement> {
-        let spaces = &self.subs_pref.spaces;
-        if spaces.list.len() < 2 {
+    pub(super) fn render_space_tabs(
+        &mut self,
+        key: &str,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
+        if !self.space_tabs_shown() {
             return None;
         }
         let shown = self.shown_space();
+        let spaces = &self.subs_pref.spaces;
+        // A new space on show scrolls its tab into view.
+        if self.stage.space_tabs_shown.as_deref() != Some(shown.as_str()) {
+            if let Some(i) = spaces.list.iter().position(|s| s.id == shown) {
+                self.stage.space_tabs.scroll_to_item(i);
+            }
+            self.stage.space_tabs_shown = Some(shown.clone());
+        }
         let ordered = self.workspaces();
+        let steps = if cfg!(target_os = "macos") {
+            "⌘⌥↑ / ⌘⌥↓ steps"
+        } else {
+            "ctrl+alt+page up / down steps"
+        };
         let tabs = spaces.list.iter().map(|sp| {
             let n = spaces.circles_in(&sp.id, &ordered).len();
             let on = sp.id == shown;
             let id = sp.id.clone();
+            let count = match n {
+                0 => "no circles".to_string(),
+                1 => "1 circle".to_string(),
+                n => format!("{n} circles"),
+            };
             div()
                 .id(SharedString::from(format!("{key}-space-{}", sp.id)))
+                .tooltip(tip_s(format!("{} · {count} ({steps})", sp.name)))
                 .flex_none()
                 .h_full()
                 .flex()
@@ -943,15 +983,11 @@ impl SeanceApp {
                 .flex()
                 .gap(px(16.))
                 .overflow_x_scroll()
+                .track_scroll(&self.stage.space_tabs)
                 .text_xs()
                 .bg(SeancePalette::bg_elevated())
                 .border_b_1()
                 .border_color(SeancePalette::border())
-                .tooltip(tip(if cfg!(target_os = "macos") {
-                    "spaces (⌘⌥↑ / ⌘⌥↓ steps)"
-                } else {
-                    "spaces (ctrl+alt+page up / down steps)"
-                }))
                 .children(tabs)
                 .into_any_element(),
         )
