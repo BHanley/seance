@@ -321,21 +321,25 @@ pub(super) fn step_space(counts: &[usize], cur: Option<usize>, delta: i32) -> Op
 }
 
 /// The needs-you bar's done chips: each circle in `order` that `unread`
-/// marks done, with its first pane whose status is done (from `done_panes`,
-/// circle and slug in pane order) when it has one.
+/// marks done, with the pane that finished. `unseen` (Claude panes that
+/// finished out of sight) wins over `status_done` (a ctl "done" status,
+/// which can be old); both are circle and slug in pane order.
 pub(super) fn done_chips(
     order: &[String],
     unread: &[&str],
-    done_panes: &[(&str, &str)],
+    unseen: &[(&str, &str)],
+    status_done: &[(&str, &str)],
 ) -> Vec<(String, Option<String>)> {
+    let first = |list: &[(&str, &str)], c: &str| {
+        list.iter()
+            .find(|(ws, _)| *ws == c)
+            .map(|(_, slug)| slug.to_string())
+    };
     order
         .iter()
         .filter(|c| unread.contains(&c.as_str()))
         .map(|c| {
-            let pane = done_panes
-                .iter()
-                .find(|(ws, _)| *ws == c.as_str())
-                .map(|(_, slug)| slug.to_string());
+            let pane = first(unseen, c).or_else(|| first(status_done, c));
             (c.clone(), pane)
         })
         .collect()
@@ -621,19 +625,22 @@ The circle lead's running log, newest first. Doing / Done / Next / Waiting on.\n
         let order: Vec<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
         let chips = done_chips(
             &order,
-            &["c", "a"],
+            &["c", "a", "b"],
+            &[("b", "b-2")],
             &[("b", "b-1"), ("c", "c-2"), ("c", "c-3")],
         );
+        // An old ctl "done" on b-1 loses to b-2, which just finished.
         assert_eq!(
             chips,
             vec![
                 ("a".to_string(), None),
+                ("b".to_string(), Some("b-2".to_string())),
                 ("c".to_string(), Some("c-2".to_string()))
             ]
         );
-        assert!(done_chips(&order, &[], &[("a", "a-1")]).is_empty());
+        assert!(done_chips(&order, &[], &[], &[("a", "a-1")]).is_empty());
         // A circle that is gone has no chip.
-        assert!(done_chips(&order, &["z"], &[]).is_empty());
+        assert!(done_chips(&order, &["z"], &[], &[]).is_empty());
     }
 
     #[test]

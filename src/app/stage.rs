@@ -36,6 +36,8 @@ const HEALTH_EVERY: Duration = Duration::from_secs(60);
 /// Below this the crew column folds behind a toggle so the terminal keeps
 /// its width.
 const CREW_FOLD_BELOW: f32 = 1000.;
+/// A long space name truncates rather than push the strip's pills out.
+const PICKER_MAX_W: f32 = 180.;
 /// Bottom rows read for a crew card's last line: enough to clear a TUI's
 /// input box without walking the whole screen.
 const LAST_LINE_ROWS: usize = 30;
@@ -446,30 +448,34 @@ impl SeanceApp {
     /// is done), as chips after the waiting ones. Viewing the circle clears
     /// its unread, and with it the chip.
     fn stage_done(&self) -> Vec<Waiting> {
+        // The circle you're on: paths that select without select_workspace
+        // can leave its unread behind.
+        let selected = self.selected_workspace.as_deref();
         let unread: Vec<&str> = self
             .workspace_unread
             .iter()
-            .filter(|(_, a)| matches!(a, WorkspaceAttention::Done))
+            .filter(|(ws, a)| {
+                matches!(a, WorkspaceAttention::Done) && Some(ws.as_str()) != selected
+            })
             .map(|(ws, _)| ws.as_str())
             .collect();
         if unread.is_empty() {
             return Vec::new();
         }
-        let done_panes: Vec<(&str, &str)> = self
-            .panes
-            .iter()
-            // A Claude pane's finish shows as done_unseen, a ctl status as
-            // "done"; either is what made the circle's unread done.
-            .filter(|p| {
-                self.done_unseen.contains(&p.slug)
-                    || self
-                        .statuses
-                        .get(&p.slug)
-                        .is_some_and(|s| s.state == "done")
-            })
-            .map(|p| (p.workspace.as_str(), p.slug.as_str()))
-            .collect();
-        done_chips(&self.workspaces(), &unread, &done_panes)
+        let in_order = |keep: &dyn Fn(&Pane) -> bool| -> Vec<(&str, &str)> {
+            self.panes
+                .iter()
+                .filter(|p| keep(p))
+                .map(|p| (p.workspace.as_str(), p.slug.as_str()))
+                .collect()
+        };
+        let unseen = in_order(&|p| self.done_unseen.contains(&p.slug));
+        let status_done = in_order(&|p| {
+            self.statuses
+                .get(&p.slug)
+                .is_some_and(|s| s.state == "done")
+        });
+        done_chips(&self.workspaces(), &unread, &unseen, &status_done)
             .into_iter()
             .map(|(circle, pane)| {
                 let name = pane
@@ -756,6 +762,7 @@ impl SeanceApp {
         let el = div()
             .id(SharedString::from(format!("{key}-space-picker")))
             .flex_none()
+            .max_w(px(PICKER_MAX_W))
             .flex()
             .items_center()
             .gap(px(6.))
@@ -782,10 +789,16 @@ impl SeanceApp {
             .when(needs, |d| {
                 d.child(div().flex_none().text_color(needs_dot_color()).child("●"))
             })
-            .child(name.to_string())
-            .child(div().text_color(SeancePalette::text_faint()).child("▾"));
-        // Padding, border, the caret and the dot.
-        let w = 22. + 14. + if needs { 14. } else { 0. } + name.chars().count() as f32 * 6.9;
+            .child(div().min_w_0().truncate().child(name.to_string()))
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(SeancePalette::text_faint())
+                    .child("▾"),
+            );
+        // Padding, border, the caret and the dot, capped like the pill.
+        let w = (22. + 14. + if needs { 14. } else { 0. } + name.chars().count() as f32 * 6.9)
+            .min(PICKER_MAX_W);
         Some((el.into_any_element(), w))
     }
 
@@ -1017,10 +1030,15 @@ impl SeanceApp {
                 );
             if let Some(slug) = w.pane {
                 let ws = w.circle.clone();
+                let done = w.done;
                 chip = chip.child(
                     chip_button("Open", true)
                         .id(SharedString::from(format!("stage-wait-open-{i}")))
                         .on_click(cx.listener(move |this, _, window, cx| {
+                            // Seen now, even when the circle was already selected.
+                            if done {
+                                this.workspace_unread.remove(&ws);
+                            }
                             this.stage_show(&ws, &slug, window, cx);
                         })),
                 );

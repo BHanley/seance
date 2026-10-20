@@ -528,8 +528,10 @@ impl SeanceApp {
     /// space and, on Stage, its first circle's lead.
     pub(super) fn pick_space(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.space_menu_open = false;
-        // The menu can outlive a space deleted elsewhere.
-        if self.subs_pref.spaces.get(id).is_none() {
+        // The menu can outlive a space deleted elsewhere; the space on show
+        // stays as it is, its circle and pane included.
+        if self.subs_pref.spaces.get(id).is_none() || self.shown_space() == id {
+            cx.notify();
             return;
         }
         self.show_space(id, window, cx);

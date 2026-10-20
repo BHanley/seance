@@ -1732,6 +1732,16 @@ impl SeanceApp {
             return;
         }
 
+        // The space menu is over the Wall: its arrows and Enter mustn't move
+        // the tiles behind it.
+        if self.space_menu_open
+            && self.view.mode == views::ViewMode::Wall
+            && matches!(key, "up" | "down" | "left" | "right" | "enter")
+            && !ks.modifiers.modified()
+        {
+            cx.stop_propagation();
+            return;
+        }
         // ---- Wall: arrows move the selection, Enter focuses ----
         if self.wall_key(ks, window, cx) {
             cx.stop_propagation();
