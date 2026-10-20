@@ -1,5 +1,6 @@
 //! Pure helpers behind Stage: the circle map, the lead log's newest entry,
-//! the health report, pill overflow, crew order and a pane's last line.
+//! the health report, pill overflow, the next-waiting ring, a pad's latest
+//! finish note, crew order and a pane's last line.
 //! No gpui here, so every rule is unit-tested.
 
 /// The folder a circle's project lives in, from a `slug<TAB>folder` map.
@@ -345,6 +346,96 @@ pub(super) fn done_chips(
         .collect()
 }
 
+/// The next-waiting key's ring: circle and pane of each needs-you bar chip,
+/// in bar order. Chips with no pane (a ctl ask from outside one) can't be
+/// jumped to, and a pane listed twice is visited once.
+pub(super) fn jump_ring(chips: &[(&str, Option<&str>)]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for (circle, pane) in chips {
+        let Some(pane) = pane else { continue };
+        if !out.iter().any(|(c, p)| c == circle && p == pane) {
+            out.push((circle.to_string(), pane.to_string()));
+        }
+    }
+    out
+}
+
+/// Which ring item the next-waiting key opens. `last` is the one it opened
+/// before and `after` the items that followed it then: opening a done item
+/// clears it from the ring, so the press after it picks up with whatever
+/// followed it that is still waiting, else wraps to the top. `cur` (the
+/// circle and pane on show) is stepped over.
+pub(super) fn next_waiting<K: PartialEq>(
+    ring: &[K],
+    last: Option<&K>,
+    after: &[K],
+    cur: Option<&K>,
+) -> Option<usize> {
+    let n = ring.len();
+    if n == 0 {
+        return None;
+    }
+    let i = match last.and_then(|l| ring.iter().position(|k| k == l)) {
+        Some(i) => (i + 1) % n,
+        None => after
+            .iter()
+            .find_map(|a| ring.iter().position(|k| k == a))
+            .unwrap_or(0),
+    };
+    if n > 1 && cur == Some(&ring[i]) {
+        return Some((i + 1) % n);
+    }
+    Some(i)
+}
+
+/// The newest `ctl finish` note in a pane's scratchpad: the lines under the
+/// last `<!-- author · time · finish -->` header, up to the next section's
+/// `---` and header, at most `max` lines with "…" when cut. None when the
+/// pad has no finish note or it is empty.
+pub(super) fn latest_finish(pad: &str, max: usize) -> Option<Vec<String>> {
+    let is_header = |l: &str| {
+        let t = l.trim();
+        t.starts_with("<!--") && t.ends_with("-->")
+    };
+    let is_finish = |l: &str| {
+        is_header(l)
+            && l.trim()
+                .trim_end_matches("-->")
+                .trim_end()
+                .rsplit(" · ")
+                .next()
+                == Some("finish")
+    };
+    let lines: Vec<&str> = pad.lines().collect();
+    let start = lines.iter().rposition(|l| is_finish(l))? + 1;
+    let mut body: Vec<&str> = Vec::new();
+    for (i, line) in lines.iter().enumerate().skip(start) {
+        if line.trim() == "---" && lines.get(i + 1).is_some_and(|n| is_header(n)) {
+            break;
+        }
+        body.push(line.trim_end());
+    }
+    while body.first().is_some_and(|l| l.is_empty()) {
+        body.remove(0);
+    }
+    while body.last().is_some_and(|l| l.is_empty()) {
+        body.pop();
+    }
+    if body.is_empty() || max == 0 {
+        return None;
+    }
+    let cut = body.len() > max;
+    let mut out: Vec<String> = body
+        .into_iter()
+        .take(if cut { max - 1 } else { max })
+        .map(str::to_string)
+        .collect();
+    if cut {
+        out.push("…".into());
+    }
+    Some(out)
+}
+
 /// A crew member's sort band: waiting on you, then working, then finished,
 /// then quiet, then shells and sleepers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -641,6 +732,99 @@ The circle lead's running log, newest first. Doing / Done / Next / Waiting on.\n
         assert!(done_chips(&order, &[], &[], &[("a", "a-1")]).is_empty());
         // A circle that is gone has no chip.
         assert!(done_chips(&order, &["z"], &[], &[]).is_empty());
+    }
+
+    #[test]
+    fn jump_ring_skips_paneless_chips_and_repeats() {
+        let ring = jump_ring(&[
+            ("a", Some("a-1")),
+            ("", None),
+            ("b", Some("b-2")),
+            ("a", Some("a-1")),
+            ("c", Some("c-1")),
+        ]);
+        let want: Vec<(String, String)> = [("a", "a-1"), ("b", "b-2"), ("c", "c-1")]
+            .iter()
+            .map(|(c, p)| (c.to_string(), p.to_string()))
+            .collect();
+        assert_eq!(ring, want);
+        assert!(jump_ring(&[("x", None)]).is_empty());
+    }
+
+    #[test]
+    fn next_waiting_walks_the_ring_and_wraps() {
+        let ring = ["a", "b", "c"];
+        // First press: the top, unless you're already on it.
+        assert_eq!(next_waiting(&ring, None, &[], None), Some(0));
+        assert_eq!(next_waiting(&ring, None, &[], Some(&"a")), Some(1));
+        // Then the one after the last, wrapping.
+        assert_eq!(
+            next_waiting(&ring, Some(&"a"), &["b", "c"], Some(&"a")),
+            Some(1)
+        );
+        assert_eq!(next_waiting(&ring, Some(&"c"), &[], Some(&"c")), Some(0));
+        // One item: open it again.
+        assert_eq!(next_waiting(&["a"], Some(&"a"), &[], Some(&"a")), Some(0));
+        assert_eq!(next_waiting::<&str>(&[], None, &[], None), None);
+    }
+
+    #[test]
+    fn next_waiting_does_not_skip_when_the_ring_shrinks() {
+        // b was a done chip: opening it cleared it, so the ring lost it.
+        let ring = ["a", "c", "d"];
+        assert_eq!(
+            next_waiting(&ring, Some(&"b"), &["c", "d"], Some(&"b")),
+            Some(1)
+        );
+        // c went too: d is next.
+        assert_eq!(
+            next_waiting(&["a", "d"], Some(&"b"), &["c", "d"], None),
+            Some(1)
+        );
+        // Nothing that followed it is left: wrap to the top.
+        assert_eq!(next_waiting(&["a"], Some(&"b"), &["c"], None), Some(0));
+    }
+
+    const PAD: &str = "my notes\n\
+\n\
+---\n\
+<!-- agent:x · 10:09:00 · finish -->\n\
+\n\
+old finish\n\
+\n\
+---\n\
+<!-- agent:x · 12:16:49 · finish -->\n\
+\n\
+Shipped it.\n\
+- tests pass\n\
+\n\
+- not relaunched\n\
+\n\
+\n\
+---\n\
+<!-- human · 12:20:00 -->\n\
+\n\
+a later note\n";
+
+    #[test]
+    fn latest_finish_reads_the_newest_finish_section() {
+        assert_eq!(
+            latest_finish(PAD, 12).unwrap(),
+            ["Shipped it.", "- tests pass", "", "- not relaunched"]
+        );
+        // A line of dashes inside the note isn't a section break.
+        let pad = "---\n<!-- a · 1 · finish -->\nx\n---\ny\n";
+        assert_eq!(latest_finish(pad, 12).unwrap(), ["x", "---", "y"]);
+        assert_eq!(
+            latest_finish(PAD, 3).unwrap(),
+            ["Shipped it.", "- tests pass", "…"]
+        );
+        assert_eq!(
+            latest_finish("plain pad\n---\n<!-- a · 1 -->\nnote\n", 12),
+            None
+        );
+        assert_eq!(latest_finish("---\n<!-- a · 1 · finish -->\n\n", 12), None);
+        assert_eq!(latest_finish("", 12), None);
     }
 
     #[test]

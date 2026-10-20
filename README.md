@@ -163,6 +163,7 @@ attention routing free.
 | ctrl+shift+z | focus-zoom active pane |
 | ctrl+shift+space | peek at the Wall (a tile per circle); again or esc goes back |
 | ctrl+shift+t | next layout: classic → stage → wall |
+| ctrl+shift+i | next pane waiting on you, any circle or space (needs you, then done); again for the one after |
 | ctrl+shift+r | rename selected workspace |
 | ctrl+shift+f | last failed shell command |
 | ctrl+pageup / pagedown | cycle circles in the rail's list |
@@ -217,7 +218,11 @@ in the middle of the window, live and typeable. From top to bottom:
   same jump palette).
 - **Needs you.** Only when something waits: one chip per pane, in every
   circle, that is needs-human, blocked or risky or has asked a question.
-  **Open** switches to that circle and puts the pane on stage.
+  **Open** switches to that circle and puts the pane on stage. After them, a
+  green ✓ chip per circle with a finished pane you haven't seen; click the
+  chip to peek at the pane's latest `ctl finish` note, with **Open** and
+  **Seen** (clears the mark without opening). ctrl+shift+i walks the same
+  list in any layout (on the Wall it selects the circle's tile).
 - **The lead.** The circle's lead pane (`seance ctl lead`, else its first
   terminal) is the real terminal: keys, esc and every chord work as in any
   focused pane. Its header shows the name, the machine (Mac or XPS, from a

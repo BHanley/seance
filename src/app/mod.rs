@@ -1750,6 +1750,13 @@ impl SeanceApp {
 
         // ---- escape for chrome overlays only; else let terminal get it ----
         if key == "escape" {
+            // A done chip's peek card goes before anything else esc does.
+            if self.stage.peek.is_some() && self.view.mode == views::ViewMode::Stage {
+                self.stage.peek = None;
+                cx.notify();
+                cx.stop_propagation();
+                return;
+            }
             if self.gui_menu_open || self.space_menu_open {
                 self.gui_menu_open = false;
                 self.space_menu_open = false;
@@ -1882,6 +1889,11 @@ impl SeanceApp {
                 // service before the app ever sees it.
                 "t" => {
                     self.set_view(self.view.mode.next(), cx);
+                    cx.stop_propagation();
+                }
+                // Not u: fcitx5 and ibus take ctrl+shift+u for unicode input.
+                "i" => {
+                    self.jump_next_waiting(window, cx);
                     cx.stop_propagation();
                 }
                 "up" | "down" | "left" | "right" => {

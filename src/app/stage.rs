@@ -21,11 +21,11 @@ use crate::runtime::snapshot::GridSnapshot;
 use crate::theme::SeancePalette;
 
 use super::stage_parse::{
-    circle_folder, crew_order, done_chips, ellipsize, fit_pills, is_bare_shell, last_output_lines,
-    lead_log_path, pane_host, parse_health, parse_lead_log, pill_width, CrewBand, Health,
-    HealthLevel, LeadLine,
+    circle_folder, crew_order, done_chips, ellipsize, fit_pills, is_bare_shell, jump_ring,
+    last_output_lines, latest_finish, lead_log_path, next_waiting, pane_host, parse_health,
+    parse_lead_log, pill_width, CrewBand, Health, HealthLevel, LeadLine,
 };
-use super::util::{needs_dot_color, tip, tip_s};
+use super::util::{tip, tip_s};
 use super::views::ViewMode;
 use super::workspaces::{rel_label, WorkspaceAttention};
 use super::{PaletteMode, RenameTarget, SeanceApp};
@@ -38,6 +38,8 @@ const HEALTH_EVERY: Duration = Duration::from_secs(60);
 const CREW_FOLD_BELOW: f32 = 1000.;
 /// A long space name truncates rather than push the strip's pills out.
 const PICKER_MAX_W: f32 = 180.;
+/// Lines a done chip's peek card shows of the finish note.
+const PEEK_LINES: usize = 12;
 /// Bottom rows read for a crew card's last line: enough to clear a TUI's
 /// input box without walking the whole screen.
 const LAST_LINE_ROWS: usize = 30;
@@ -67,6 +69,20 @@ pub(super) struct StageState {
     file_tab: HashMap<String, String>,
     /// Crew cards' last output lines.
     last_lines: LineCache,
+    /// The next-waiting key's last pick (circle, pane) and the items that
+    /// followed it in the ring then.
+    jumped: Option<(String, String)>,
+    jump_after: Vec<(String, String)>,
+    /// The done chip whose peek card is open.
+    pub(super) peek: Option<Peek>,
+}
+
+/// A done chip's peek card: its circle, the pane it shows and that pane's
+/// pad, read once on opening (None until the read lands).
+pub(super) struct Peek {
+    circle: String,
+    pane: String,
+    pad: Option<String>,
 }
 
 /// pane slug → (grid rev, its last two output lines), so a card or tile
@@ -213,6 +229,116 @@ impl SeanceApp {
             self.select_workspace(ws, window, cx);
         }
         self.set_active(slug, window, cx);
+    }
+
+    /// A chip's Open: the pane on stage, and a done chip's circle seen even
+    /// when it was already selected.
+    fn open_chip(
+        &mut self,
+        ws: &str,
+        slug: &str,
+        done: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.stage.peek = None;
+        if done {
+            self.workspace_unread.remove(ws);
+        }
+        self.stage_show(ws, slug, window, cx);
+    }
+
+    /// ctrl+shift+i: open the next pane waiting on you, in every circle and
+    /// space, in the needs-you bar's order. Classic and Stage open it like
+    /// the chip's Open; the Wall only selects its circle's tile.
+    pub(super) fn jump_next_waiting(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let chips = self.waiting_list();
+        let pairs: Vec<(&str, Option<&str>)> = chips
+            .iter()
+            .map(|w| (w.circle.as_str(), w.pane.as_deref()))
+            .collect();
+        let wall = self.view.mode == ViewMode::Wall;
+        let mut ring = jump_ring(&pairs);
+        // The Wall opens circles, not panes: one stop per circle.
+        if wall {
+            let mut seen: Vec<String> = Vec::new();
+            ring.retain(|(c, _)| {
+                let first = !seen.contains(c);
+                seen.push(c.clone());
+                first
+            });
+        }
+        let cur = match (&self.selected_workspace, &self.active_slug) {
+            (Some(ws), _) if wall => ring.iter().find(|(c, _)| c == ws).cloned(),
+            (Some(ws), Some(slug)) => Some((ws.clone(), slug.clone())),
+            _ => None,
+        };
+        let Some(i) = next_waiting(
+            &ring,
+            self.stage.jumped.as_ref(),
+            &self.stage.jump_after,
+            cur.as_ref(),
+        ) else {
+            return;
+        };
+        let (ws, slug) = ring[i].clone();
+        self.stage.jumped = Some(ring[i].clone());
+        self.stage.jump_after = ring[i + 1..].to_vec();
+        self.space_menu_open = false;
+        if wall {
+            // The Wall shows one space: make it the circle's so its tile is
+            // there (a select only moves the rail for circles placed by hand).
+            self.rail_space = Some(self.subs_pref.spaces.space_of(&ws).to_string());
+            if self.selected_workspace.as_deref() != Some(ws.as_str()) {
+                self.select_workspace(&ws, window, cx);
+            }
+        } else {
+            // A zoom on Classic would hide the pane: zoom it instead.
+            if self.zoomed_slug.is_some() && self.view.mode == ViewMode::Classic {
+                self.zoomed_slug = Some(slug.clone());
+            }
+            self.open_chip(&ws, &slug, false, window, cx);
+        }
+        cx.notify();
+    }
+
+    /// A done chip's body: open its peek card, or close it when it's the
+    /// one open. The pad is read now rather than on the cache's next tick.
+    /// A done chip's body: open its peek card, or close it when it's the
+    /// one open. The pad is read once here, not kept on the cache's poll.
+    fn toggle_peek(&mut self, ws: &str, slug: &str, cx: &mut Context<Self>) {
+        if self.stage.peek.as_ref().is_some_and(|p| p.circle == ws) {
+            self.stage.peek = None;
+            cx.notify();
+            return;
+        }
+        self.stage.peek = Some(Peek {
+            circle: ws.to_string(),
+            pane: slug.to_string(),
+            pad: None,
+        });
+        let path = Self::scratch_path(slug, "md");
+        let client = Arc::clone(&self.client);
+        let (ws, slug) = (ws.to_string(), slug.to_string());
+        cx.spawn(async move |this, cx| {
+            // A missing pad reads as empty: "no finish note".
+            let pad = cx
+                .background_executor()
+                .spawn(async move { client.fs_read_string(&path).map(|(s, _)| s) })
+                .await
+                .unwrap_or_default();
+            let Some(this) = this.upgrade() else { return };
+            this.update(cx, |app: &mut SeanceApp, cx| {
+                if let Some(p) = app.stage.peek.as_mut() {
+                    if p.circle == ws && p.pane == slug {
+                        p.pad = Some(pad);
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
+        cx.notify();
     }
 
     /// ctrl+shift+page on Stage: step through the panes Stage can show, the
@@ -494,6 +620,14 @@ impl SeanceApp {
             .collect()
     }
 
+    /// The needs-you bar's chips in order: waiting, then done. The bar and
+    /// the next-waiting key both read this.
+    pub(super) fn waiting_list(&self) -> Vec<Waiting> {
+        let mut out = self.stage_waiting();
+        out.extend(self.stage_done());
+        out
+    }
+
     /// The whole Stage layout, in place of the rail and grid.
     pub(super) fn render_stage(
         &mut self,
@@ -510,7 +644,23 @@ impl SeanceApp {
         let show_crew = !fold || self.stage.crew_open;
 
         let top = self.render_stage_top(width, cx);
-        let needs = self.render_stage_needs(cx);
+        let chips = self.waiting_list();
+        // A peek card whose chip went (seen, its pane closed, its circle
+        // gone or selected) closes with it.
+        let peeked = self.stage.peek.as_ref().and_then(|p| {
+            chips
+                .iter()
+                .find(|w| w.done && w.circle == p.circle)
+                .map(|w| w.pane.clone())
+        });
+        let peek = match peeked {
+            Some(open) => self.render_stage_peek(open, cx),
+            None => {
+                self.stage.peek = None;
+                None
+            }
+        };
+        let needs = self.render_stage_needs(chips, cx);
         let lead_el = self.render_stage_lead(on_stage.as_deref(), lead.as_deref(), fold, cx);
         let crew_el = show_crew.then(|| {
             let crew = self.render_stage_crew(on_stage.as_deref(), crew_w, cx);
@@ -558,7 +708,8 @@ impl SeanceApp {
                     .gap(px(10.))
                     .p(px(10.))
                     .child(lead_el)
-                    .children(crew_el),
+                    .children(crew_el)
+                    .children(peek),
             )
             .children(footer)
             .into_any_element()
@@ -740,8 +891,8 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    /// Stage and Wall's space picker: the space on show, with the rail's
-    /// needs-you dot when a circle in it waits on you, and its width for the
+    /// Stage and Wall's space picker: the space on show, with the mark its
+    /// rail row has (needs you, working, done), and its width for the
     /// strip's fitting. None with only one space.
     pub(super) fn render_space_picker(
         &self,
@@ -754,10 +905,7 @@ impl SeanceApp {
             return None;
         }
         let name = spaces.get(space).map_or(space, |s| s.name.as_str());
-        let needs = matches!(
-            self.space_attention(space),
-            Some(WorkspaceAttention::NeedsHuman)
-        );
+        let mark = self.space_mark(space);
         let open = self.space_menu_open;
         let el = div()
             .id(SharedString::from(format!("{key}-space-picker")))
@@ -786,8 +934,8 @@ impl SeanceApp {
                 this.gui_menu_open = false;
                 cx.notify();
             }))
-            .when(needs, |d| {
-                d.child(div().flex_none().text_color(needs_dot_color()).child("●"))
+            .when_some(mark, |d, (glyph, color)| {
+                d.child(div().flex_none().text_color(color).child(glyph))
             })
             .child(div().min_w_0().truncate().child(name.to_string()))
             .child(
@@ -796,14 +944,15 @@ impl SeanceApp {
                     .text_color(SeancePalette::text_faint())
                     .child("▾"),
             );
-        // Padding, border, the caret and the dot, capped like the pill.
-        let w = (22. + 14. + if needs { 14. } else { 0. } + name.chars().count() as f32 * 6.9)
-            .min(PICKER_MAX_W);
+        // Padding, border, the caret and the mark, capped like the pill.
+        let w =
+            (22. + 14. + if mark.is_some() { 14. } else { 0. } + name.chars().count() as f32 * 6.9)
+                .min(PICKER_MAX_W);
         Some((el.into_any_element(), w))
     }
 
-    /// The space picker's menu: every space with its circle count and
-    /// needs-you dot. An empty space has nothing to show, so it can't be
+    /// The space picker's menu: every space with its circle count and rail
+    /// mark. An empty space has nothing to show, so it can't be
     /// picked. Drawn from the root like the ✦ menu, with the same backdrop.
     pub(super) fn render_space_menu(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let top = match self.view.mode {
@@ -820,10 +969,9 @@ impl SeanceApp {
         let rows = spaces.list.iter().map(|sp| {
             let n = spaces.circles_in(&sp.id, &ordered).len();
             let on = sp.id == shown;
-            let needs = matches!(
-                self.space_attention(&sp.id),
-                Some(WorkspaceAttention::NeedsHuman)
-            );
+            let (glyph, color) = self
+                .space_mark(&sp.id)
+                .unwrap_or(("", SeancePalette::text_faint()));
             let id = sp.id.clone();
             div()
                 .id(SharedString::from(format!("space-menu-{}", sp.id)))
@@ -842,13 +990,7 @@ impl SeanceApp {
                             this.pick_space(&id, window, cx);
                         }))
                 })
-                .child(
-                    div()
-                        .flex_none()
-                        .w(px(10.))
-                        .text_color(needs_dot_color())
-                        .child(if needs { "●" } else { "" }),
-                )
+                .child(div().flex_none().w(px(10.)).text_color(color).child(glyph))
                 .child(
                     div()
                         .flex_1()
@@ -973,15 +1115,12 @@ impl SeanceApp {
 
     /// "Needs you · N" and a chip per waiting pane, every circle, then
     /// "Done · N" and a chip per finished one. Hidden when there are none.
-    fn render_stage_needs(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        let mut waiting = self.stage_waiting();
-        let n = waiting.len();
-        let done = self.stage_done();
-        let n_done = done.len();
-        waiting.extend(done);
+    fn render_stage_needs(&self, waiting: Vec<Waiting>, cx: &Context<Self>) -> Option<AnyElement> {
         if waiting.is_empty() {
             return None;
         }
+        let n_done = waiting.iter().filter(|w| w.done).count();
+        let n = waiting.len() - n_done;
         let label = match (n, n_done) {
             (0, d) => format!("Done · {d}"),
             (n, 0) => format!("Needs you · {n}"),
@@ -992,7 +1131,9 @@ impl SeanceApp {
         } else {
             SeancePalette::success()
         };
+        let peek = self.stage.peek.as_ref().map(|p| p.circle.as_str());
         let chips = waiting.into_iter().enumerate().map(|(i, w)| {
+            let peeking = w.done && peek == Some(w.circle.as_str());
             let circle_label = if w.circle.is_empty() {
                 String::new()
             } else {
@@ -1011,7 +1152,11 @@ impl SeanceApp {
                 .rounded_lg()
                 .bg(SeancePalette::bg_elevated())
                 .border_1()
-                .border_color(SeancePalette::border())
+                .border_color(if peeking {
+                    SeancePalette::success()
+                } else {
+                    SeancePalette::border()
+                })
                 .when(!circle_label.is_empty(), |d| {
                     d.child(
                         div()
@@ -1031,15 +1176,21 @@ impl SeanceApp {
             if let Some(slug) = w.pane {
                 let ws = w.circle.clone();
                 let done = w.done;
+                if done {
+                    let (ws, slug) = (ws.clone(), slug.clone());
+                    chip = chip
+                        .cursor_pointer()
+                        .tooltip(tip("peek at its finish note"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.toggle_peek(&ws, &slug, cx);
+                        }));
+                }
                 chip = chip.child(
                     chip_button("Open", true)
                         .id(SharedString::from(format!("stage-wait-open-{i}")))
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            // Seen now, even when the circle was already selected.
-                            if done {
-                                this.workspace_unread.remove(&ws);
-                            }
-                            this.stage_show(&ws, &slug, window, cx);
+                            cx.stop_propagation();
+                            this.open_chip(&ws, &slug, done, window, cx);
                         })),
                 );
             }
@@ -1078,9 +1229,112 @@ impl SeanceApp {
                         .text_color(accent)
                         .child(label),
                 )
+                .child(
+                    div()
+                        .flex_none()
+                        .text_color(SeancePalette::text_faint())
+                        .child(if cfg!(target_os = "macos") {
+                            "⌘⇧I next"
+                        } else {
+                            "ctrl+shift+i next"
+                        }),
+                )
                 .children(chips)
                 .into_any_element(),
         )
+    }
+
+    /// A done chip's peek card, over the top of the terminal so the PTY
+    /// keeps its size: the pane's latest finish note, Open and Seen. It
+    /// takes no focus; keys stay with the pane on stage.
+    /// `open` is the chip's pane now, for Open.
+    fn render_stage_peek(&self, open: Option<String>, cx: &Context<Self>) -> Option<AnyElement> {
+        let peek = self.stage.peek.as_ref()?;
+        let ws = peek.circle.clone();
+        let read = peek.pad.is_some();
+        let note = peek
+            .pad
+            .as_deref()
+            .and_then(|pad| latest_finish(pad, PEEK_LINES));
+        let name = self
+            .panes
+            .iter()
+            .find(|p| p.slug == peek.pane)
+            .map_or_else(|| "finished".to_string(), |p| p.name.clone());
+        let body = match note {
+            Some(lines) => div()
+                .flex()
+                .flex_col()
+                .text_color(SeancePalette::text())
+                .children(lines.into_iter().map(|l| {
+                    // An empty div has no height: keep blank lines.
+                    div().min_h(px(14.)).child(l)
+                })),
+            None => div()
+                .text_color(SeancePalette::text_faint())
+                .child(if read { "no finish note" } else { "reading…" }),
+        };
+        let seen_ws = ws.clone();
+        let mut buttons = div().flex().gap(px(6.)).justify_end();
+        if let Some(slug) = open {
+            let ws = ws.clone();
+            buttons = buttons.child(chip_button("Open", true).id("stage-peek-open").on_click(
+                cx.listener(move |this, _, window, cx| {
+                    this.open_chip(&ws, &slug, true, window, cx);
+                }),
+            ));
+        }
+        buttons = buttons.child(
+            chip_button("Seen", false)
+                .id("stage-peek-seen")
+                .tooltip(tip("clear the done mark without opening"))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.stage.peek = None;
+                    this.workspace_unread.remove(&seen_ws);
+                    cx.notify();
+                })),
+        );
+        div()
+            .id("stage-peek")
+            .absolute()
+            .top(px(4.))
+            .left(px(14.))
+            .w(px(560.))
+            .max_w(relative(0.9))
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .p(px(12.))
+            .rounded(px(10.))
+            .bg(SeancePalette::bg_elevated())
+            .border_1()
+            .border_color(SeancePalette::success())
+            .text_xs()
+            .occlude()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(glyph("✓", SeancePalette::success()))
+                    .child(
+                        div()
+                            .text_color(SeancePalette::text_dim())
+                            .child(self.workspace_label(&ws)),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .font_semibold()
+                            .text_color(SeancePalette::text())
+                            .child(name),
+                    ),
+            )
+            .child(body)
+            .child(buttons)
+            .into_any_element()
+            .into()
     }
 
     /// The pane on stage: its header, the lead log line, the live terminal.

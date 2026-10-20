@@ -613,19 +613,15 @@ impl SeanceApp {
         let spaces = &self.subs_pref.spaces;
         let is_default = spaces.default_id() == id;
         let count = spaces.circles_in(&id, &self.workspaces()).len();
-        let att = self.space_attention(&id);
         let name = space.name.clone();
         let (id_click, id_drop, id_menu) = (id.clone(), id.clone(), id.clone());
         let (id_space_drop, id_drag, id_arm) = (id.clone(), id.clone(), id.clone());
         let name_click = name.clone();
         let drag_name = name.clone();
         let armed = self.space_banish_armed(&id);
-        let (glyph, color) = match att {
-            Some(WorkspaceAttention::Working) => (working_spinner_glyph(), SeancePalette::flame()),
-            Some(WorkspaceAttention::NeedsHuman) => ("\u{25cf}", needs_dot_color()),
-            Some(a) => ("\u{25cf}", a.color()),
-            None => ("", SeancePalette::text_faint()),
-        };
+        let (glyph, color) = self
+            .space_mark(&id)
+            .unwrap_or(("", SeancePalette::text_faint()));
         // flex_none + one font weight: a row that shrinks or re-measures when
         // selected makes the whole rail jump on every click.
         div()

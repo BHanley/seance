@@ -114,6 +114,7 @@ impl SeanceApp {
         }
         self.view.mode = mode;
         self.space_menu_open = false;
+        self.stage.peek = None;
         let wall = mode == ViewMode::Wall;
         if self.overview != wall {
             self.overview = wall;

@@ -16,7 +16,7 @@ impl SeanceApp {
     }
 
     /// Bridge path (tilde expands DAEMON-side) for a scratch sidecar.
-    fn scratch_path(slug: &str, ext: &str) -> String {
+    pub(super) fn scratch_path(slug: &str, ext: &str) -> String {
         format!("~/.local/share/seance/scratch/{slug}.{ext}")
     }
 

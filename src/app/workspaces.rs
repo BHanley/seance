@@ -466,6 +466,19 @@ impl SeanceApp {
             .max_by_key(|a| a.priority())
     }
 
+    /// A space's mark as its rail row draws it: the blinking needs-you dot,
+    /// the working spinner, else the attention's dot. None when quiet.
+    pub(super) fn space_mark(&self, id: &str) -> Option<(&'static str, gpui::Hsla)> {
+        Some(match self.space_attention(id)? {
+            WorkspaceAttention::Working => (
+                super::util::working_spinner_glyph(),
+                crate::theme::SeancePalette::flame(),
+            ),
+            WorkspaceAttention::NeedsHuman => ("\u{25cf}", super::util::needs_dot_color()),
+            a => ("\u{25cf}", a.color()),
+        })
+    }
+
     pub(super) fn move_circle_to_space(&mut self, ws: &str, space: &str) {
         if self.subs_pref.spaces.move_circle(ws, space) {
             self.client.log_event(
