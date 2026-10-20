@@ -899,18 +899,21 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    /// Stage and Wall draw their row of space tabs: more than one space
-    /// with circles in it. Empty spaces get no tab; Classic's rail has them.
+    /// Stage and Wall draw their row of space tabs when it would hold two
+    /// or more: a tab per space with circles, plus the one on show even if
+    /// empty, so an empty space always has a way out. Classic's rail lists
+    /// every space.
     pub(super) fn space_tabs_shown(&self) -> bool {
         if self.view.mode == ViewMode::Classic {
             return false;
         }
         let ordered = self.workspaces();
+        let shown = self.shown_space();
         let spaces = &self.subs_pref.spaces;
         spaces
             .list
             .iter()
-            .filter(|sp| !spaces.circles_in(&sp.id, &ordered).is_empty())
+            .filter(|sp| sp.id == shown || !spaces.circles_in(&sp.id, &ordered).is_empty())
             .nth(1)
             .is_some()
     }
@@ -926,8 +929,8 @@ impl SeanceApp {
 
     /// Stage and Wall's space row: a tab per space with the mark its rail
     /// row has (needs you, working, done), the one on show underlined.
-    /// Empty spaces can't be picked. Scrolls sideways when they don't fit;
-    /// None with only one space.
+    /// Empty spaces get no tab unless on show. Scrolls sideways when the
+    /// tabs don't fit; None when there would be fewer than two.
     pub(super) fn render_space_tabs(
         &mut self,
         key: &str,
@@ -938,14 +941,20 @@ impl SeanceApp {
         }
         let shown = self.shown_space();
         let spaces = &self.subs_pref.spaces;
-        // A new space on show scrolls its tab into view.
+        let ordered = self.workspaces();
+        // A new space on show scrolls its tab into view; the index counts
+        // tabs, and empty spaces have none.
         if self.stage.space_tabs_shown.as_deref() != Some(shown.as_str()) {
-            if let Some(i) = spaces.list.iter().position(|s| s.id == shown) {
+            let i = spaces
+                .list
+                .iter()
+                .filter(|sp| sp.id == shown || !spaces.circles_in(&sp.id, &ordered).is_empty())
+                .position(|sp| sp.id == shown);
+            if let Some(i) = i {
                 self.stage.space_tabs.scroll_to_item(i);
             }
             self.stage.space_tabs_shown = Some(shown.clone());
         }
-        let ordered = self.workspaces();
         let steps = if cfg!(target_os = "macos") {
             "⌘⌥↑ / ⌘⌥↓ steps"
         } else {
