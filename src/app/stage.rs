@@ -21,11 +21,11 @@ use crate::runtime::snapshot::GridSnapshot;
 use crate::theme::SeancePalette;
 
 use super::stage_parse::{
-    circle_folder, crew_order, ellipsize, fit_pills, is_bare_shell, last_output_lines,
+    circle_folder, crew_order, done_chips, ellipsize, fit_pills, is_bare_shell, last_output_lines,
     lead_log_path, pane_host, parse_health, parse_lead_log, pill_width, CrewBand, Health,
     HealthLevel, LeadLine,
 };
-use super::util::{tip, tip_s};
+use super::util::{needs_dot_color, tip, tip_s};
 use super::views::ViewMode;
 use super::workspaces::{rel_label, WorkspaceAttention};
 use super::{PaletteMode, RenameTarget, SeanceApp};
@@ -49,7 +49,7 @@ pub(super) struct StageState {
     /// Put the circle's lead up on the next frame: set on coming onto
     /// Stage and by a circle pill. Other moves (a jump, ctrl+page, Open)
     /// keep the pane they land on.
-    want_lead: bool,
+    pub(super) want_lead: bool,
     /// (circle, its newest lead log entry).
     lead_log: Option<(String, Option<LeadLine>)>,
     lead_log_asked: Option<(String, Instant)>,
@@ -102,6 +102,8 @@ pub(super) struct Waiting {
     pub(super) pane: Option<String>,
     pub(super) what: String,
     ask: Option<(String, Vec<String>)>,
+    /// A pane that finished while you were elsewhere, not one waiting.
+    done: bool,
 }
 
 impl SeanceApp {
@@ -415,6 +417,7 @@ impl SeanceApp {
                 pane: Some(p.slug.clone()),
                 what,
                 ask: None,
+                done: false,
             });
         }
         // Questions from outside any pane (a ctl ask) have no pane to open,
@@ -433,9 +436,56 @@ impl SeanceApp {
                 pane: None,
                 what: format!("{} asks: {}", a.from, a.question),
                 ask: Some((a.id.clone(), choices)),
+                done: false,
             });
         }
         out
+    }
+
+    /// Circles with a finished pane you haven't seen (their sticky unread
+    /// is done), as chips after the waiting ones. Viewing the circle clears
+    /// its unread, and with it the chip.
+    fn stage_done(&self) -> Vec<Waiting> {
+        let unread: Vec<&str> = self
+            .workspace_unread
+            .iter()
+            .filter(|(_, a)| matches!(a, WorkspaceAttention::Done))
+            .map(|(ws, _)| ws.as_str())
+            .collect();
+        if unread.is_empty() {
+            return Vec::new();
+        }
+        let done_panes: Vec<(&str, &str)> = self
+            .panes
+            .iter()
+            // A Claude pane's finish shows as done_unseen, a ctl status as
+            // "done"; either is what made the circle's unread done.
+            .filter(|p| {
+                self.done_unseen.contains(&p.slug)
+                    || self
+                        .statuses
+                        .get(&p.slug)
+                        .is_some_and(|s| s.state == "done")
+            })
+            .map(|p| (p.workspace.as_str(), p.slug.as_str()))
+            .collect();
+        done_chips(&self.workspaces(), &unread, &done_panes)
+            .into_iter()
+            .map(|(circle, pane)| {
+                let name = pane
+                    .as_deref()
+                    .and_then(|s| self.panes.iter().find(|p| p.slug == s))
+                    .map(|p| p.name.clone());
+                Waiting {
+                    // No done pane: Open puts the lead up.
+                    pane: pane.or_else(|| self.stage_lead(&circle)),
+                    what: name.unwrap_or_else(|| "finished".into()),
+                    circle,
+                    ask: None,
+                    done: true,
+                }
+            })
+            .collect()
     }
 
     /// The whole Stage layout, in place of the rail and grid.
@@ -513,16 +563,15 @@ impl SeanceApp {
         let rename = self.render_rename_field();
         let renaming = rename.is_some();
         let selected = self.selected_workspace.clone();
-        // The selected circle's space, so its own pill is always there.
-        let space = match selected.as_deref() {
-            Some(ws) => self.subs_pref.spaces.space_of(ws).to_string(),
-            None => self.current_space(),
-        };
+        let space = self.shown_space();
         let circles = self.subs_pref.spaces.circles_in(&space, &self.workspaces());
+        let picker = self.render_space_picker(&space, "stage", cx);
+        let picker_w = picker.as_ref().map_or(0., |(_, w)| w + 14.);
         let jump_w = if width >= 1200. { 270. } else { 190. };
         let switch_w = 190.;
-        // Strip padding, the mark, the toggle, the jump box and the gaps.
-        let avail = width - 28. - 84. - switch_w - jump_w - 14. * 3.;
+        // Strip padding, the mark, the space picker, the toggle, the jump box
+        // and the gaps.
+        let avail = width - 28. - 84. - picker_w - switch_w - jump_w - 14. * 3.;
         let labels: Vec<String> = circles.iter().map(|c| self.workspace_label(c)).collect();
         let widths: Vec<f32> = labels.iter().map(|l| pill_width(l)).collect();
         let sel_idx = selected
@@ -624,6 +673,7 @@ impl SeanceApp {
                     .child(div().text_color(SeancePalette::flame()).child("✦"))
                     .child(div().text_color(SeancePalette::text()).child("seance")),
             )
+            .children(picker.map(|(el, _)| el))
             .child(
                 div()
                     .flex_1()
@@ -682,6 +732,169 @@ impl SeanceApp {
                     ),
             )
             .into_any_element()
+    }
+
+    /// Stage and Wall's space picker: the space on show, with the rail's
+    /// needs-you dot when a circle in it waits on you, and its width for the
+    /// strip's fitting. None with only one space.
+    pub(super) fn render_space_picker(
+        &self,
+        space: &str,
+        key: &str,
+        cx: &Context<Self>,
+    ) -> Option<(AnyElement, f32)> {
+        let spaces = &self.subs_pref.spaces;
+        if spaces.list.len() < 2 {
+            return None;
+        }
+        let name = spaces.get(space).map_or(space, |s| s.name.as_str());
+        let needs = matches!(
+            self.space_attention(space),
+            Some(WorkspaceAttention::NeedsHuman)
+        );
+        let open = self.space_menu_open;
+        let el = div()
+            .id(SharedString::from(format!("{key}-space-picker")))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .px(px(10.))
+            .py(px(4.))
+            .rounded_full()
+            .border_1()
+            .border_color(SeancePalette::border())
+            .text_xs()
+            .text_color(SeancePalette::text())
+            .cursor_pointer()
+            .when(open, |d| d.bg(SeancePalette::surface()))
+            .hover(|s| s.bg(SeancePalette::surface()))
+            .tooltip(tip(if cfg!(target_os = "macos") {
+                "spaces (⌘⌥↑ / ⌘⌥↓ steps)"
+            } else {
+                "spaces (ctrl+alt+page up / down steps)"
+            }))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.space_menu_open = !this.space_menu_open;
+                this.gui_menu_open = false;
+                cx.notify();
+            }))
+            .when(needs, |d| {
+                d.child(div().flex_none().text_color(needs_dot_color()).child("●"))
+            })
+            .child(name.to_string())
+            .child(div().text_color(SeancePalette::text_faint()).child("▾"));
+        // Padding, border, the caret and the dot.
+        let w = 22. + 14. + if needs { 14. } else { 0. } + name.chars().count() as f32 * 6.9;
+        Some((el.into_any_element(), w))
+    }
+
+    /// The space picker's menu: every space with its circle count and
+    /// needs-you dot. An empty space has nothing to show, so it can't be
+    /// picked. Drawn from the root like the ✦ menu, with the same backdrop.
+    pub(super) fn render_space_menu(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        let top = match self.view.mode {
+            ViewMode::Stage => 48.,
+            ViewMode::Wall => 44.,
+            ViewMode::Classic => return None,
+        };
+        if !self.space_menu_open {
+            return None;
+        }
+        let shown = self.shown_space();
+        let ordered = self.workspaces();
+        let spaces = &self.subs_pref.spaces;
+        let rows = spaces.list.iter().map(|sp| {
+            let n = spaces.circles_in(&sp.id, &ordered).len();
+            let on = sp.id == shown;
+            let needs = matches!(
+                self.space_attention(&sp.id),
+                Some(WorkspaceAttention::NeedsHuman)
+            );
+            let id = sp.id.clone();
+            div()
+                .id(SharedString::from(format!("space-menu-{}", sp.id)))
+                .px_1()
+                .py_0p5()
+                .rounded_md()
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_sm()
+                .when(on, |d| d.bg(SeancePalette::surface()))
+                .when(n > 0, |d| {
+                    d.cursor_pointer()
+                        .hover(|s| s.bg(SeancePalette::surface()))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.pick_space(&id, window, cx);
+                        }))
+                })
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(10.))
+                        .text_color(needs_dot_color())
+                        .child(if needs { "●" } else { "" }),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(if n > 0 {
+                            SeancePalette::text()
+                        } else {
+                            SeancePalette::text_faint()
+                        })
+                        .child(sp.name.clone()),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(SeancePalette::text_faint())
+                        .child(n.to_string()),
+                )
+        });
+        Some(
+            div()
+                .id("space-menu-backdrop")
+                .absolute()
+                .inset_0()
+                .occlude()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.space_menu_open = false;
+                    cx.notify();
+                }))
+                .child(
+                    div()
+                        .id("space-menu-card")
+                        .absolute()
+                        .left(px(100.))
+                        .top(px(top))
+                        .w(px(240.))
+                        .max_h(px(420.))
+                        .overflow_y_scroll()
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .p_2()
+                        .rounded_lg()
+                        .border_1()
+                        .border_color(SeancePalette::flame_dim())
+                        .bg(SeancePalette::bg_elevated())
+                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .child(
+                            div()
+                                .px_1()
+                                .text_xs()
+                                .text_color(SeancePalette::text_faint())
+                                .child("spaces"),
+                        )
+                        .children(rows),
+                )
+                .into_any_element(),
+        )
     }
 
     /// The rename field, for layouts with no rail to hold it (Stage, Wall):
@@ -745,14 +958,27 @@ impl SeanceApp {
         }
     }
 
-    /// "Needs you · N" and a chip per waiting pane, every circle. Hidden when
-    /// nothing waits.
+    /// "Needs you · N" and a chip per waiting pane, every circle, then
+    /// "Done · N" and a chip per finished one. Hidden when there are none.
     fn render_stage_needs(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        let waiting = self.stage_waiting();
+        let mut waiting = self.stage_waiting();
+        let n = waiting.len();
+        let done = self.stage_done();
+        let n_done = done.len();
+        waiting.extend(done);
         if waiting.is_empty() {
             return None;
         }
-        let n = waiting.len();
+        let label = match (n, n_done) {
+            (0, d) => format!("Done · {d}"),
+            (n, 0) => format!("Needs you · {n}"),
+            (n, d) => format!("Needs you · {n} · Done · {d}"),
+        };
+        let accent = if n > 0 {
+            SeancePalette::violet()
+        } else {
+            SeancePalette::success()
+        };
         let chips = waiting.into_iter().enumerate().map(|(i, w)| {
             let circle_label = if w.circle.is_empty() {
                 String::new()
@@ -781,6 +1007,7 @@ impl SeanceApp {
                             .child(circle_label),
                     )
                 })
+                .when(w.done, |d| d.child(glyph("✓", SeancePalette::success())))
                 .child(
                     div()
                         .min_w_0()
@@ -823,15 +1050,15 @@ impl SeanceApp {
                 .gap(px(10.))
                 .overflow_x_scroll()
                 .text_xs()
-                .bg(SeancePalette::violet().opacity(0.12))
+                .bg(accent.opacity(0.12))
                 .border_b_1()
                 .border_color(SeancePalette::border())
                 .child(
                     div()
                         .flex_none()
                         .font_semibold()
-                        .text_color(SeancePalette::violet())
-                        .child(format!("Needs you · {n}")),
+                        .text_color(accent)
+                        .child(label),
                 )
                 .children(chips)
                 .into_any_element(),

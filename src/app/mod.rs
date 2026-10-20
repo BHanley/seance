@@ -321,6 +321,8 @@ pub struct SeanceApp {
     host_menu_token: u64,
     /// `✦` popover: census of the GUI windows attached to this daemon.
     gui_menu_open: bool,
+    /// Stage and Wall's space picker menu.
+    space_menu_open: bool,
     /// Render-safe cache of daemon-side files (pad sidecars, phone binds,
     /// prompt library) — refreshed by a ~2s background loop.
     remote_cache: Arc<crate::remote_cache::RemoteCache>,
@@ -534,6 +536,7 @@ impl SeanceApp {
             host_menu: None,
             host_menu_token: 0,
             gui_menu_open: false,
+            space_menu_open: false,
             remote_cache,
             daemon_error: None,
             render_probe: RenderProbe::default(),
@@ -1737,8 +1740,9 @@ impl SeanceApp {
 
         // ---- escape for chrome overlays only; else let terminal get it ----
         if key == "escape" {
-            if self.gui_menu_open {
+            if self.gui_menu_open || self.space_menu_open {
                 self.gui_menu_open = false;
+                self.space_menu_open = false;
                 cx.notify();
                 cx.stop_propagation();
                 return;
@@ -1801,6 +1805,12 @@ impl SeanceApp {
             || (paged && matches!(key, "up" | "arrowup"));
         let is_page_down = matches!(key, "pagedown" | "page_down" | "next")
             || (paged && matches!(key, "down" | "arrowdown"));
+        // With alt (option on a mac) added: cycle spaces.
+        if chord_mod && ks.modifiers.alt && !ks.modifiers.shift && (is_page_up || is_page_down) {
+            self.cycle_space(if is_page_up { -1 } else { 1 }, window, cx);
+            cx.stop_propagation();
+            return;
+        }
         if chord_mod && !ks.modifiers.alt && (is_page_up || is_page_down) {
             let delta = if is_page_up { -1 } else { 1 };
             if ks.modifiers.shift {
@@ -3211,6 +3221,7 @@ impl Render for SeanceApp {
             .children(self.render_palette(cx))
             .children(self.render_quicklaunch_editor(cx))
             .children(self.render_gui_menu(cx))
+            .children(self.render_space_menu(cx))
             .children(match &self.drawer {
                 // The Wall fills the window, as the overview always did.
                 _ if walled => None,

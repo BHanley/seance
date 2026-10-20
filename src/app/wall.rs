@@ -509,7 +509,7 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    /// ✦ mark, space chips, Wall · Focus, the layout toggle, the summary
+    /// ✦ mark, the space picker, Wall · Focus, the layout toggle, the summary
     /// and the jump box.
     fn render_wall_header(
         &self,
@@ -520,32 +520,9 @@ impl SeanceApp {
         fold: bool,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let current = self.current_space();
-        let spaces = self.subs_pref.spaces.list.iter().map(|sp| {
-            let on = sp.id == current;
-            let id = sp.id.clone();
-            div()
-                .id(SharedString::from(format!("wall-space-{}", sp.id)))
-                .flex_none()
-                .px(px(11.))
-                .py(px(4.))
-                .rounded_full()
-                .text_xs()
-                .cursor_pointer()
-                .when(on, |d| {
-                    d.bg(SeancePalette::surface())
-                        .text_color(SeancePalette::text())
-                })
-                .when(!on, |d| {
-                    d.text_color(SeancePalette::text_faint())
-                        .hover(|s| s.text_color(SeancePalette::text()))
-                })
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.show_space(&id, window, cx);
-                    cx.notify();
-                }))
-                .child(sp.name.clone())
-        });
+        let picker = self
+            .render_space_picker(&self.current_space(), "wall", cx)
+            .map(|(el, _)| el);
         let seg = |id: &'static str, label: &'static str, on: bool| {
             div()
                 .id(id)
@@ -646,18 +623,9 @@ impl SeanceApp {
             )
             .children(rename)
             .when(!renaming, |d| {
-                d.child(
-                    div()
-                        .id("wall-spaces")
-                        .flex_shrink(1.)
-                        .min_w_0()
-                        .flex()
-                        .gap(px(4.))
-                        .overflow_x_scroll()
-                        .children(spaces),
-                )
-                .child(wall_focus)
-                .when(width >= 900., |d| d.child(summary))
+                d.children(picker)
+                    .child(wall_focus)
+                    .when(width >= 900., |d| d.child(summary))
             })
             .child(div().flex_1())
             .child(

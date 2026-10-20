@@ -305,6 +305,42 @@ pub(super) fn pill_width(label: &str) -> f32 {
     24. + 14. + label.chars().count() as f32 * 6.9
 }
 
+/// ctrl+alt+page: the next space in `delta`'s direction that has circles,
+/// wrapping. `counts` is circles per space in space order; `cur` is the
+/// space on show. None when no other space has any.
+pub(super) fn step_space(counts: &[usize], cur: Option<usize>, delta: i32) -> Option<usize> {
+    let n = counts.len() as i32;
+    let step = delta.signum();
+    if n == 0 || step == 0 {
+        return None;
+    }
+    let start = cur.map_or(if step > 0 { -1 } else { n }, |c| c as i32);
+    (1..=n)
+        .map(|k| (start + step * k).rem_euclid(n) as usize)
+        .find(|&i| Some(i) != cur && counts[i] > 0)
+}
+
+/// The needs-you bar's done chips: each circle in `order` that `unread`
+/// marks done, with its first pane whose status is done (from `done_panes`,
+/// circle and slug in pane order) when it has one.
+pub(super) fn done_chips(
+    order: &[String],
+    unread: &[&str],
+    done_panes: &[(&str, &str)],
+) -> Vec<(String, Option<String>)> {
+    order
+        .iter()
+        .filter(|c| unread.contains(&c.as_str()))
+        .map(|c| {
+            let pane = done_panes
+                .iter()
+                .find(|(ws, _)| *ws == c.as_str())
+                .map(|(_, slug)| slug.to_string());
+            (c.clone(), pane)
+        })
+        .collect()
+}
+
 /// A crew member's sort band: waiting on you, then working, then finished,
 /// then quiet, then shells and sleepers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -558,6 +594,46 @@ The circle lead's running log, newest first. Doing / Done / Next / Waiting on.\n
         assert_eq!(fit_pills(&[], 10., 60., 6., None), Vec::<usize>::new());
         // A wide pill stops the run; later narrow ones don't jump ahead of it.
         assert_eq!(fit_pills(&[50., 400., 50.], 300., 60., 6., None), vec![0]);
+    }
+
+    #[test]
+    fn space_steps_skip_empty_spaces_and_wrap() {
+        let counts = [2, 0, 3, 1];
+        assert_eq!(step_space(&counts, Some(0), 1), Some(2));
+        assert_eq!(step_space(&counts, Some(2), 1), Some(3));
+        assert_eq!(step_space(&counts, Some(3), 1), Some(0));
+        assert_eq!(step_space(&counts, Some(0), -1), Some(3));
+        assert_eq!(step_space(&counts, Some(2), -1), Some(0));
+        // Showing an empty space: step off it either way.
+        assert_eq!(step_space(&counts, Some(1), 1), Some(2));
+        assert_eq!(step_space(&counts, Some(1), -1), Some(0));
+        // Nothing on show: the first or last space with circles.
+        assert_eq!(step_space(&counts, None, 1), Some(0));
+        assert_eq!(step_space(&counts, None, -1), Some(3));
+        // No other space has circles.
+        assert_eq!(step_space(&[4, 0], Some(0), 1), None);
+        assert_eq!(step_space(&[4], Some(0), -1), None);
+        assert_eq!(step_space(&[], None, 1), None);
+    }
+
+    #[test]
+    fn done_chips_follow_circle_order_and_find_the_done_pane() {
+        let order: Vec<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
+        let chips = done_chips(
+            &order,
+            &["c", "a"],
+            &[("b", "b-1"), ("c", "c-2"), ("c", "c-3")],
+        );
+        assert_eq!(
+            chips,
+            vec![
+                ("a".to_string(), None),
+                ("c".to_string(), Some("c-2".to_string()))
+            ]
+        );
+        assert!(done_chips(&order, &[], &[("a", "a-1")]).is_empty());
+        // A circle that is gone has no chip.
+        assert!(done_chips(&order, &["z"], &[]).is_empty());
     }
 
     #[test]

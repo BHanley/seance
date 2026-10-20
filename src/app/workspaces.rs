@@ -513,6 +513,50 @@ impl SeanceApp {
         }
     }
 
+    /// The space Stage and Wall show: Stage's strip follows the selected
+    /// circle so its pill is always there; the rest follow the rail.
+    pub(super) fn shown_space(&self) -> String {
+        match (self.view.mode, self.selected_workspace.as_deref()) {
+            (super::views::ViewMode::Stage, Some(ws)) => {
+                self.subs_pref.spaces.space_of(ws).to_string()
+            }
+            _ => self.current_space(),
+        }
+    }
+
+    /// A pick from Stage or Wall's space picker, or ctrl+alt+page: show the
+    /// space and, on Stage, its first circle's lead.
+    pub(super) fn pick_space(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.space_menu_open = false;
+        // The menu can outlive a space deleted elsewhere.
+        if self.subs_pref.spaces.get(id).is_none() {
+            return;
+        }
+        self.show_space(id, window, cx);
+        if self.view.mode == super::views::ViewMode::Stage {
+            self.stage.want_lead = true;
+        }
+        cx.notify();
+    }
+
+    /// ctrl+alt+page: the previous or next space with circles in it. Empty
+    /// spaces are skipped; Stage would have nothing to put up.
+    pub(super) fn cycle_space(&mut self, delta: i32, window: &mut Window, cx: &mut Context<Self>) {
+        let ordered = self.workspaces();
+        let spaces = &self.subs_pref.spaces;
+        let counts: Vec<usize> = spaces
+            .list
+            .iter()
+            .map(|s| spaces.circles_in(&s.id, &ordered).len())
+            .collect();
+        let shown = self.shown_space();
+        let cur = spaces.list.iter().position(|s| s.id == shown);
+        if let Some(i) = super::stage_parse::step_space(&counts, cur, delta) {
+            let id = spaces.list[i].id.clone();
+            self.pick_space(&id, window, cx);
+        }
+    }
+
     pub(super) fn space_banish_armed(&self, id: &str) -> bool {
         self.banish_armed
             .as_ref()
