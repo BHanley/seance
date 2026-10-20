@@ -537,12 +537,11 @@ impl SeanceApp {
         }
     }
 
-    /// A pick from Stage or Wall's space picker, or ctrl+alt+page: show the
+    /// A pick from Stage or Wall's space tabs, or ctrl+alt+page: show the
     /// space and, on Stage, its first circle's lead.
     pub(super) fn pick_space(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.space_menu_open = false;
-        // The menu can outlive a space deleted elsewhere; the space on show
-        // stays as it is, its circle and pane included.
+        // A tab can name a space deleted since it was drawn; the space on
+        // show stays as it is, its circle and pane included.
         if self.subs_pref.spaces.get(id).is_none() || self.shown_space() == id {
             cx.notify();
             return;

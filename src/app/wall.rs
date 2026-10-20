@@ -22,7 +22,9 @@ use crate::events::{self, Event};
 use crate::remote_term_view::OverviewThumb;
 use crate::theme::SeancePalette;
 
-use super::stage::{chip_button, host_chip_owned, read_lead_line, stageable, LineCache};
+use super::stage::{
+    chip_button, host_chip_owned, read_lead_line, stageable, LineCache, SPACE_ROW_H,
+};
 use super::stage_parse::{pane_host, LeadLine};
 use super::util::{now_ms, tip};
 use super::wall_model::{
@@ -414,7 +416,12 @@ impl SeanceApp {
         let cells = place_tiles(order.len(), big, cols);
         let rows = rows_used(&cells).max(1);
         let fill_rows = rows.max(3) as f32;
-        let avail_h = height - HEADER_H - 2. * GAP;
+        let tabs_h = if self.subs_pref.spaces.list.len() > 1 {
+            SPACE_ROW_H
+        } else {
+            0.
+        };
+        let avail_h = height - HEADER_H - tabs_h - 2. * GAP;
         let row_h = ((avail_h - GAP * (fill_rows - 1.)) / fill_rows).max(MIN_ROW_H);
         let grid_h = row_h * rows as f32 + GAP * (rows as f32 - 1.);
 
@@ -450,6 +457,7 @@ impl SeanceApp {
         self.wall.cells = cells;
 
         let header = self.render_wall_header(width, awake, needs, down, fold, cx);
+        let spaces = self.render_space_tabs("wall", cx);
         let grid = div()
             .id("wall-grid-scroll")
             .flex_1()
@@ -495,6 +503,7 @@ impl SeanceApp {
             .flex_col()
             .bg(SeancePalette::bg())
             .child(self.render_daemon_error_bar(cx))
+            .children(spaces)
             .child(header)
             .child(
                 div()
@@ -509,7 +518,7 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    /// ✦ mark, the space picker, Wall · Focus, the layout toggle, the summary
+    /// ✦ mark, Wall · Focus, the layout toggle, the summary
     /// and the jump box.
     fn render_wall_header(
         &self,
@@ -520,9 +529,6 @@ impl SeanceApp {
         fold: bool,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let picker = self
-            .render_space_picker(&self.current_space(), "wall", cx)
-            .map(|(el, _)| el);
         let seg = |id: &'static str, label: &'static str, on: bool| {
             div()
                 .id(id)
@@ -623,8 +629,7 @@ impl SeanceApp {
             )
             .children(rename)
             .when(!renaming, |d| {
-                d.children(picker)
-                    .child(wall_focus)
+                d.child(wall_focus)
                     .when(width >= 900., |d| d.child(summary))
             })
             .child(div().flex_1())

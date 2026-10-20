@@ -36,8 +36,8 @@ const HEALTH_EVERY: Duration = Duration::from_secs(60);
 /// Below this the crew column folds behind a toggle so the terminal keeps
 /// its width.
 const CREW_FOLD_BELOW: f32 = 1000.;
-/// A long space name truncates rather than push the strip's pills out.
-const PICKER_MAX_W: f32 = 180.;
+/// Stage and Wall's row of space tabs.
+pub(super) const SPACE_ROW_H: f32 = 24.;
 /// Lines a done chip's peek card shows of the finish note.
 const PEEK_LINES: usize = 12;
 /// Bottom rows read for a crew card's last line: enough to clear a TUI's
@@ -284,7 +284,6 @@ impl SeanceApp {
         let (ws, slug) = ring[i].clone();
         self.stage.jumped = Some(ring[i].clone());
         self.stage.jump_after = ring[i + 1..].to_vec();
-        self.space_menu_open = false;
         if wall {
             // The Wall shows one space: make it the circle's so its tile is
             // there (a select only moves the rail for circles placed by hand).
@@ -696,6 +695,7 @@ impl SeanceApp {
             .flex_col()
             .bg(SeancePalette::bg())
             .child(self.render_daemon_error_bar(cx))
+            .children(self.render_space_tabs("stage", cx))
             .child(top)
             .children(needs)
             .child(
@@ -722,13 +722,10 @@ impl SeanceApp {
         let selected = self.selected_workspace.clone();
         let space = self.shown_space();
         let circles = self.subs_pref.spaces.circles_in(&space, &self.workspaces());
-        let picker = self.render_space_picker(&space, "stage", cx);
-        let picker_w = picker.as_ref().map_or(0., |(_, w)| w + 14.);
         let jump_w = if width >= 1200. { 270. } else { 190. };
         let switch_w = 190.;
-        // Strip padding, the mark, the space picker, the toggle, the jump box
-        // and the gaps.
-        let avail = width - 28. - 84. - picker_w - switch_w - jump_w - 14. * 3.;
+        // Strip padding, the mark, the toggle, the jump box and the gaps.
+        let avail = width - 28. - 84. - switch_w - jump_w - 14. * 3.;
         let labels: Vec<String> = circles.iter().map(|c| self.workspace_label(c)).collect();
         let widths: Vec<f32> = labels.iter().map(|l| pill_width(l)).collect();
         let sel_idx = selected
@@ -830,7 +827,6 @@ impl SeanceApp {
                     .child(div().text_color(SeancePalette::flame()).child("✦"))
                     .child(div().text_color(SeancePalette::text()).child("seance")),
             )
-            .children(picker.map(|(el, _)| el))
             .child(
                 div()
                     .flex_1()
@@ -891,163 +887,72 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    /// Stage and Wall's space picker: the space on show, with the mark its
-    /// rail row has (needs you, working, done), and its width for the
-    /// strip's fitting. None with only one space.
-    pub(super) fn render_space_picker(
-        &self,
-        space: &str,
-        key: &str,
-        cx: &Context<Self>,
-    ) -> Option<(AnyElement, f32)> {
+    /// Stage and Wall's space row: a tab per space with the mark its rail
+    /// row has (needs you, working, done), the one on show underlined.
+    /// Empty spaces can't be picked. Scrolls sideways when they don't fit;
+    /// None with only one space.
+    pub(super) fn render_space_tabs(&self, key: &str, cx: &Context<Self>) -> Option<AnyElement> {
         let spaces = &self.subs_pref.spaces;
         if spaces.list.len() < 2 {
             return None;
         }
-        let name = spaces.get(space).map_or(space, |s| s.name.as_str());
-        let mark = self.space_mark(space);
-        let open = self.space_menu_open;
-        let el = div()
-            .id(SharedString::from(format!("{key}-space-picker")))
-            .flex_none()
-            .max_w(px(PICKER_MAX_W))
-            .flex()
-            .items_center()
-            .gap(px(6.))
-            .px(px(10.))
-            .py(px(4.))
-            .rounded_full()
-            .border_1()
-            .border_color(SeancePalette::border())
-            .text_xs()
-            .text_color(SeancePalette::text())
-            .cursor_pointer()
-            .when(open, |d| d.bg(SeancePalette::surface()))
-            .hover(|s| s.bg(SeancePalette::surface()))
-            .tooltip(tip(if cfg!(target_os = "macos") {
-                "spaces (⌘⌥↑ / ⌘⌥↓ steps)"
-            } else {
-                "spaces (ctrl+alt+page up / down steps)"
-            }))
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.space_menu_open = !this.space_menu_open;
-                this.gui_menu_open = false;
-                cx.notify();
-            }))
-            .when_some(mark, |d, (glyph, color)| {
-                d.child(div().flex_none().text_color(color).child(glyph))
-            })
-            .child(div().min_w_0().truncate().child(name.to_string()))
-            .child(
-                div()
-                    .flex_none()
-                    .text_color(SeancePalette::text_faint())
-                    .child("▾"),
-            );
-        // Padding, border, the caret and the mark, capped like the pill.
-        let w =
-            (22. + 14. + if mark.is_some() { 14. } else { 0. } + name.chars().count() as f32 * 6.9)
-                .min(PICKER_MAX_W);
-        Some((el.into_any_element(), w))
-    }
-
-    /// The space picker's menu: every space with its circle count and rail
-    /// mark. An empty space has nothing to show, so it can't be
-    /// picked. Drawn from the root like the ✦ menu, with the same backdrop.
-    pub(super) fn render_space_menu(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        let top = match self.view.mode {
-            ViewMode::Stage => 48.,
-            ViewMode::Wall => 44.,
-            ViewMode::Classic => return None,
-        };
-        if !self.space_menu_open {
-            return None;
-        }
         let shown = self.shown_space();
         let ordered = self.workspaces();
-        let spaces = &self.subs_pref.spaces;
-        let rows = spaces.list.iter().map(|sp| {
+        let tabs = spaces.list.iter().map(|sp| {
             let n = spaces.circles_in(&sp.id, &ordered).len();
             let on = sp.id == shown;
-            let (glyph, color) = self
-                .space_mark(&sp.id)
-                .unwrap_or(("", SeancePalette::text_faint()));
             let id = sp.id.clone();
             div()
-                .id(SharedString::from(format!("space-menu-{}", sp.id)))
-                .px_1()
-                .py_0p5()
-                .rounded_md()
+                .id(SharedString::from(format!("{key}-space-{}", sp.id)))
+                .flex_none()
+                .h_full()
                 .flex()
                 .items_center()
-                .gap_2()
-                .text_sm()
-                .when(on, |d| d.bg(SeancePalette::surface()))
-                .when(n > 0, |d| {
+                .gap(px(5.))
+                .border_b_2()
+                .border_color(if on {
+                    SeancePalette::flame()
+                } else {
+                    gpui::transparent_black()
+                })
+                .text_color(if on {
+                    SeancePalette::text()
+                } else if n > 0 {
+                    SeancePalette::text_dim()
+                } else {
+                    SeancePalette::text_faint()
+                })
+                .when(n > 0 && !on, |d| {
                     d.cursor_pointer()
-                        .hover(|s| s.bg(SeancePalette::surface()))
+                        .hover(|s| s.text_color(SeancePalette::text()))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.pick_space(&id, window, cx);
                         }))
                 })
-                .child(div().flex_none().w(px(10.)).text_color(color).child(glyph))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(if n > 0 {
-                            SeancePalette::text()
-                        } else {
-                            SeancePalette::text_faint()
-                        })
-                        .child(sp.name.clone()),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .text_xs()
-                        .text_color(SeancePalette::text_faint())
-                        .child(n.to_string()),
-                )
+                .child(sp.name.clone())
+                .when_some(self.space_mark(&sp.id), |d, (glyph, color)| {
+                    d.child(div().text_color(color).child(glyph))
+                })
         });
         Some(
             div()
-                .id("space-menu-backdrop")
-                .absolute()
-                .inset_0()
-                .occlude()
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.space_menu_open = false;
-                    cx.notify();
+                .id(SharedString::from(format!("{key}-spaces")))
+                .flex_none()
+                .h(px(SPACE_ROW_H))
+                .px(px(14.))
+                .flex()
+                .gap(px(16.))
+                .overflow_x_scroll()
+                .text_xs()
+                .bg(SeancePalette::bg_elevated())
+                .border_b_1()
+                .border_color(SeancePalette::border())
+                .tooltip(tip(if cfg!(target_os = "macos") {
+                    "spaces (⌘⌥↑ / ⌘⌥↓ steps)"
+                } else {
+                    "spaces (ctrl+alt+page up / down steps)"
                 }))
-                .child(
-                    div()
-                        .id("space-menu-card")
-                        .absolute()
-                        .left(px(100.))
-                        .top(px(top))
-                        .w(px(240.))
-                        .max_h(px(420.))
-                        .overflow_y_scroll()
-                        .flex()
-                        .flex_col()
-                        .gap_0p5()
-                        .p_2()
-                        .rounded_lg()
-                        .border_1()
-                        .border_color(SeancePalette::flame_dim())
-                        .bg(SeancePalette::bg_elevated())
-                        .on_click(|_, _, cx| cx.stop_propagation())
-                        .child(
-                            div()
-                                .px_1()
-                                .text_xs()
-                                .text_color(SeancePalette::text_faint())
-                                .child("spaces"),
-                        )
-                        .children(rows),
-                )
+                .children(tabs)
                 .into_any_element(),
         )
     }

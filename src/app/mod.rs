@@ -321,8 +321,6 @@ pub struct SeanceApp {
     host_menu_token: u64,
     /// `✦` popover: census of the GUI windows attached to this daemon.
     gui_menu_open: bool,
-    /// Stage and Wall's space picker menu.
-    space_menu_open: bool,
     /// Render-safe cache of daemon-side files (pad sidecars, phone binds,
     /// prompt library) — refreshed by a ~2s background loop.
     remote_cache: Arc<crate::remote_cache::RemoteCache>,
@@ -536,7 +534,6 @@ impl SeanceApp {
             host_menu: None,
             host_menu_token: 0,
             gui_menu_open: false,
-            space_menu_open: false,
             remote_cache,
             daemon_error: None,
             render_probe: RenderProbe::default(),
@@ -1732,16 +1729,6 @@ impl SeanceApp {
             return;
         }
 
-        // The space menu is over the Wall: its arrows and Enter mustn't move
-        // the tiles behind it.
-        if self.space_menu_open
-            && self.view.mode == views::ViewMode::Wall
-            && matches!(key, "up" | "down" | "left" | "right" | "enter")
-            && !ks.modifiers.modified()
-        {
-            cx.stop_propagation();
-            return;
-        }
         // ---- Wall: arrows move the selection, Enter focuses ----
         if self.wall_key(ks, window, cx) {
             cx.stop_propagation();
@@ -1757,9 +1744,8 @@ impl SeanceApp {
                 cx.stop_propagation();
                 return;
             }
-            if self.gui_menu_open || self.space_menu_open {
+            if self.gui_menu_open {
                 self.gui_menu_open = false;
-                self.space_menu_open = false;
                 cx.notify();
                 cx.stop_propagation();
                 return;
@@ -3243,7 +3229,6 @@ impl Render for SeanceApp {
             .children(self.render_palette(cx))
             .children(self.render_quicklaunch_editor(cx))
             .children(self.render_gui_menu(cx))
-            .children(self.render_space_menu(cx))
             .children(match &self.drawer {
                 // The Wall fills the window, as the overview always did.
                 _ if walled => None,

@@ -40,6 +40,10 @@ impl SeanceApp {
             return None;
         }
         let self_id = self.window_id.clone();
+        // Stage and Wall put the ✦ under their row of space tabs.
+        let tabs = self.view.mode != super::views::ViewMode::Classic
+            && self.subs_pref.spaces.list.len() > 1;
+        let top = 40. + if tabs { super::stage::SPACE_ROW_H } else { 0. };
         let rows: Vec<(String, String, usize)> = self
             .windows
             .iter()
@@ -62,7 +66,7 @@ impl SeanceApp {
                         .id("gui-menu-card")
                         .absolute()
                         .left(px(8.))
-                        .top(px(40.))
+                        .top(px(top))
                         .w(px(260.))
                         .flex()
                         .flex_col()
