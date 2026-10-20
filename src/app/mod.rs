@@ -275,6 +275,9 @@ pub struct SeanceApp {
     /// Claude panes that finished while the human wasn't looking at them:
     /// a ✓ on their sidebar row until the pane is next focused.
     done_unseen: std::collections::HashSet<String>,
+    /// The pane on show at the last render, so opening a pane marked unread
+    /// (a change to it, not sitting on it) is what clears the mark.
+    later_last: Option<String>,
     /// Workspaces that currently have a live-working agent (for falling-edge
     /// touch when work finishes → top of the non-working band).
     workspace_was_working: std::collections::HashSet<String>,
@@ -514,6 +517,7 @@ impl SeanceApp {
             busy_panes: std::collections::HashSet::new(),
             busy_since: std::collections::HashMap::new(),
             done_unseen: std::collections::HashSet::new(),
+            later_last: None,
             workspace_was_working: std::collections::HashSet::new(),
             workspace_names: std::collections::HashMap::new(),
             circle_mode_defs: Vec::new(),
@@ -867,6 +871,7 @@ impl SeanceApp {
                 self.busy_since.retain(|s, _| self.busy_panes.contains(s));
 
                 self.selected_workspace = selected_workspace;
+                let was_active = self.active_slug.clone();
                 self.active_slug = focused_pane;
                 self.extra_workspaces = extra_workspaces;
                 self.workspace_order = workspace_order;
@@ -971,6 +976,19 @@ impl SeanceApp {
                 // workspace. Keyboard recovery is render-side (ensure_keyboard_focus)
                 // so we don't steal focus from whisper / rename / palette here.
                 self.ensure_active_pane_in_workspace();
+                // A pane this State moved you to (a reconnect, a repair)
+                // wasn't opened by you; one you just clicked still counts.
+                // Marks on panes that are gone go with them.
+                if self.active_slug != was_active {
+                    self.later_last = self.active_slug.clone();
+                }
+                let live: std::collections::HashSet<&str> =
+                    self.panes.iter().map(|p| p.slug.as_str()).collect();
+                let marks = self.subs_pref.later.len();
+                self.subs_pref.later.retain(|s| live.contains(s.as_str()));
+                if self.subs_pref.later.len() != marks {
+                    self.save_arrangement_local();
+                }
                 self.sync_workspace_working_touches();
                 cx.notify();
             }
@@ -1143,6 +1161,9 @@ impl SeanceApp {
                 self.busy_panes.remove(&slug);
                 self.busy_since.remove(&slug);
                 self.done_unseen.remove(&slug);
+                if self.subs_pref.later.remove(&slug) {
+                    self.save_arrangement_local();
+                }
                 self.statuses.remove(&slug);
                 self.workspace_focus.retain(|_, s| s != &slug);
                 // A row that vanishes never reports the pointer leaving it.
@@ -1152,6 +1173,8 @@ impl SeanceApp {
                 // Never leave a workspace with panes but no active pane.
                 let prev = self.active_slug.clone();
                 self.ensure_active_pane_in_workspace();
+                // A fallback pane wasn't opened by you.
+                self.later_last = self.active_slug.clone();
                 if self.active_slug != prev {
                     if let Some(next) = self.active_slug.clone() {
                         self.pending_focus = Some(next);
@@ -2418,6 +2441,8 @@ impl SeanceApp {
         // Never leave a workspace with panes but no active pane.
         let prev = self.active_slug.clone();
         self.ensure_active_pane_in_workspace();
+        // A fallback pane wasn't opened by you.
+        self.later_last = self.active_slug.clone();
         if self.active_slug != prev {
             if let Some(next) = self.active_slug.clone() {
                 self.pending_focus = Some(next);
@@ -2910,6 +2935,9 @@ impl Render for SeanceApp {
         if staged {
             self.stage_sync();
         }
+        // After Stage has swapped its lead in, so a pane only passed through
+        // on the way doesn't count as opened.
+        self.read_later();
         if matches!(self.palette, PaletteMode::Closed)
             && self.renaming.is_none()
             && self.whisper.is_none()
@@ -3032,6 +3060,10 @@ impl Render for SeanceApp {
                     .map(|s| s.name.clone())
                     .unwrap_or_default();
                 this.start_rename(RenameTarget::Space(act.0.clone()), &name, window, cx);
+            }))
+            .on_action(cx.listener(|this, act: &ActMarkUnread, _, cx| {
+                this.mark_unread(&act.0, act.1);
+                cx.notify();
             }))
             .on_action(cx.listener(|this, act: &ActDeleteSpace, _, cx| {
                 this.delete_space(&act.0.clone());

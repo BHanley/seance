@@ -51,6 +51,11 @@ pub struct SubscriptionsPref {
     /// machine too.
     #[serde(default)]
     pub docked: BTreeSet<String>,
+    /// Panes marked unread: something to come back to. Part of the
+    /// arrangement so the mark survives a relaunch and shows on the other
+    /// machine too. Opening the pane clears it.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub later: BTreeSet<String>,
     /// The rail's spaces (`seance_core::spaces`). `pinned` above is the ★ set.
     #[serde(default, skip_serializing_if = "seance_core::spaces::Spaces::is_empty")]
     pub spaces: seance_core::spaces::Spaces,
@@ -157,6 +162,17 @@ mod tests {
 
     fn set(items: &[&str]) -> BTreeSet<String> {
         items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn unread_marks_roundtrip_and_stay_out_when_empty() {
+        let mut pref = SubscriptionsPref::default();
+        assert!(!serde_json::to_string(&pref).unwrap().contains("later"));
+        pref.later.insert("l6-leveling".into());
+        let json = serde_json::to_string(&pref).unwrap();
+        assert!(json.contains(r#""later":["l6-leveling"]"#), "{json}");
+        let back: SubscriptionsPref = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, pref);
     }
 
     #[test]

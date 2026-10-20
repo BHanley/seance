@@ -26,7 +26,7 @@ use super::stage_parse::{
     last_output_lines, latest_finish, lead_log_path, next_waiting, pane_host, parse_health,
     parse_lead_log, pill_width, CrewBand, Health, HealthLevel, LeadLine,
 };
-use super::util::{tip, tip_s};
+use super::util::{tip, tip_s, unread_menu};
 use super::views::ViewMode;
 use super::workspaces::{rel_label, WorkspaceAttention};
 use super::{PaletteMode, RenameTarget, SeanceApp};
@@ -126,6 +126,8 @@ pub(super) struct Waiting {
     ask: Option<(String, Vec<String>)>,
     /// A pane that finished while you were elsewhere, not one waiting.
     done: bool,
+    /// A pane you marked unread to come back to.
+    later: bool,
 }
 
 impl SeanceApp {
@@ -511,6 +513,14 @@ impl SeanceApp {
         if done {
             return st("✓ done", SeancePalette::success(), CrewBand::Done, false);
         }
+        if self.subs_pref.later.contains(&p.slug) {
+            return st(
+                "● unread",
+                WorkspaceAttention::Later.color(),
+                CrewBand::Done,
+                false,
+            );
+        }
         let title = p.title(cx);
         if is_bare_shell(&p.command, title.as_deref(), false) {
             return st("shell", SeancePalette::text_faint(), CrewBand::Quiet, true);
@@ -549,6 +559,7 @@ impl SeanceApp {
                 what,
                 ask: None,
                 done: false,
+                later: false,
             });
         }
         // Questions from outside any pane (a ctl ask) have no pane to open,
@@ -568,6 +579,7 @@ impl SeanceApp {
                 what: format!("{} asks: {}", a.from, a.question),
                 ask: Some((a.id.clone(), choices)),
                 done: false,
+                later: false,
             });
         }
         out
@@ -618,16 +630,46 @@ impl SeanceApp {
                     circle,
                     ask: None,
                     done: true,
+                    later: false,
                 }
             })
             .collect()
     }
 
-    /// The needs-you bar's chips in order: waiting, then done. The bar and
-    /// the next-waiting key both read this.
+    /// Panes you marked unread, in rail order, any circle: a chip each,
+    /// after the done ones, until you open the pane or clear it. A pane
+    /// that already has a chip keeps just that one.
+    fn stage_later(&self, chips: &[Waiting]) -> Vec<Waiting> {
+        let order = self.workspaces();
+        let mut out: Vec<Waiting> = self
+            .panes
+            .iter()
+            .filter(|p| self.subs_pref.later.contains(&p.slug))
+            .filter(|p| {
+                !chips
+                    .iter()
+                    .any(|w| w.pane.as_deref() == Some(p.slug.as_str()))
+            })
+            .map(|p| Waiting {
+                circle: p.workspace.clone(),
+                pane: Some(p.slug.clone()),
+                what: p.name.clone(),
+                ask: None,
+                done: false,
+                later: true,
+            })
+            .collect();
+        out.sort_by_key(|w| order.iter().position(|c| *c == w.circle));
+        out
+    }
+
+    /// The needs-you bar's chips in order: waiting, done, then unread. The
+    /// bar and the next-waiting key both read this.
     pub(super) fn waiting_list(&self) -> Vec<Waiting> {
         let mut out = self.stage_waiting();
         out.extend(self.stage_done());
+        let later = self.stage_later(&out);
+        out.extend(later);
         out
     }
 
@@ -1108,6 +1150,7 @@ impl SeanceApp {
                 .into_any_element(),
             Some(WorkspaceAttention::Working) => glyph("◐", SeancePalette::flame()),
             Some(WorkspaceAttention::Done) => glyph("✓", SeancePalette::success()),
+            Some(WorkspaceAttention::Later) => glyph("●", WorkspaceAttention::Later.color()),
             None if exited => glyph("✕", SeancePalette::danger()),
             None => div()
                 .flex_none()
@@ -1125,16 +1168,20 @@ impl SeanceApp {
             return None;
         }
         let n_done = waiting.iter().filter(|w| w.done).count();
-        let n = waiting.len() - n_done;
-        let label = match (n, n_done) {
-            (0, d) => format!("Done · {d}"),
-            (n, 0) => format!("Needs you · {n}"),
-            (n, d) => format!("Needs you · {n} · Done · {d}"),
-        };
+        let n_later = waiting.iter().filter(|w| w.later).count();
+        let n = waiting.len() - n_done - n_later;
+        let label = [("Needs you", n), ("Done", n_done), ("Unread", n_later)]
+            .iter()
+            .filter(|(_, k)| *k > 0)
+            .map(|(what, k)| format!("{what} · {k}"))
+            .collect::<Vec<_>>()
+            .join(" · ");
         let accent = if n > 0 {
             SeancePalette::violet()
-        } else {
+        } else if n_done > 0 {
             SeancePalette::success()
+        } else {
+            WorkspaceAttention::Later.color()
         };
         let peek = self.stage.peek.as_ref().map(|p| p.circle.as_str());
         let chips = waiting.into_iter().enumerate().map(|(i, w)| {
@@ -1171,6 +1218,9 @@ impl SeanceApp {
                     )
                 })
                 .when(w.done, |d| d.child(glyph("✓", SeancePalette::success())))
+                .when(w.later, |d| {
+                    d.child(glyph("●", WorkspaceAttention::Later.color()))
+                })
                 .child(
                     div()
                         .min_w_0()
@@ -1190,6 +1240,7 @@ impl SeanceApp {
                             this.toggle_peek(&ws, &slug, cx);
                         }));
                 }
+                let read = w.later.then(|| slug.clone());
                 chip = chip.child(
                     chip_button("Open", true)
                         .id(SharedString::from(format!("stage-wait-open-{i}")))
@@ -1198,6 +1249,18 @@ impl SeanceApp {
                             this.open_chip(&ws, &slug, done, window, cx);
                         })),
                 );
+                if let Some(slug) = read {
+                    chip = chip.child(
+                        chip_button("Read", false)
+                            .id(SharedString::from(format!("stage-wait-read-{i}")))
+                            .tooltip(tip("clear the unread mark without opening"))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.mark_unread(&slug, false);
+                                cx.notify();
+                            })),
+                    );
+                }
             }
             if let Some((id, choices)) = w.ask {
                 for (j, choice) in choices.into_iter().enumerate() {
@@ -1428,6 +1491,23 @@ impl SeanceApp {
                 );
             }
         }
+        // Come back to this one later: stays marked until you leave and
+        // open it again.
+        let later = self.subs_pref.later.contains(&pane.slug);
+        let unread_slug = pane.slug.clone();
+        row1 = row1.child(
+            chip_button(if later { "mark read" } else { "mark unread" }, false)
+                .id("stage-unread")
+                .tooltip(tip(if later {
+                    "clear the unread mark"
+                } else {
+                    "keep a chip for this pane until you next open it"
+                }))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.mark_unread(&unread_slug, !later);
+                    cx.notify();
+                })),
+        );
         if pane.asleep {
             let ws = ws.clone();
             row1 = row1.child(chip_button("awaken", true).id("stage-awaken").on_click(
@@ -1625,6 +1705,11 @@ impl SeanceApp {
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.set_active(&click, window, cx);
                     }))
+                    .context_menu({
+                        let slug = p_slug.clone();
+                        let later = self.subs_pref.later.contains(&p_slug);
+                        move |menu, _, _| unread_menu(menu, &slug, later)
+                    })
                     .child(
                         div()
                             .flex()

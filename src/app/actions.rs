@@ -98,6 +98,11 @@ pub struct ActRenameSpace(pub String);
 #[action(namespace = seance, no_json)]
 pub struct ActDeleteSpace(pub String);
 
+/// (pane slug, true to mark it unread / false to clear the mark).
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActMarkUnread(pub String, pub bool);
+
 #[derive(Action, Clone, PartialEq, Deserialize)]
 #[action(namespace = seance, no_json)]
 pub struct ActNewSpace(pub bool);

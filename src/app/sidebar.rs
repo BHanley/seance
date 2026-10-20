@@ -23,7 +23,7 @@ const TIME_W: f32 = 34.;
 
 use super::actions::*;
 use super::util::{
-    needs_dot_color, selected_row_fill, sidebar_press_no_select, tip, tip_s, ui_debug,
+    needs_dot_color, selected_row_fill, sidebar_press_no_select, tip, tip_s, ui_debug, unread_menu,
     working_spinner_glyph, DragPill, DraggedCircle, DraggedPane, DraggedSpace,
 };
 use super::workspaces::{banish_arm_live, RailFilter, WorkspaceAttention};
@@ -1040,7 +1040,9 @@ impl SeanceApp {
                     let att = if selected {
                         None
                     } else {
-                        attention.filter(|a| matches!(a, WorkspaceAttention::Done))
+                        attention.filter(|a| {
+                            matches!(a, WorkspaceAttention::Done | WorkspaceAttention::Later)
+                        })
                     };
                     att.map(|a| {
                         div()
@@ -1165,6 +1167,7 @@ impl SeanceApp {
             .map(|pane| {
                 let slug = pane.slug.clone();
                 let is_active = active == Some(slug.as_str());
+                let later = self.subs_pref.later.contains(&slug);
                 let grp = SharedString::from(format!("panegrp-{slug}"));
                 let armed = banish_arm_live(
                     self.pane_kill_armed.as_ref(),
@@ -1179,6 +1182,7 @@ impl SeanceApp {
                     _ if self.done_unseen.contains(&slug) => {
                         ("✓", WorkspaceAttention::Done.color())
                     }
+                    _ if later => ("●", WorkspaceAttention::Later.color()),
                     _ => ("", SeancePalette::text_faint()),
                 };
                 div()
@@ -1219,6 +1223,10 @@ impl SeanceApp {
                             this.set_active(&slug, window, cx);
                         }
                     }))
+                    .context_menu({
+                        let slug = slug.clone();
+                        move |menu, _, _| unread_menu(menu, &slug, later)
+                    })
                     .child(
                         div()
                             .flex_none()

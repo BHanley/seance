@@ -57,6 +57,39 @@ impl SeanceApp {
         }
     }
 
+    /// Mark a pane unread (an "Unread" chip and dot until you next open it),
+    /// or clear the mark. Marking the pane you're on keeps it marked until
+    /// you leave and come back.
+    pub(super) fn mark_unread(&mut self, slug: &str, on: bool) {
+        let changed = if on {
+            self.subs_pref.later.insert(slug.to_string())
+        } else {
+            self.subs_pref.later.remove(slug)
+        };
+        if changed {
+            self.save_arrangement();
+        }
+    }
+
+    /// Opening a pane marked unread reads it. Only a change of pane counts,
+    /// and only in the window you're using. The Wall only shows circles, so
+    /// moving across its tiles opens nothing; Stage or Classic count the pane
+    /// they show when you get there.
+    pub(super) fn read_later(&mut self) {
+        if self.view.mode == super::views::ViewMode::Wall || self.active_slug == self.later_last {
+            return;
+        }
+        self.later_last = self.active_slug.clone();
+        if !self.window_active {
+            return;
+        }
+        if let Some(slug) = self.active_slug.as_deref() {
+            if self.subs_pref.later.remove(slug) {
+                self.save_arrangement();
+            }
+        }
+    }
+
     /// A Claude pane finished out of sight: ✓ on its row, and the circle's
     /// "done" mark when the human is in another circle (so the alert says
     /// where to look, not just that something happened).

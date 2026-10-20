@@ -157,6 +157,8 @@ pub(super) enum WorkspaceAttention {
     NeedsHuman,
     /// Finished work while the human was elsewhere — sticky until select.
     Done,
+    /// A pane you marked unread to come back to; until you open it.
+    Later,
 }
 
 impl WorkspaceAttention {
@@ -165,6 +167,7 @@ impl WorkspaceAttention {
             Self::Working => "working",
             Self::NeedsHuman => "needs",
             Self::Done => "done",
+            Self::Later => "unread",
         }
     }
     pub(super) fn color(self) -> gpui::Hsla {
@@ -172,6 +175,7 @@ impl WorkspaceAttention {
             Self::Working => crate::theme::SeancePalette::flame(),
             Self::NeedsHuman => crate::theme::SeancePalette::violet(),
             Self::Done => crate::theme::SeancePalette::success(),
+            Self::Later => crate::theme::SeancePalette::text(),
         }
     }
     pub(super) fn priority(self) -> u8 {
@@ -179,6 +183,7 @@ impl WorkspaceAttention {
             Self::NeedsHuman => 3,
             Self::Working => 2,
             Self::Done => 1,
+            Self::Later => 0,
         }
     }
 }
@@ -905,6 +910,12 @@ impl SeanceApp {
             .get(workspace)
             .copied()
             .filter(|a| !matches!(a, WorkspaceAttention::Working))
+            .or_else(|| {
+                self.panes
+                    .iter()
+                    .any(|p| p.workspace == workspace && self.subs_pref.later.contains(&p.slug))
+                    .then_some(WorkspaceAttention::Later)
+            })
     }
 
     /// Sidebar right-edge label: relative time since the last pane output in
