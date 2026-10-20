@@ -14,12 +14,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{div, prelude::*, px, relative, AnyElement, Context, Hsla, SharedString, Window};
-use gpui_component::{input::Input, ActiveTheme as _, StyledExt as _};
+use gpui_component::{input::Input, menu::ContextMenuExt as _, ActiveTheme as _, StyledExt as _};
 
 use crate::pane::{Pane, PaneBody};
 use crate::runtime::snapshot::GridSnapshot;
 use crate::theme::SeancePalette;
 
+use super::actions::{ActDeleteSpace, ActRenameSpace, ActSpaceDefault};
 use super::stage_parse::{
     circle_folder, crew_order, done_chips, ellipsize, fit_pills, is_bare_shell, jump_ring,
     last_output_lines, latest_finish, lead_log_path, next_waiting, pane_host, parse_health,
@@ -967,6 +968,8 @@ impl SeanceApp {
                 return None;
             }
             let id = sp.id.clone();
+            let id_menu = sp.id.clone();
+            let is_default = spaces.default_id() == sp.id;
             let count = match n {
                 0 => "no circles".to_string(),
                 1 => "1 circle".to_string(),
@@ -1004,6 +1007,22 @@ impl SeanceApp {
                     .child(sp.name.clone())
                     .when_some(self.space_mark(&sp.id), |d, (glyph, color)| {
                         d.child(div().text_color(color).child(glyph))
+                    })
+                    // The rail's space menu, minus what only the rail can
+                    // show (new, reorder, banish), so a space can be closed
+                    // without leaving Stage or Wall.
+                    .context_menu(move |menu, _, _| {
+                        let m =
+                            menu.menu("rename space", Box::new(ActRenameSpace(id_menu.clone())));
+                        if is_default {
+                            return m;
+                        }
+                        m.menu("make default", Box::new(ActSpaceDefault(id_menu.clone())))
+                            .separator()
+                            .menu(
+                                "delete space (circles go to the default)",
+                                Box::new(ActDeleteSpace(id_menu.clone())),
+                            )
                     }),
             )
         });
