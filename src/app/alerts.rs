@@ -98,6 +98,9 @@ impl SeanceApp {
         if watching {
             return;
         }
+        // Every finish, like the done banner: one still unseen from before
+        // doesn't make the next one silent.
+        desktop_notify::done_sound();
         self.done_unseen.insert(pane.to_string());
         let Some(ws) = self
             .panes

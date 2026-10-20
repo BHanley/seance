@@ -15,14 +15,14 @@ static LAST_MS: AtomicU64 = AtomicU64::new(0);
 const MIN_GAP: Duration = Duration::from_secs(4);
 
 pub fn notify(summary: &str, body: &str) {
-    post(&LAST_MS, None, summary, body);
+    post(&LAST_MS, None, summary, body, None);
 }
 
 /// Pane alerts (OSC 9/777, finished commands). Own dedup slot, so an alert
 /// can't swallow a needs-human or ask notification right behind it.
 pub fn notify_alert(pane: &str, summary: &str, body: &str) {
     static LAST_ALERT_MS: AtomicU64 = AtomicU64::new(0);
-    post(&LAST_ALERT_MS, Some(pane), summary, body);
+    post(&LAST_ALERT_MS, Some(pane), summary, body, None);
 }
 
 /// A Claude finished working. Dedup is per pane, not global: two Claudes
@@ -45,11 +45,13 @@ pub fn notify_done(pane: &str, summary: &str, body: &str) {
         }
         map.insert(pane.to_string(), wall);
     }
-    post(&AtomicU64::new(0), Some(pane), summary, body);
+    post(&AtomicU64::new(0), Some(pane), summary, body, None);
 }
 
 /// `pane`, when known, is selected on click (macOS with terminal-notifier).
-fn post(last_ms: &AtomicU64, pane: Option<&str>, summary: &str, body: &str) {
+/// `sound` is a macOS sound name for the banner (`default` = the system's);
+/// None is silent. Linux banners never carry one.
+fn post(last_ms: &AtomicU64, pane: Option<&str>, summary: &str, body: &str, sound: Option<&str>) {
     let now = Instant::now();
     let now_ms = now.elapsed().as_millis() as u64; // wrong baseline — use wall clock
     let _ = now_ms;
@@ -66,15 +68,22 @@ fn post(last_ms: &AtomicU64, pane: Option<&str>, summary: &str, body: &str) {
     let summary = summary.to_string();
     let body = body.to_string();
     let pane = pane.map(str::to_string);
+    let sound = sound.map(str::to_string);
     std::thread::spawn(move || {
         if cfg!(target_os = "macos") {
-            if mac_terminal_notifier(pane.as_deref(), &summary, &body) {
+            if mac_terminal_notifier(pane.as_deref(), &summary, &body, sound.as_deref()) {
                 return;
             }
             // Quotes are escaped for the AppleScript string literals.
             let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+            // AppleScript has no "default" sound name; Glass is the closest.
+            let with_sound = match sound.as_deref() {
+                Some("default") => " sound name \"Glass\"".to_string(),
+                Some(name) => format!(" sound name \"{}\"", esc(name)),
+                None => String::new(),
+            };
             let script = format!(
-                "display notification \"{}\" with title \"{}\"",
+                "display notification \"{}\" with title \"{}\"{with_sound}",
                 esc(&body),
                 esc(&summary)
             );
@@ -101,7 +110,12 @@ fn post(last_ms: &AtomicU64, pane: Option<&str>, summary: &str, body: &str) {
 
 /// Apps opened from Finder don't get Homebrew on PATH, so check its
 /// prefixes first. False when terminal-notifier isn't installed.
-fn mac_terminal_notifier(pane: Option<&str>, summary: &str, body: &str) -> bool {
+fn mac_terminal_notifier(
+    pane: Option<&str>,
+    summary: &str,
+    body: &str,
+    sound: Option<&str>,
+) -> bool {
     let Some(bin) = ["/opt/homebrew/bin", "/usr/local/bin"]
         .iter()
         .map(|d| std::path::Path::new(d).join("terminal-notifier"))
@@ -111,6 +125,9 @@ fn mac_terminal_notifier(pane: Option<&str>, summary: &str, body: &str) -> bool 
     };
     let mut cmd = Command::new(bin);
     cmd.args(["-title", summary, "-message", body]);
+    if let Some(sound) = sound {
+        cmd.args(["-sound", sound]);
+    }
     // A click brings Seance forward (its bundle id from bundle-macos.sh) and
     // selects the pane. No -sender: it disables both, so the icon stays
     // terminal-notifier's.
@@ -143,14 +160,30 @@ pub fn bell_sound() {
     let Some(path) = cfg.bell_audio_path.clone().filter(|_| cfg.bell_audio) else {
         return;
     };
+    play(&LAST_BELL_MS, path, cfg.bell_audio_volume);
+}
+
+/// `seance-done-sound`: a pane finished while you were looking elsewhere.
+/// Several finishing within a second play once.
+pub fn done_sound() {
+    static LAST_DONE_MS: AtomicU64 = AtomicU64::new(0);
+    let cfg = crate::term_config::get();
+    let Some(path) = cfg.seance_done_sound.clone() else {
+        return;
+    };
+    play(&LAST_DONE_MS, path, cfg.seance_done_sound_volume);
+}
+
+/// Play a sound file at `volume` (0 to 1), at most once a second per `last`.
+fn play(last: &AtomicU64, path: std::path::PathBuf, volume: f32) {
     let wall = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
-    if wall.saturating_sub(LAST_BELL_MS.swap(wall, Ordering::Relaxed)) < 1_000 {
+    if wall.saturating_sub(last.swap(wall, Ordering::Relaxed)) < 1_000 {
         return;
     }
-    let volume = cfg.bell_audio_volume.to_string();
+    let volume = volume.to_string();
     std::thread::spawn(move || {
         let quiet = |c: &mut Command| {
             c.stdout(std::process::Stdio::null())
@@ -177,7 +210,8 @@ pub fn needs_human(pane: &str, label: &str, note: Option<&str>) {
         Some(n) if !n.is_empty() => format!("{label}: {n}"),
         _ => format!("{label} needs you"),
     };
-    post(&LAST_MS, Some(pane), "seance · needs human", &body);
+    let sound = crate::term_config::get().seance_needs_sound.as_deref();
+    post(&LAST_MS, Some(pane), "seance · needs human", &body, sound);
 }
 
 pub fn ask(from: &str, question: &str) {
@@ -191,5 +225,12 @@ pub fn ask(from: &str, question: &str) {
     } else {
         question.to_string()
     };
-    notify("seance · agent asks", &format!("{from}: {q}"));
+    let sound = crate::term_config::get().seance_needs_sound.as_deref();
+    post(
+        &LAST_MS,
+        None,
+        "seance · agent asks",
+        &format!("{from}: {q}"),
+        sound,
+    );
 }

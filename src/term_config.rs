@@ -21,6 +21,8 @@
 //! | `seance-theme` | startup color scheme until one is picked (daemon; see `looks`) |
 //! | `seance-circle-map` | TSV of `circle-slug<TAB>folder` for Stage's lead log line (GUI) |
 //! | `seance-health-file` | health report Stage's footer reads (GUI) |
+//! | `seance-needs-sound` | macOS sound name for needs-you banners (`default` = the system's) |
+//! | `seance-done-sound`, `seance-done-sound-volume` | sound when a pane finishes out of sight |
 //!
 //! The two Stage paths are read through the daemon's fs bridge, so they name
 //! files on the daemon's machine and a leading `~` is the daemon's home.
@@ -80,6 +82,13 @@ pub struct TermConfig {
     pub seance_circle_map: Option<String>,
     /// `seance-health-file`, kept unexpanded like the circle map.
     pub seance_health_file: Option<String>,
+    /// `seance-needs-sound`: the macOS sound a needs-you banner plays. None
+    /// keeps banners silent, as before.
+    pub seance_needs_sound: Option<String>,
+    /// `seance-done-sound`: played when a pane finishes while you're looking
+    /// elsewhere (its done mark). None plays nothing.
+    pub seance_done_sound: Option<PathBuf>,
+    pub seance_done_sound_volume: f32,
 }
 
 impl Default for TermConfig {
@@ -99,6 +108,9 @@ impl Default for TermConfig {
             seance_theme: None,
             seance_circle_map: None,
             seance_health_file: None,
+            seance_needs_sound: None,
+            seance_done_sound: None,
+            seance_done_sound_volume: 0.6,
         }
     }
 }
@@ -148,7 +160,7 @@ fn collect_entries(path: &Path, depth: usize, out: &mut Vec<(String, String)>) {
         match key.as_str() {
             "config-file" => includes.push(value),
             // Relative paths mean "next to this file", as in Ghostty.
-            "bell-audio-path" if !value.is_empty() => {
+            "bell-audio-path" | "seance-done-sound" if !value.is_empty() => {
                 let p = PathBuf::from(shellexpand::tilde(&value).as_ref());
                 out.push((key, base.join(p).to_string_lossy().into_owned()));
             }
@@ -237,6 +249,13 @@ fn apply(cfg: &mut TermConfig, key: &str, value: &str) {
         "seance-theme" if !value.is_empty() => cfg.seance_theme = Some(value.to_string()),
         "seance-circle-map" => cfg.seance_circle_map = non_empty(value),
         "seance-health-file" => cfg.seance_health_file = non_empty(value),
+        "seance-needs-sound" => cfg.seance_needs_sound = non_empty(value),
+        "seance-done-sound" => cfg.seance_done_sound = non_empty(value).map(PathBuf::from),
+        "seance-done-sound-volume" => {
+            if let Ok(v) = value.parse::<f32>() {
+                cfg.seance_done_sound_volume = v.clamp(0.0, 1.0);
+            }
+        }
         _ => {}
     }
 }
@@ -366,6 +385,24 @@ mod tests {
         assert_eq!(cfg.bell_audio_volume, 0.8);
         assert_eq!(cfg.notify_on_command_finish, CommandFinishNotify::Unfocused);
         assert_eq!(cfg.notify_on_command_finish_after_ms, 90_000);
+        assert_eq!(cfg.seance_needs_sound, None);
+        assert_eq!(cfg.seance_done_sound, None);
+    }
+
+    #[test]
+    fn reads_needs_and_done_sounds() {
+        let dir = test_dir("sounds");
+        let p = write(
+            &dir,
+            "terminal.conf",
+            "seance-needs-sound = default\n\
+             seance-done-sound = sounds/ding.aiff\n\
+             seance-done-sound-volume = 0.6\n",
+        );
+        let cfg = load(&p);
+        assert_eq!(cfg.seance_needs_sound.as_deref(), Some("default"));
+        assert_eq!(cfg.seance_done_sound, Some(dir.join("sounds/ding.aiff")));
+        assert_eq!(cfg.seance_done_sound_volume, 0.6);
     }
 
     #[test]
