@@ -47,12 +47,54 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   with the selected circle big (its lead live) and a Today feed on the
   right, replacing the old overview. Tiles show each circle's state (needs
   you with an Open button, done, working, lead exited, waiting on a sleeping
-  Mac, idle), the lead's last two output lines and the LEAD-LOG's Next or
-  Waiting on; sleeping circles fold into a "+N asleep" tile. Arrows move the
+  Mac, idle), the lead's current task (its terminal title), the LEAD-LOG's
+  Doing line, the lead's last finish result and the LEAD-LOG's Next or
+  Waiting on; the lead's last screen line shows only when a circle has none
+  of the first three. Sleeping circles fold into a "+N asleep" tile. Arrows move the
   selection, Enter or a double click opens Stage on it (Focus), and typing
   no longer reaches a hidden pane while the Wall is up. The feed reads the
   day's needs-you, done, exit, lead and sleep events from a new fs bridge op
   (`fs_op: "events"`), plus the health report. See README, "Wall".
+
+- **Space tabs on Stage and the Wall.** When two or more spaces have
+  circles, a row of tabs across the top, led by the seance mark, lists them
+  with the same needs-you, working or done mark as their rail rows. Click a
+  tab to show that space; right-click to rename it, make it the default or
+  delete it. ctrl+alt+pageup / pagedown (cmd+option+↑↓ on macOS) steps
+  through spaces in any layout.
+
+- **Mark unread.** Right-click a pane's rail row or Stage crew card, or use
+  the **mark unread** button in Stage's lead header, to flag a pane to come
+  back to. It gets a dot on its row and an **Unread** chip in Stage's
+  needs-you bar until you next open it; **mark read** clears it by hand.
+
+- **Done marks you can trust.** A Claude pane that finishes while you're
+  looking elsewhere gets its done mark however short the turn (the banner
+  and the lead's done sound still wait for 5 s or more). Stage's needs-you
+  bar shows a ✓ chip for each finished pane in the circle you're on too, and
+  the lead's card gets a **Crew** line naming the newest crew pane that
+  finished, when, and the first line of its reply, until you open it. The
+  peek card on a ✓ chip says when the report was filed (and the day, when
+  it wasn't today) and shows the pane's **Last reply** when it adds to the
+  report.
+
+- **Auto-sleep, one pane at a time.** Idle Claude panes are now slept one
+  by one rather than whole circles, including Claude started from a shell
+  or a wrapper, and wake into the same conversation. A shell in the circle
+  no longer keeps its Claude panes awake. `seance-auto-sleep-idle` in
+  `terminal.conf` sets how long a pane sits idle first (default `12h`, `off`
+  to stop it) and `seance-auto-sleep-skip` lists circles to leave alone.
+  Typing into a sleeping pane or sending it work (`ctl send`, a queued task,
+  a message) wakes it.
+
+- **Docked file panes.** A file pane's title strip has a dock button that
+  moves it into a panel on the right of its circle, one tab per file. New
+  file panes open there by default, so terminals keep the grid; the button
+  puts one back. Every window shares the arrangement.
+
+- **Restart Seance (macOS).** The app menu has **Restart Seance**, which
+  quits and reopens the app. Panes live on the daemon, so it is the same as
+  quitting and reopening by hand.
 
 - **Color schemes.** Nine looks for the whole app, chrome and terminal
   colors together: candlelit (the default, unchanged), abyssal, ectoplasm,
@@ -96,6 +138,25 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   panes/circles and handoff successors never reuse them. Legacy state and
   upgrade bundles gain IDs and save them immediately. Processes retained
   by a live upgrade receive the env vars on their next wake/restore.
+
+### Fixed
+
+- A pane that slept and woke quickly could be closed by the old session's
+  late exit, cancelling its queued tasks. Only the session a pane holds can
+  close it now.
+- A crew pane starting work no longer wipes its circle's done mark.
+- After a daylight saving change, the Wall's Today feed, the health row and
+  event times followed the old UTC offset until the daemon restarted.
+- One failed read over a flaky tunnel blanked Wall tiles and Stage's lead
+  card and health footer; they now keep what they showed until a read
+  succeeds (a file that is really gone still clears).
+- `daemon-upgrade.log` filled with NULs after an upgrade; it is appended to
+  now, like `daemon.log`. While the daemon is out of reach the GUI retries
+  less often (up to every 5 s) and logs about once a minute instead of
+  every 400 ms.
+- Repeated status-sets no longer write the event log, save state and
+  broadcast when nothing changed, and finished tasks leave saved state a
+  week after they finish.
 
 ### Removed
 

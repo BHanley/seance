@@ -273,6 +273,8 @@ accepted but delivery not confirmed.
 | `send-raw` | `seance ctl send-raw PANE BYTES` |
 | `read` | `seance ctl read PANE [--lines N]` (debug) |
 | `status` / `kill` | `seance ctl status\|kill PANE` |
+| `rename-pane` | `seance ctl rename-pane [PANE] NAME`: set a pane's display name (default: your own pane); the slug ctl addresses never changes, and an empty name is refused |
+| `sleep` / `wake` | `seance ctl sleep [CIRCLE]` · `seance ctl wake [CIRCLE]` (alias `awaken`): put a whole circle to sleep or wake it; omit CIRCLE inside a pane for your own. Sleep is refused when a pane in the circle can't be restored |
 | `scratchpad` / `pad` | `seance ctl pad [PANE] [--cat]` (default: `$SEANCE_SESSION`) |
 | `note` | `seance ctl note [PANE] TEXT...` `[--file PATH] [--replace]` |
 | `finish` | `seance ctl finish [PANE] [--file\|--stdin] [--status done] [--note N] [--task ID]` |
@@ -338,6 +340,13 @@ Notes:
   cancelled, completed, or superseded ids are rejected before changing the
   scratchpad or status.
 - **Roster** prefers **slug** when name≠slug (ctl needs slug).
+- **Sleeping panes**: `send` to a sleeping pane wakes it
+  into the same conversation, then delivers once it reads idle; queued tasks
+  and messages wake it the same way. The daemon also sleeps idle Claude
+  panes one at a time on its own (`seance-auto-sleep-idle`, default `12h`,
+  `off` to stop; `seance-auto-sleep-skip` lists circles to leave alone, both
+  in `terminal.conf`), never one that is busy, waiting on a human, holding
+  queued work or focused.
 
 ### Examples
 

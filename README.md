@@ -44,6 +44,7 @@ the keyboard). Point `--command` at whatever agent CLI you use.
 - **Pad drawer** — stage chip / ▤ shows task inject body + pad tail (live-refreshes)
 - **Stage strip** — urgency-sorted roster chips (click focus+pad, double-click zoom)
 - **File panes** — live markdown/text + history/diff when co-editing
+  - They open docked, in a panel on the right of their circle with one tab per file, so terminals keep the grid. The dock button in a file pane's title strip moves it into the grid and back.
 - **Control plane** — `seance ctl` so any pane (or external script) can spawn, send, wait, harvest
 - **Orchestrator A+** — `--agent` profiles, evidence-bound `wait --status done`, `send --file`, task envelopes, `harvest`, event-driven wait, boot-clear
 - **Human-in-the-loop** — `ask`, `propose`, seize/release/drive
@@ -75,6 +76,8 @@ Finder, Spotlight and the Dock. `--user` installs to `~/Applications`,
 binary, so re-run the script rather than a bare `cargo build --release`.
 It also installs `~/.local/bin/seance`, pointing into the app. The CLI follows
 the same saved remote host as the GUI, even when the GUI is closed.
+After installing a new build, **Seance → Restart Seance** in the menu bar
+quits and reopens the app. Panes live on the daemon, so nothing is lost.
 Add `--with-skills` to install the `seance-control` skill for local ChatGPT
 Work, Codex, and Claude. See [remote CLI setup](docs/REMOTE.md#cli-files).
 
@@ -167,6 +170,7 @@ attention routing free.
 | ctrl+shift+r | rename selected workspace |
 | ctrl+shift+f | last failed shell command |
 | ctrl+pageup / pagedown | cycle circles in the rail's list |
+| ctrl+alt+pageup / pagedown (macOS: cmd+option+↑↓) | show the previous / next space |
 | ctrl+shift+pageup / pagedown | cycle panes in this workspace |
 | ctrl+shift+v | paste |
 | ctrl+click (macOS: cmd+click) / middle-click | open OSC-8 / URL in the default browser |
@@ -180,6 +184,8 @@ attention routing free.
 | drag a circle onto a space | move it there (sticky) |
 | drag a space onto another | reorder spaces (onto the divider = to the end) |
 | space right-click | rename · make default · banish all · delete |
+| space tab right-click (Stage, Wall) | rename · make default · delete |
+| pane right-click (rail row, Stage crew card) | mark unread / mark read |
 | chip right-click | pins: unpin all · a host mode: turn it off for every circle in it |
 | sash drag | resize 2-pane ratio or multi-pane weights |
 | macOS: cmd+backspace / cmd+←→ / option+←→ | kill to line start / line start, end / word back, forward (as in Ghostty) |
@@ -210,6 +216,14 @@ switches every attached window at once.
 Stage trades the rail for a strip across the top and puts one circle's lead
 in the middle of the window, live and typeable. From top to bottom:
 
+- **Space tabs.** When two or more spaces have circles, a thin row of tabs
+  runs across the top, led by the seance mark: one tab per space, with the
+  same mark its rail row has (the needs-you dot, the working spinner, the
+  done dot; nothing when quiet). The space on show is bright and
+  underlined. Click a tab to show that space; right-click to rename it,
+  make it the default or delete it. Empty spaces get no tab. The row
+  scrolls sideways when the tabs don't fit; ctrl+alt+pageup / pagedown
+  (cmd+option+↑↓ on macOS) steps through the spaces from the keyboard.
 - **The strip.** ✦ opens the same menu as the rail's. Then the circles of the
   current space as pills, in rail order, each with its state: ✓ done,
   ◐ working, a violet dot when it needs you, ✕ exited, a faint dot when idle.
@@ -219,21 +233,29 @@ in the middle of the window, live and typeable. From top to bottom:
 - **Needs you.** Only when something waits: one chip per pane, in every
   circle, that is needs-human, blocked or risky or has asked a question.
   **Open** switches to that circle and puts the pane on stage. After them, a
-  green ✓ chip per circle with a finished pane you haven't seen; click the
-  chip to peek at the pane's latest `ctl finish` note, with **Open** and
-  **Seen** (clears the mark without opening). ctrl+shift+i walks the same
-  list in any layout (on the Wall it selects the circle's tile).
+  green ✓ chip per circle with a finished pane you haven't seen, and one per
+  finished pane in the circle you're on. Click a ✓ chip to peek: the pane's
+  latest `ctl finish` note, when that report was filed (with the day, if it
+  wasn't today), and under **Last reply** the first line of what the pane
+  said last, when it says something the report doesn't. **Open** goes to
+  the pane; **Seen** clears the mark without opening it. Last come
+  **Unread** chips, one per pane you marked unread, until you open the
+  pane. ctrl+shift+i walks the needs-you and done items in any layout (on
+  the Wall it selects the circle's tile).
 - **The lead.** The circle's lead pane (`seance ctl lead`, else its first
   terminal) is the real terminal: keys, esc and every chord work as in any
   focused pane. Its header shows the name, the machine (Mac or XPS, from a
   name ending `· Mac` or a `claude-mac` command), its state and how long.
   Under it, a **Doing / Next / Waiting on** line from the top entry of the
   circle's `LEAD-LOG.md` (see `seance-circle-map` below); circles without a
-  log just skip the line.
+  log just skip the line. When a crew pane finishes while you're looking
+  elsewhere, a **Crew** line names it, says when, and quotes the first line
+  of its reply, until you open that pane. **mark unread** in the header
+  marks the pane on stage to come back to (**mark read** clears it).
 - **Crew.** The circle's other terminals as cards: name, machine, state and
   the pane's last line of output. Shells with nothing running and sleeping
   panes are dashed. Click a card to put that pane on stage; "back to lead"
-  returns. "+ worker" opens a new pane in the circle. Below the crew, the
+  returns. Right-click a card to mark it unread. "+ worker" opens a new pane in the circle. Below the crew, the
   circle's **files** as tabs (the dock panel stays out of the way on stage).
 - **Health footer.** XPS and Mac state, the leads line, Claude plan use and
   the report time, from the file named by `seance-health-file`.
@@ -265,15 +287,18 @@ The Wall replaces the rail and grid with a tile for every circle of the
 current space (the rail's list, in rail order) and a Today feed down the
 right side.
 
-- **Header.** ✦ opens the rail's menu. Then the spaces (click one to show
-  it), a **Wall · Focus** switch (Focus opens the selected circle on stage),
+- **Header.** The space tabs, as on Stage, sit above it. ✦ opens the rail's
+  menu. Then a **Wall · Focus** switch (Focus opens the selected circle on stage),
   a summary such as "9 circles awake · 1 needs you · 1 down", the layout
   toggle and a jump box for the jump palette (ctrl+shift+j).
 - **Tiles.** The selected circle is a big tile, two columns by two rows,
   with its lead live (read only) and the lead's name, machine, crew count
   and state in its header, plus a **Focus** button. Every other circle
-  shows its state, the lead's last two lines of output and, from its
-  `LEAD-LOG.md`, a "Next:" or "Waiting on:" line. A circle that needs you
+  shows its state, the lead's current task (its terminal title), the
+  **Doing** line from its `LEAD-LOG.md`, the first lines of the lead's
+  last `ctl finish` result ("3h ago:" once it is over an hour old, gone
+  after a day) and a "Next:" or "Waiting on:" line. Only a circle with
+  none of those shows the lead's last line of screen output instead. A circle that needs you
   has a violet ring and an **Open** button that opens stage with the pane
   that asked; a circle whose lead has exited is red with **Open**; a lead
   waiting on a sleeping Mac (`claude-mac`'s message) is dashed and dimmed.
@@ -322,11 +347,25 @@ see above), `theme`, `palette`, `background`, `foreground`, `cursor-color`,
 `notify-on-command-finish-after`, `seance-needs-sound` (a macOS sound name,
 `default` = the system's, for needs-you and agent-ask banners),
 `seance-done-sound` and `seance-done-sound-volume` (played when a pane
-finishes while you're looking elsewhere; leads only). A pane's BEL plays the bell sound; OSC 9 /
+finishes while you're looking elsewhere; leads only),
+`seance-auto-sleep-idle` and `seance-auto-sleep-skip` (see below). A pane's BEL plays the bell sound; OSC 9 /
 OSC 777 and long shell commands post a desktop notification when you
 aren't looking at that pane (a command-finish notification also plays the bell sound); OSC 52
 copies reach the clipboard. Restart the daemon (`seance upgrade`) and GUI
 after editing.
+
+**Auto-sleep.** A Claude pane nobody has used for a while is put to sleep:
+its process stops and frees its memory, and the pane keeps its name, place
+and last screen. Only panes that can come back exactly are slept (a Claude
+pane whose conversation is on disk, including Claude started from a shell
+or a wrapper), and never one that is busy, waiting on you, holding queued
+work or focused. Typing into a sleeping pane, `seance ctl send` to it, or
+**awaken** wakes it into the same conversation.
+
+```
+seance-auto-sleep-idle = 6h            # default 12h; off turns it off
+seance-auto-sleep-skip = l6-leveling, main   # circles never auto-slept
+```
 
 ## Architecture (short)
 
