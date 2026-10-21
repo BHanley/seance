@@ -419,15 +419,18 @@ fn trim_to_limit(mut events: Vec<Event>, limit: usize) -> Vec<Event> {
 
 /// Unix ms of this machine's most recent local midnight.
 pub fn local_day_start_ms(now_ms: u64) -> u64 {
-    let offset = local_offset_secs();
-    let local = (now_ms / 1000) as i64 + offset;
-    let midnight = local - local.rem_euclid(86_400) - offset;
+    let secs = (now_ms / 1000) as i64;
+    let local = secs + local_offset_secs(secs);
+    let day = local - local.rem_euclid(86_400);
+    // Midnight's own offset: on a clock-change day it isn't the one now.
+    let midnight = day - local_offset_secs(day - local_offset_secs(secs));
     midnight.max(0) as u64 * 1000
 }
 
 /// The local calendar date of `ts_ms` as `YYYY-MM-DD`.
 pub fn local_date(ts_ms: u64) -> String {
-    let local = (ts_ms / 1000) as i64 + local_offset_secs();
+    let secs = (ts_ms / 1000) as i64;
+    let local = secs + local_offset_secs(secs);
     let (y, m, d) = civil_from_days(local.div_euclid(86_400));
     format!("{y:04}-{m:02}-{d:02}")
 }
@@ -483,9 +486,8 @@ pub fn matches_filter(
 
 /// Render a timestamp as local wall-clock HH:MM:SS.
 pub fn fmt_time(ts_ms: u64) -> String {
-    let secs = ts_ms / 1000;
-    let offset = local_offset_secs();
-    let local = secs as i64 + offset;
+    let secs = (ts_ms / 1000) as i64;
+    let local = secs + local_offset_secs(secs);
     let (h, m, s) = (
         (local / 3600).rem_euclid(24),
         (local / 60).rem_euclid(60),
@@ -494,33 +496,41 @@ pub fn fmt_time(ts_ms: u64) -> String {
     format!("{h:02}:{m:02}:{s:02}")
 }
 
-fn local_offset_secs() -> i64 {
-    use std::sync::OnceLock;
-    static OFFSET: OnceLock<i64> = OnceLock::new();
-    *OFFSET.get_or_init(|| {
-        std::process::Command::new("date")
-            .arg("+%z")
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .and_then(|s| {
-                let s = s.trim();
-                if s.len() >= 5 {
-                    let sign = if s.starts_with('-') { -1 } else { 1 };
-                    let h: i64 = s[1..3].parse().ok()?;
-                    let m: i64 = s[3..5].parse().ok()?;
-                    Some(sign * (h * 3600 + m * 60))
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(0)
-    })
+/// This machine's UTC offset in seconds at unix time `secs`, daylight saving
+/// included. Asked of the C library every call, so a long-running daemon
+/// follows the clock change.
+fn local_offset_secs(secs: i64) -> i64 {
+    let t = secs as libc::time_t;
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
+        return 0;
+    }
+    i64::from(tm.tm_gmtoff)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_offset_matches_date_now() {
+        let now = (now_ms() / 1000) as i64;
+        let out = std::process::Command::new("date")
+            .arg("+%z")
+            .output()
+            .unwrap();
+        let z = String::from_utf8(out.stdout).unwrap();
+        let z = z.trim();
+        let sign = if z.starts_with('-') { -1 } else { 1 };
+        let want =
+            sign * (z[1..3].parse::<i64>().unwrap() * 3600 + z[3..5].parse::<i64>().unwrap() * 60);
+        assert_eq!(local_offset_secs(now), want);
+        // Far ends of the range still answer.
+        local_offset_secs(0);
+        local_offset_secs(4_102_444_800);
+        let start = local_day_start_ms(now_ms());
+        assert!(start <= now_ms() && now_ms() - start < 25 * 3600 * 1000);
+    }
 
     #[test]
     fn log_assigns_seq_and_id() {
