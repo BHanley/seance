@@ -906,14 +906,6 @@ impl Engine {
                 // re-summon if needed. No tombstone chrome.
                 let code = *code;
                 let slug = slug.clone();
-                if let Some(tid) = self.active_tasks.remove(&slug) {
-                    if let Some(t) = self.tasks.get_mut(&tid) {
-                        if t.status == "open" {
-                            t.status = "orphaned".into();
-                            t.finished_ms = Some(now_ms());
-                        }
-                    }
-                }
                 events::log(
                     "daemon",
                     None,
@@ -1007,6 +999,7 @@ impl Engine {
             "context_left_pct": agent.as_ref().and_then(|a| a.context_left_pct),
             "queued_input": agent.as_ref().is_some_and(|a| a.queued_input),
             "queued_tasks": self.queued_for(&p.slug),
+            "parked_tasks": self.parked_for(&p.slug),
             "command": p.command,
             "cwd": p.cwd,
             "parent": self.pane_parents.get(&p.slug),

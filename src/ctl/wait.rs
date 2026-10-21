@@ -371,15 +371,18 @@ pub(crate) fn run_wait(
             if let (Some(want), false) = (&task_id, art) {
                 let got = row.get("task_id").and_then(|v| v.as_str());
                 if got.is_some_and(|g| g != want) {
-                    // Not the pane's current task: queued (wait on), or
-                    // cancelled/failed (fail now).
+                    // Not the pane's current task: queued or parked (wait
+                    // on), or cancelled/failed (fail now).
                     let state = task_state(want, &scope, &from);
-                    if !matches!(state.as_deref(), Some("queued" | "open" | "done")) {
+                    if !matches!(
+                        state.as_deref(),
+                        Some("queued" | "parked" | "open" | "done")
+                    ) {
                         return wait_fail(
                             json_out,
                             &format!(
-                                "task {want} on '{pane}' is {} (current task {}; each send \
-                                 cancels the previous one — use note-agent or send --queue)",
+                                "task {want} on '{pane}' is {} (current task {}; only send --now \
+                                 cancels a task)",
                                 state.as_deref().unwrap_or("unknown"),
                                 got.unwrap_or("?")
                             ),

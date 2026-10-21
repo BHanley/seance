@@ -293,9 +293,14 @@ Notes:
 
 - **`send`**: shell expands `$VARS` — use `--file`/`--stdin`. Inject creates a
   **task envelope** (`task_id`), sets `status=working`, records pad baseline.
-  It cancels the previous task even if the worker is still running. For
-  coordinator notes, use `note-agent` (no task creation); otherwise track the
-  new task id. Sidecars: `<scratch>.taskid` /
+  A send never cancels the pane's task unless asked. On an idle pane the new
+  task goes in now and the open one becomes `parked` (its turn was over: it
+  can still be finished with `ctl finish --task ID`, shows in the row's
+  `parked_tasks`, and prunes after 7 days like a done task). On a busy pane,
+  or one with tasks already waiting, it is queued (see below). `--now`
+  (`{"now":true}`) cancels the open task instead, on every path. For
+  coordinator notes, use `note-agent` (no task creation); otherwise track
+  the new task id. Sidecars: `<scratch>.taskid` /
   `<scratch>.task.json`.
 - **Delivery (`send`, `note-agent`)**: after the write, ctl watches the pane
   until the agent goes busy, the text echoes in the transcript, or the paste
@@ -308,14 +313,17 @@ Notes:
   `awaiting-input` · `limited` · `exited` · `unknown`, plus
   `activity_evidence` (the deciding screen line) and `quota`. The classifier
   lives in `seance-core/src/agent_state.rs` and is pinned by real frames.
-- **Busy panes (`send`)**: ctl looks before sending. A `busy` pane is refused
-  (exit **4**, no task opened). `--queue` sends `{"op":"send","queue":true}`:
+- **Busy panes (`send`)**: ctl looks before sending. A `busy` pane, or any
+  `--queue` send, goes as `{"op":"send","queue":true}` (the daemon also
+  queues a plain send to a pane it reads busy):
   the daemon records the task as `queued`, returns `{task_id, status:
-  "queued", position}`, and its queue pump (`engine/queue.rs`, every 500ms)
-  injects it after the pane has read `idle` for 1.5s, then confirms it with
+  "queued", position, behind, ahead}` (printed `queued behind task-N (K
+  ahead)`), and its queue pump (`engine/queue.rs`, every 500ms) injects it
+  after the pane has read `idle` for 1.5s, oldest first, parking any task
+  still open, then confirms it with
   the shared judge (Enter re-pressed, one re-paste, else `failed`).
 - **`task_fail`** `{id, reason?}`: mark an open/queued task `failed`. If
-  injecting it cancelled the pane's previous open task, that task is reopened
+  injecting it parked or cancelled the pane's previous open task, that task is reopened
   (`restored` in the reply). ctl calls it when a send's delivery can't be
   confirmed. Capability: `send`.
 - **Queued input (`note-agent`)**: a busy Claude parks pasted text behind the
@@ -336,17 +344,20 @@ Notes:
   the worker completes a newer task.
 - **`--cat` / `harvest`**: after success, print each pane's pad body (fan-in).
 - **`finish`**: pad body + status + task close; `done` requires body.
-  `--task ID` must name the pane's active task. Unknown, foreign-pane,
-  cancelled, completed, or superseded ids are rejected before changing the
-  scratchpad or status.
+  `--task ID` must name the pane's active task or one of its parked tasks
+  (finishing a parked one leaves the pane's status badge and current task
+  alone; its body still goes into the pane's scratchpad, so use the default
+  append, not `--replace`). Unknown, foreign-pane, cancelled or completed ids are rejected
+  before changing the scratchpad or status.
 - **Roster** prefers **slug** when name≠slug (ctl needs slug).
 - **Sleeping panes**: `send` to a sleeping pane wakes it
   into the same conversation, then delivers once it reads idle; queued tasks
   and messages wake it the same way. The daemon also sleeps idle Claude
   panes one at a time on its own (`seance-auto-sleep-idle`, default `12h`,
   `off` to stop; `seance-auto-sleep-skip` lists circles to leave alone, both
-  in `terminal.conf`), never one that is busy, waiting on a human, holding
-  queued work or focused.
+  in `terminal.conf`), never one that is busy, waiting on a human or
+  focused. Queued work doesn't keep a pane awake: the pump wakes it to
+  deliver.
 
 ### Examples
 

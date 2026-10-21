@@ -72,8 +72,16 @@ pub(crate) fn print_ok_human(sub: &str, response: &ControlResponse) {
                 if let Some(t) = obj.get("task_id").and_then(|v| v.as_str()) {
                     parts.push(format!("task={t}"));
                 }
-                if let Some(s) = obj.get("status").and_then(|v| v.as_str()) {
-                    parts.push(format!("status={s}"));
+                match (
+                    obj.get("status").and_then(|v| v.as_str()),
+                    obj.get("behind").and_then(|v| v.as_str()),
+                ) {
+                    (Some("queued"), Some(b)) => parts.push(format!(
+                        "queued behind {b} ({} ahead)",
+                        obj.get("ahead").and_then(|v| v.as_u64()).unwrap_or(1)
+                    )),
+                    (Some(s), _) => parts.push(format!("status={s}")),
+                    _ => {}
                 }
                 if let Some(r) = obj.get("pad_rev").and_then(|v| v.as_u64()) {
                     parts.push(format!("rev={r}"));
@@ -200,6 +208,16 @@ pub(crate) fn print_session_rows(arr: &[serde_json::Value]) {
         }
         if !task.is_empty() {
             line.push_str(&format!(" task={task}"));
+        }
+        for (key, label) in [("queued_tasks", "queued"), ("parked_tasks", "parked")] {
+            let ids: Vec<&str> = s
+                .get(key)
+                .and_then(|v| v.as_array())
+                .map(|q| q.iter().filter_map(|t| t.as_str()).collect())
+                .unwrap_or_default();
+            if !ids.is_empty() {
+                line.push_str(&format!(" {label}={}", ids.join(",")));
+            }
         }
         let pad_rev = s.get("pad_rev").and_then(|v| v.as_u64()).unwrap_or(0);
         if pad_b > 0 || pad_rev > 0 {
@@ -350,7 +368,8 @@ COMMANDS:
     send PANE TEXT...             new task: paste + submit + confirm delivery
          --file PATH | --stdin    verbatim body (avoids shell $ expansion)
          --no-submit  --force  --retry N  --no-confirm  --confirm-secs S
-         --queue                  busy pane? queue it; daemon delivers when idle
+         --queue                  keep order behind tasks already waiting (a busy pane always queues)
+         --now                    cancel the pane's open task (default: it is parked)
     note-agent PANE TEXT...       paste into the CURRENT task (no new task/cancel)
          --interrupt              queued behind a turn? interrupt the turn to deliver
     ask --to CIRCLE TEXT...       ask another session; prints its answer (exit 5 = none yet)

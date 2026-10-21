@@ -416,8 +416,10 @@ impl Engine {
     /// of the circle's last human input and the pane's last busy change (the
     /// daemon's start when it saw none); screen output doesn't count, since a
     /// Claude status line redraws all the time. Never: a busy pane, one
-    /// waiting on the human (needs-human, blocked, risky, an open ask), one
-    /// with queued tasks, the focused pane, or a circle in `skip`.
+    /// waiting on the human (needs-human, blocked, risky, an open ask), the
+    /// focused pane, or a circle in `skip`. Queued tasks don't keep a pane
+    /// awake: an idle one gets them within seconds, and the pump wakes a
+    /// sleeping one to deliver.
     pub fn auto_sleep_candidates(&self, idle_ms: u64, now: u64, skip: &[String]) -> Vec<String> {
         self.panes
             .iter()
@@ -435,7 +437,6 @@ impl Engine {
                         .any(|a| a.answer.is_none() && a.from == slug);
                 if self.pane_busy.contains(slug)
                     || waiting
-                    || !self.queued_for(slug).is_empty()
                     || self.focused_pane.as_deref() == Some(slug)
                 {
                     return false;

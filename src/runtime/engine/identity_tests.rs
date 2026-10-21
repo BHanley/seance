@@ -199,6 +199,7 @@ fn ctl_exposes_ids_and_id_targets_obey_scope_without_slug_fallback() {
         assert!(
             eng.handle_control(ControlRequest::Kill {
                 pane: key.clone(),
+                queue_to: None,
                 scope: Some("lab".into()),
                 from: None
             })

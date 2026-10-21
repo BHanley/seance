@@ -22,8 +22,6 @@ use super::{send_request, ConnectError};
 
 /// Exit code when the daemon accepted a send but delivery was not confirmed.
 pub(super) const EXIT_UNDELIVERED: i32 = 3;
-/// Exit code when `send` refused a busy pane (nothing sent, no task opened).
-pub(super) const EXIT_BUSY: i32 = 4;
 
 /// Identity every request in this module is stamped with.
 #[derive(Clone)]
@@ -173,10 +171,10 @@ pub(super) fn run_send(mut args: Vec<String>, ctx: &Ctx) -> i32 {
 /// `new --task-file` and `handoff`.
 ///
 /// Order matters (2026-09-28, v2-simplify-spec): look at the pane FIRST. A
-/// busy pane is refused before anything is opened (exit 4) — or, with
-/// `--queue`, handed to the daemon's queue, which delivers it when the pane
-/// goes idle. A send whose delivery can't be confirmed is rolled back with
-/// `task_fail`, which reopens the task it had cancelled.
+/// busy pane (or any `--queue` send) is handed to the daemon's queue, which
+/// delivers it when the pane goes idle. A send whose delivery can't be
+/// confirmed is rolled back with `task_fail`, which reopens the task it had
+/// parked or cancelled.
 fn send_task(
     ctx: &Ctx,
     req: ControlRequest,
@@ -196,7 +194,8 @@ fn send_task(
     let busy = before
         .as_ref()
         .is_some_and(|b| b.activity == Activity::Busy);
-    if opts.queue {
+    // A busy pane: queued behind its turn, delivered when it goes idle.
+    if opts.queue || busy {
         let row = ctx.call(ControlRequest::Status {
             pane: pane.to_string(),
             scope: None,
@@ -205,7 +204,8 @@ fn send_task(
         let Some(waiting) = row.get("queued_tasks").and_then(|q| q.as_array()) else {
             return Err(ctx.fail(
                 1,
-                "send --queue: this daemon predates the send queue; it needs `seance upgrade`",
+                "send: the pane is busy (or --queue) and this daemon predates the send \
+                 queue; it needs `seance upgrade`",
                 None,
             ));
         };
@@ -216,6 +216,7 @@ fn send_task(
                 text,
                 submit,
                 force,
+                now,
                 ..
             } = req
             else {
@@ -227,22 +228,11 @@ fn send_task(
                 submit,
                 force,
                 queue: true,
+                now,
                 scope: None,
                 from: None,
             });
         }
-    } else if busy {
-        let b = before.as_ref().expect("busy implies a look");
-        return Err(ctx.fail(
-            EXIT_BUSY,
-            &format!(
-                "'{pane}' is busy ({}). Nothing sent and no task opened: the running \
-                 task is untouched. `send --queue` runs this next when the pane goes idle; \
-                 `note-agent` adds to the current task",
-                b.evidence.as_deref().unwrap_or("busy")
-            ),
-            None,
-        ));
     }
     let mut data = ctx.call(req)?;
     // The daemon queued it (the pane was asleep and is starting up): the pump
@@ -599,6 +589,7 @@ pub(super) fn run_new(mut args: Vec<String>, wait_ready: bool, ctx: &Ctx) -> i32
             submit: true,
             force: false,
             queue: false,
+            now: false,
             scope: None,
             from: None,
         };
@@ -666,7 +657,8 @@ pub(super) fn run_handoff(args: Vec<String>, ctx: &Ctx) -> i32 {
                 println!(
                     "handoff PANE [--agent claude] [--name NEW] [--note TEXT] [--keep] [--trust]\n  \
                      spawn a same-cwd successor, re-send PANE's open task with a takeover\n  \
-                     preamble, kill PANE (unless --keep). Prints the new slug + task id."
+                     preamble, then kill PANE and hand its queued tasks over (unless --keep).\n  \
+                     Prints the new slug + task id."
                 );
                 return 0;
             }
@@ -746,15 +738,6 @@ pub(super) fn run_handoff(args: Vec<String>, ctx: &Ctx) -> i32 {
             Some(&json!({"slug": new, "old": old})),
         );
     }
-    if !keep {
-        if let Err(code) = ctx.call(ControlRequest::Kill {
-            pane: pane.clone(),
-            scope: None,
-            from: None,
-        }) {
-            return code;
-        }
-    }
     let text = takeover_text(&old, &new, &task_id, &cwd, note.as_deref(), &body);
     let req = ControlRequest::Send {
         pane: new.clone(),
@@ -762,6 +745,7 @@ pub(super) fn run_handoff(args: Vec<String>, ctx: &Ctx) -> i32 {
         submit: true,
         force: false,
         queue: false,
+        now: false,
         scope: None,
         from: None,
     };
@@ -769,6 +753,18 @@ pub(super) fn run_handoff(args: Vec<String>, ctx: &Ctx) -> i32 {
         Ok(s) => s,
         Err(code) => return code,
     };
+    // After the takeover is in, so the old pane's queued tasks (handed to
+    // the successor here) line up behind it.
+    if !keep {
+        if let Err(code) = ctx.call(ControlRequest::Kill {
+            pane: pane.clone(),
+            queue_to: Some(new.clone()),
+            scope: None,
+            from: None,
+        }) {
+            return code;
+        }
+    }
     let data = json!({
         "old": old,
         "old_killed": !keep,

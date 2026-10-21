@@ -380,6 +380,7 @@ mod tests {
             submit: true,
             force: false,
             queue: false,
+            now: false,
             scope: None,
             from: None,
         };

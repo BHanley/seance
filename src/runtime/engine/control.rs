@@ -259,6 +259,7 @@ impl Engine {
                 submit,
                 force,
                 queue,
+                now,
                 scope,
                 from,
             } => match find(self, &pane, &scope) {
@@ -278,19 +279,35 @@ impl Engine {
                             "not a terminal pane".into()
                         });
                     }
-                    // `--queue`: hold it; the pump injects when the pane is
-                    // idle (see queue.rs). Nothing touches the PTY now and the
-                    // running task stays open.
-                    if queue && !self.panes[idx].asleep {
+                    // `--queue`, a busy pane or one with tasks already waiting:
+                    // hold it; the pump injects it when the pane is idle,
+                    // oldest first (see queue.rs).
+                    // Nothing touches the PTY now and the running task stays
+                    // open. `--now` cancels that task on every path; without
+                    // it, the task the new one replaces is parked, not lost.
+                    let busy = self.panes[idx].session.as_ref().is_some_and(|s| {
+                        seance_core::agent_state::classify(
+                            &s.live_screen_text(),
+                            s.title().as_deref(),
+                        )
+                        .activity
+                            == seance_core::agent_state::Activity::Busy
+                    });
+                    // A task the pump just pasted counts too: its agent may
+                    // not read busy yet.
+                    let behind = !self.queued_for(&slug).is_empty()
+                        || self.send_queue.inflight.contains_key(&slug);
+                    if submit && (queue || busy || behind) && !self.panes[idx].asleep {
+                        let superseded = if now {
+                            self.supersede_active(&slug)
+                        } else {
+                            None
+                        };
                         let (tid, position) = self.queue_task(&slug, &text, &act);
+                        self.set_supersedes(&tid, superseded);
                         events::log(&act, Some(&ws), Some(&slug), "task_queued", tid.clone());
                         self.persist();
-                        return ok(json!({
-                            "slug": slug,
-                            "task_id": tid,
-                            "status": "queued",
-                            "position": position,
-                        }));
+                        return ok(self.queued_reply(&slug, &tid, position));
                     }
                     // Addressing a sleeping pane wakes it. Anything else makes
                     // every orchestrator break silently the first time it
@@ -305,16 +322,17 @@ impl Engine {
                         // always submits, so a --no-submit send goes straight in.
                         if submit {
                             self.record_contact(from.as_deref(), &ws);
+                            let superseded = if now {
+                                self.supersede_active(&slug)
+                            } else {
+                                None
+                            };
                             let (tid, position) = self.queue_task(&slug, &text, &act);
+                            self.set_supersedes(&tid, superseded);
                             events::log(&act, Some(&ws), Some(&slug), "task_queued", tid.clone());
                             self.persist();
                             self.push_state_to_all();
-                            return ok(json!({
-                                "slug": slug,
-                                "task_id": tid,
-                                "status": "queued",
-                                "position": position,
-                            }));
+                            return ok(self.queued_reply(&slug, &tid, position));
                         }
                         self.persist();
                         self.push_state_to_all();
@@ -323,7 +341,13 @@ impl Engine {
                         return err("not a terminal pane".into());
                     }
                     self.record_contact(from.as_deref(), &ws);
+                    let superseded = if now {
+                        self.supersede_active(&slug)
+                    } else {
+                        None
+                    };
                     let task_id = self.inject_task(idx, text, submit, &act, None);
+                    self.set_supersedes(&task_id, superseded);
                     let (pad_rev, pad_bytes) =
                         self.inject_baselines.get(&slug).copied().unwrap_or((0, 0));
                     ok(json!({
@@ -641,9 +665,24 @@ impl Engine {
                 Ok(idx) => ok(self.pane_summary_json(&self.panes[idx])),
                 Err(e) => err(e),
             },
-            Kill { pane, scope, from } => match find(self, &pane, &scope) {
+            Kill {
+                pane,
+                queue_to,
+                scope,
+                from,
+            } => match find(self, &pane, &scope) {
                 Ok(idx) => {
                     let slug = self.panes[idx].slug.clone();
+                    // A handoff's successor takes the queue; kill_pane would
+                    // cancel it.
+                    if let Some(to) = queue_to.and_then(|to| find(self, &to, &scope).ok()) {
+                        let to = self.panes[to].slug.clone();
+                        for tid in self.queued_for(&slug) {
+                            if let Some(t) = self.tasks.get_mut(&tid) {
+                                t.pane = to.clone();
+                            }
+                        }
+                    }
                     events::log(
                         &actor(&from),
                         Some(&self.panes[idx].workspace),
@@ -1534,18 +1573,28 @@ impl Engine {
                             rev = self.bump_pad_rev(&slug);
                         }
                         let note = status_note.clone();
-                        self.statuses
-                            .insert(slug.clone(), (status.clone(), note.clone()));
+                        // Finishing a parked task says nothing about the one
+                        // the pane is on now: its badge stays.
+                        let parked = task
+                            .as_deref()
+                            .and_then(|t| self.tasks.get(t))
+                            .is_some_and(|t| t.status == "parked");
+                        if !parked {
+                            self.statuses
+                                .insert(slug.clone(), (status.clone(), note.clone()));
+                        }
                         let finished_task = if status == "done" {
                             self.complete_active_task(&slug, task.as_deref())
                         } else {
                             None
                         };
-                        self.broadcast(GuiEvent::Status {
-                            slug: slug.clone(),
-                            state: status.clone(),
-                            note: note.clone(),
-                        });
+                        if !parked {
+                            self.broadcast(GuiEvent::Status {
+                                slug: slug.clone(),
+                                state: status.clone(),
+                                note: note.clone(),
+                            });
+                        }
                         events::log(
                             &author,
                             Some(&ws),
@@ -1751,7 +1800,7 @@ impl Engine {
         let pad_rev = self.pad_revs.get(slug).copied().unwrap_or(0);
         self.inject_baselines
             .insert(slug.to_string(), (pad_rev, pad_bytes));
-        let superseded = self.supersede_active(slug);
+        let superseded = self.park_active(slug);
         self.task_counter = self.task_counter.saturating_add(1);
         let id = format!("task-{}", self.task_counter);
         // Cap stored body so state.json stays sane (full inject usually fits).
@@ -1799,7 +1848,11 @@ impl Engine {
                 task.pane
             ));
         }
-        if task.status != "open" || self.active_tasks.get(slug).map(String::as_str) != Some(tid) {
+        // A parked task (another went in while it sat idle) can still be
+        // finished by id.
+        let current =
+            task.status == "open" && self.active_tasks.get(slug).map(String::as_str) == Some(tid);
+        if !current && task.status != "parked" {
             return Err(format!("finish: task '{tid}' is {} and is not an open current task; read `ctl task` before finishing", task.status));
         }
         Ok(())
@@ -1820,14 +1873,23 @@ impl Engine {
         if self.validate_finish_task(slug, &tid).is_err() {
             return None;
         }
+        // A parked task leaves the current one's sidecar alone.
+        let current = self.active_tasks.get(slug) == Some(&tid);
         if let Some(t) = self.tasks.get_mut(&tid) {
             t.status = "done".into();
             t.finished_ms = Some(now_ms());
-            if let Some(p) = self.panes.iter().find(|p| p.slug == slug) {
+            if let Some(p) = self
+                .panes
+                .iter()
+                .find(|p| p.slug == slug)
+                .filter(|_| current)
+            {
                 write_task_sidecar(&p.scratch_path, t);
             }
         }
-        self.active_tasks.remove(slug);
+        if current {
+            self.active_tasks.remove(slug);
+        }
         Some(tid)
     }
 

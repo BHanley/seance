@@ -160,6 +160,21 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   its first pane: a plain shell, or what the new `terminal.conf` key
   `seance-new-circle-command` names. Esc leaves the circle empty.
 
+### Changed
+
+- **A send no longer cancels a task.** `seance ctl send` to a busy pane is
+  queued behind its turn (`queued behind task-N (K ahead)`) and delivered
+  when it goes idle, oldest first, instead of being refused with exit 4. A
+  send to an idle pane goes in now, and the task it replaces is **parked**
+  (its turn was over: waiting on you, blocked, or never finished), not
+  cancelled: `ctl list` shows `parked=` ids, `ctl finish --task ID` still
+  finishes one, and parked tasks prune after 7 days like finished ones.
+  `send --now` cancels the open task on every path, `--queue` and a
+  sleeping pane included. `ctl list` also shows `queued=` ids. Queued tasks
+  no longer keep a pane from auto-sleeping. Killing a pane orphans its open
+  task and cancels its queue, so a pane that reuses the slug starts clean;
+  `ctl handoff` hands the queue to the successor.
+
 ### Fixed
 
 - A pane that slept and woke quickly could be closed by the old session's

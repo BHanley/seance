@@ -1,7 +1,8 @@
 //! Send queue: `ctl send --queue` — "run this next" without a babysitter.
 //!
 //! A queued send opens its task as `queued` and touches nothing: the pane's
-//! running task stays open. [`Engine::pump_send_queue`] (daemon thread,
+//! running task stays open. A plain send to a busy pane is queued the same
+//! way. [`Engine::pump_send_queue`] (daemon thread,
 //! every [`PUMP_EVERY`]) delivers the oldest queued task once the pane has
 //! read `idle` for [`IDLE_SETTLE_MS`], then confirms the paste landed with
 //! the same judge `ctl send` uses (`seance_core::agent_state::judge`):
@@ -53,7 +54,7 @@ pub struct Inflight {
 #[derive(Default)]
 pub struct SendQueueState {
     idle_since: HashMap<String, u64>,
-    inflight: HashMap<String, Inflight>,
+    pub(super) inflight: HashMap<String, Inflight>,
 }
 
 /// How long a woken pane gets to start its agent before the pump treats an
@@ -74,6 +75,62 @@ impl Engine {
         t.status = "cancelled".into();
         t.finished_ms = Some(now_ms());
         Some(old)
+    }
+
+    /// Park the pane's active open task: a new one is going in while it is
+    /// idle (its turn over, waiting on someone or never finished). Unlike a
+    /// cancel it can still be finished (`ctl finish --task ID`), and it
+    /// prunes like a finished task. Returns its id.
+    pub(super) fn park_active(&mut self, slug: &str) -> Option<String> {
+        let old = self.active_tasks.remove(slug)?;
+        let t = self.tasks.get_mut(&old)?;
+        if t.status != "open" {
+            return None;
+        }
+        t.status = "parked".into();
+        t.finished_ms = Some(now_ms());
+        Some(old)
+    }
+
+    /// Record the task `tid` displaced, when there was one.
+    pub(super) fn set_supersedes(&mut self, tid: &str, old: Option<String>) {
+        if let (Some(t), Some(old)) = (self.tasks.get_mut(tid), old) {
+            t.supersedes = Some(old);
+        }
+    }
+
+    /// The pane's open task, if it has one.
+    pub(super) fn open_task(&self, slug: &str) -> Option<String> {
+        self.active_tasks
+            .get(slug)
+            .filter(|id| self.tasks.get(*id).is_some_and(|t| t.status == "open"))
+            .cloned()
+    }
+
+    /// The pane's parked task ids, oldest first.
+    pub(super) fn parked_for(&self, slug: &str) -> Vec<String> {
+        let mut q: Vec<&TaskRecord> = self
+            .tasks
+            .values()
+            .filter(|t| t.pane == slug && t.status == "parked")
+            .collect();
+        q.sort_by_key(|t| (t.created_ms, t.id.len(), t.id.clone()));
+        q.into_iter().map(|t| t.id.clone()).collect()
+    }
+
+    /// A queued send's reply: its place in line and the task right in front
+    /// of it (the running one counts).
+    pub(super) fn queued_reply(&self, slug: &str, tid: &str, position: usize) -> serde_json::Value {
+        let mut ahead: Vec<String> = self.open_task(slug).into_iter().collect();
+        ahead.extend(self.queued_for(slug).into_iter().take_while(|t| t != tid));
+        serde_json::json!({
+            "slug": slug,
+            "task_id": tid,
+            "status": "queued",
+            "position": position,
+            "behind": ahead.last(),
+            "ahead": ahead.len(),
+        })
     }
 
     /// Record a queued task; returns (id, 1-based position in the pane's queue).
@@ -107,7 +164,7 @@ impl Engine {
         q.into_iter().map(|t| t.id.clone()).collect()
     }
 
-    /// Turn queued `tid` into the pane's open task (baseline, supersede).
+    /// Turn queued `tid` into the pane's open task (baseline, park).
     pub(super) fn activate_queued(&mut self, slug: &str, tid: &str) -> String {
         let pad_bytes = self
             .panes
@@ -119,12 +176,13 @@ impl Engine {
         let pad_rev = self.pad_revs.get(slug).copied().unwrap_or(0);
         self.inject_baselines
             .insert(slug.to_string(), (pad_rev, pad_bytes));
-        let superseded = self.supersede_active(slug);
+        let parked = self.park_active(slug);
         if let Some(t) = self.tasks.get_mut(tid) {
             t.status = "open".into();
             t.inject_pad_rev = pad_rev;
             t.inject_pad_bytes = pad_bytes;
-            t.supersedes = superseded;
+            // A `--now` send cancelled its task when it was queued.
+            t.supersedes = parked.or(t.supersedes.take());
             if let Some(p) = self.panes.iter().find(|p| p.slug == slug) {
                 write_task_sidecar(&p.scratch_path, t);
             }
@@ -134,7 +192,8 @@ impl Engine {
     }
 
     /// Mark `tid` failed. If it was the pane's active task and its injection
-    /// cancelled another open task, reopen that one (and its pad baseline).
+    /// cancelled or parked another open task, reopen that one (and its pad
+    /// baseline).
     /// Returns the reopened task id.
     pub(crate) fn fail_task(&mut self, tid: &str, reason: &str) -> Result<Option<String>, String> {
         let t = self
@@ -161,7 +220,11 @@ impl Engine {
         let Some(old) = supersedes else {
             return Ok(None);
         };
-        let Some(o) = self.tasks.get_mut(&old).filter(|o| o.status == "cancelled") else {
+        let Some(o) = self
+            .tasks
+            .get_mut(&old)
+            .filter(|o| matches!(o.status.as_str(), "cancelled" | "parked"))
+        else {
             return Ok(None);
         };
         o.status = "open".into();
@@ -250,9 +313,11 @@ impl Engine {
             }
             if self.send_queue.inflight.contains_key(&slug) {
                 changed |= self.advance_inflight(idx, &slug, look, now);
-            } else if !self.queued_for(&slug).is_empty() {
+            } else if !self.queued_for(&slug).is_empty() && look.activity != Activity::Busy {
                 changed |= self.maybe_deliver(idx, &slug, look, now);
             } else {
+                // Messages land mid-turn, so a task waiting out a busy pane
+                // doesn't hold them up.
                 changed |= self.maybe_deliver_message(idx, &slug, look, now);
             }
         }
@@ -284,8 +349,11 @@ impl Engine {
             ),
             None => return false,
         };
-        // A human at the keys wins; try again next pass.
-        if self.panes[idx].agency.may_inject(&act, false).is_err() {
+        // A human at the keys wins; try again next pass. Only a human: the
+        // sender passed the owner check when it queued, and an earlier
+        // delivery handing the pane to another agent must not hold the line
+        // forever ("cli" clears agent ownership, nothing else).
+        if self.panes[idx].agency.may_inject("cli", false).is_err() {
             return false;
         }
         self.send_queue.idle_since.remove(slug);

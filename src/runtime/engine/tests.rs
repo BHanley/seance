@@ -266,12 +266,13 @@ fn begin_and_complete_task_lifecycle() {
             Some("first inject")
         );
 
-        // Second inject cancels prior open task
+        // A second inject parks the prior open task (`send --now` cancels
+        // it instead; see sends_park_queue_or_replace).
         let id2 = eng.begin_task(&slug, "second inject");
         assert_ne!(id1, id2);
         assert_eq!(
             eng.tasks.get(&id1).map(|t| t.status.as_str()),
-            Some("cancelled")
+            Some("parked")
         );
         assert_eq!(
             eng.active_tasks.get(&slug).map(|s| s.as_str()),
@@ -309,6 +310,8 @@ fn finish_rejects_invalid_task_before_any_mutation() {
         let own = eng.push_stub_pane("worker", "main");
         let other = eng.push_stub_pane("unrelated", "main");
         let cancelled = eng.begin_task(&own, "original assignment");
+        // `send --now`: cancelled, not parked (a parked task can be finished).
+        eng.supersede_active(&own);
         let current = eng.begin_task(&own, "replacement assignment");
         let foreign = eng.begin_task(&other, "other worker's assignment");
         let path = eng
@@ -555,6 +558,7 @@ fn queued_send_leaves_the_running_task_alone_and_fail_rolls_back() {
             submit: true,
             force: false,
             queue: true,
+            now: false,
             scope: None,
             from: Some("orch".into()),
         });
@@ -568,9 +572,9 @@ fn queued_send_leaves_the_running_task_alone_and_fail_rolls_back() {
         assert_eq!(eng.queued_for(&w), vec![queued.clone()]);
         assert_eq!(eng.tasks[&queued].queued_by.as_deref(), Some("agent:orch"));
 
-        // Activation supersedes the running task; a failed delivery reopens it.
+        // Activation parks the running task; a failed delivery reopens it.
         eng.activate_queued(&w, &queued);
-        assert_eq!(eng.tasks[&running].status, "cancelled");
+        assert_eq!(eng.tasks[&running].status, "parked");
         assert_eq!(
             eng.tasks[&queued].supersedes.as_deref(),
             Some(running.as_str())
@@ -589,16 +593,127 @@ fn queued_send_leaves_the_running_task_alone_and_fail_rolls_back() {
         // Only open/queued tasks can fail.
         assert!(eng.fail_task(&queued, "again").is_err());
 
-        // A send that superseded nothing fails without restoring anything.
+        // A direct send parks it too, and failing restores it.
         let solo = eng.begin_task(&w, "second");
-        assert_eq!(eng.tasks[&running].status, "cancelled");
+        assert_eq!(eng.tasks[&running].status, "parked");
         assert_eq!(eng.fail_task(&solo, "x").unwrap(), Some(running.clone()));
 
-        // Pane gone → its queue is cancelled by the pump.
+        // Pane gone: its open task is orphaned and its queue cancelled, so a
+        // pane that reuses the slug doesn't wait behind them.
         let (q2, _) = eng.queue_task(&w, "later", "cli");
         eng.kill_pane(&w);
-        assert!(eng.pump_send_queue(now_ms()));
         assert_eq!(eng.tasks[&q2].status, "cancelled");
+        assert_eq!(eng.tasks[&running].status, "orphaned");
+        assert_eq!(eng.open_task(&w), None);
+        let _ = std::fs::remove_dir_all(&scratch);
+    });
+}
+
+#[test]
+fn sends_park_queue_or_replace() {
+    with_test_state_dir("send-rules", || {
+        let scratch = temp_scratch("send-rules");
+        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
+        let w = eng.push_stub_pane("w", "lab");
+        let other = eng.push_stub_pane("other", "lab");
+        let send = |eng: &mut Engine, pane: &str, text: &str, queue: bool, now: bool| {
+            eng.handle_control(ControlRequest::Send {
+                pane: pane.into(),
+                text: text.into(),
+                submit: true,
+                force: false,
+                queue,
+                now,
+                scope: None,
+                from: None,
+            })
+        };
+
+        // Idle with an open task: the new task goes in and the old one is
+        // parked, not cancelled. It shows on the pane's row and can still be
+        // finished by id, without touching the current task or its badge.
+        let first = eng.begin_task(&w, "first");
+        let second = eng.begin_task(&w, "second");
+        assert_eq!(eng.tasks[&first].status, "parked");
+        assert!(eng.tasks[&first].finished_ms.is_some());
+        let row =
+            |eng: &Engine| eng.pane_summary_json(eng.panes.iter().find(|p| p.slug == w).unwrap());
+        assert_eq!(
+            row(&eng)["parked_tasks"],
+            serde_json::json!([first.clone()])
+        );
+        eng.statuses.insert(w.clone(), ("working".into(), None));
+        let r = eng.handle_control(ControlRequest::Finish {
+            pane: Some(w.clone()),
+            body: Some("late answer".into()),
+            append: true,
+            status: "done".into(),
+            status_note: None,
+            empty_ok: false,
+            task: Some(first.clone()),
+            scope: None,
+            from: None,
+        });
+        assert!(r.ok, "{:?}", r.error);
+        assert_eq!(eng.tasks[&first].status, "done");
+        assert_eq!(eng.open_task(&w).as_deref(), Some(second.as_str()));
+        assert_eq!(eng.statuses[&w].0, "working");
+
+        // Busy (here --queue, the same path): queued behind the running task,
+        // oldest first; a plain send behind a waiting queue joins it.
+        let d = send(&mut eng, &w, "third", true, false).data.unwrap();
+        let third = d["task_id"].as_str().unwrap().to_string();
+        assert_eq!(
+            (
+                d["status"].as_str(),
+                d["behind"].as_str(),
+                d["ahead"].as_u64()
+            ),
+            (Some("queued"), Some(second.as_str()), Some(1))
+        );
+        let d = send(&mut eng, &w, "fourth", false, false).data.unwrap();
+        let fourth = d["task_id"].as_str().unwrap().to_string();
+        assert_eq!(
+            (d["behind"].as_str(), d["ahead"].as_u64()),
+            (Some(third.as_str()), Some(2))
+        );
+        assert_eq!(eng.queued_for(&w), vec![third.clone(), fourth.clone()]);
+        assert_eq!(eng.tasks[&second].status, "open");
+
+        // `--now` cancels the open task outright, --queue included, so
+        // delivery parks nothing.
+        let d = send(&mut eng, &w, "urgent", true, true).data.unwrap();
+        let urgent = d["task_id"].as_str().unwrap().to_string();
+        assert_eq!(eng.tasks[&second].status, "cancelled");
+        assert_eq!(
+            eng.tasks[&urgent].supersedes.as_deref(),
+            Some(second.as_str())
+        );
+        eng.activate_queued(&w, &third);
+        assert_eq!(eng.tasks[&third].supersedes, None);
+
+        // Handoff: the successor takes the queue; a plain kill cancels it and
+        // orphans the open task, so a reused slug starts clean.
+        let r = eng.handle_control(ControlRequest::Kill {
+            pane: w.clone(),
+            queue_to: Some(other.clone()),
+            scope: None,
+            from: None,
+        });
+        assert!(r.ok, "{:?}", r.error);
+        assert_eq!(eng.queued_for(&other), vec![fourth.clone(), urgent.clone()]);
+        assert_eq!(eng.tasks[&third].status, "orphaned");
+        let parked = eng.begin_task(&other, "a");
+        eng.begin_task(&other, "b");
+        eng.kill_pane(&other);
+        assert_eq!(eng.tasks[&fourth].status, "cancelled");
+        assert_eq!(eng.tasks[&parked].status, "orphaned");
+
+        // Parked tasks prune like finished ones.
+        let mut old = eng.tasks[&first].clone();
+        old.status = "parked".into();
+        old.finished_ms = Some(1);
+        assert!(!super::keep_task(&old, now_ms()));
         let _ = std::fs::remove_dir_all(&scratch);
     });
 }

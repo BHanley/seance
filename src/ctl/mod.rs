@@ -83,7 +83,8 @@ seance ctl roster                              # slug, activity, status, task, p
 seance ctl new --name w --cwd "$PWD" --agent claude --task-file /tmp/task.md --json
 # (name taken → slug is w-2; always use the returned slug)
 # untrusted cwd → ready fails naming the trust dialog; add --trust to accept it
-seance ctl send w-2 --file /tmp/next.md        # new task; refuses a BUSY pane (exit 4)
+seance ctl send w-2 --file /tmp/next.md        # new task; busy pane: queued, delivered when idle
+seance ctl send w-2 --file /tmp/next.md --now  # cancel the open task and replace it
 seance ctl send w-2 --file /tmp/next.md --queue  # busy? queued; daemon delivers when idle
 seance ctl note-agent w-2 "also cover X"       # into the CURRENT task: no new task, no cancel
 seance ctl wait w-2 --task task-N --artifact /abs/result.md --either --fresh \
@@ -103,18 +104,22 @@ progressively written file matches, e.g. its closing ```json block.
   wants an answer) · `limited` (hit a usage wall → `handoff`) · `exited` ·
   `unknown` (shells). `quota` shows what the TUI prints (Claude statusline
   `5h/7d used %`, Codex `weekly % left`).
-- `send` looks first: a **busy** pane is refused (exit **4**, nothing sent, no
-  task opened, running task untouched). `--queue` instead opens the task as
-  `queued`; the daemon delivers it once the pane reads idle and confirms it.
-  An idle pane: paste, confirm it landed (busy / echoed / Enter re-pressed),
-  re-paste once (`--retry N`), else exit **3** and the task is rolled back to
-  `failed` (the task it cancelled is reopened). Refuses to paste into a modal.
+- `send` looks first: a **busy** pane (or any `--queue` send) gets the task
+  opened as `queued`, running task untouched; the daemon delivers it once the
+  pane reads idle and confirms it. An idle pane: paste, confirm it landed
+  (busy / echoed / Enter re-pressed), re-paste once (`--retry N`), else exit
+  **3** and the task is rolled back to `failed` (the task it parked or
+  cancelled is reopened). Refuses to paste into a modal.
 - `note-agent` into a busy Claude may be **queued** behind the running turn
   (`delivery.via = "queued"`, status `queued_input: true`): the agent reads it
   when the turn yields. `--interrupt` delivers it now by interrupting the turn,
   which cancels the running tool call; the agent then answers and stops.
-- Each `send` cancels the pane's previous open task, even if the worker is still
-  running it. Mid-task notes go through `note-agent`, never a second `send`.
+- A `send` never cancels the pane's task. Busy: queued behind its turn
+  (`queued behind task-N (K ahead)`), delivered when idle, oldest first.
+  Idle with an open task: the new one goes in and the old one is `parked`
+  (`parked=` in `list`); finish it later with `finish --task ID`. Only
+  `send --now` cancels the open task. Mid-task notes go through
+  `note-agent`, never a second `send`.
 - `wait --status done` requires **pad growth since inject** (not badge-only).
   `--cat` / `--harvest` prints each pad body after success.
 - Panes you spawn from inside a pane record you as `parent`;
@@ -129,12 +134,12 @@ progressively written file matches, e.g. its closing ```json block.
 unknown) · `activity_evidence` (the deciding screen line) · `quota`
 ({account, five_hour_used_pct, seven_day_used_pct, five_hour_left_pct,
 weekly_left_pct}, only what the TUI shows) · `context_left_pct` · `queued_input`
-(text waiting behind a running turn) · `queued_tasks` (ids from `send --queue`,
+(text waiting behind a running turn) · `queued_tasks` (ids waiting their turn,
 oldest first) · `task_id` / `task_status` (current, else latest task) ·
 `status` / `status_note` (badge) · `owner` / `drive_mode` / `human_idle` ·
 `scratchpad` / `scratchpad_bytes` / `pad_rev` / `inject_pad_rev` /
-`inject_pad_bytes` · `open_asks` · `title` · `tiled`. Task statuses: queued ·
-open · done · cancelled · failed. `task --id T --json` adds `supersedes`,
+`inject_pad_bytes` · `open_asks` · `title` · `tiled` · `parked_tasks`. Task
+statuses: queued · open · parked · done · cancelled · failed. `task --id T --json` adds `supersedes`,
 `delivery`, `note`.
 
 ### Talking to another circle (another session)
@@ -156,7 +161,7 @@ seance ctl messages     # your recent traffic; also `lead CIRCLE`, `contacts`
 
 - A question reaches you as `📨 seance m-42 — question from …`. **Answer with
   `seance ctl reply m-42`**: it routes back by id. Never hand-address a reply
-  and never `send` one (that opens a task in the asker's pane and cancels theirs).
+  and never `send` one (that opens a task in the asker's pane).
 - Addresses: label, slug or `@name` = a circle (goes to its lead); `pane:slug`
   = one pane. A bare name that is both a pane and another circle is refused;
   say which. An old label still works after a rename, with a warning.
@@ -1239,6 +1244,7 @@ mod tests {
             submit: true,
             force: false,
             queue: false,
+            now: false,
             scope: None,
             from: None,
         };

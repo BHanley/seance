@@ -84,6 +84,10 @@ pub enum ControlRequest {
         /// deliver it when the pane is next idle (`send --queue`).
         #[serde(default)]
         queue: bool,
+        /// Replace the pane's open task now instead of queueing behind it
+        /// (`send --now`; tasks are otherwise FIFO).
+        #[serde(default)]
+        now: bool,
         #[serde(default)]
         scope: Option<String>,
         #[serde(default)]
@@ -224,6 +228,9 @@ pub enum ControlRequest {
     Kill {
         #[serde(alias = "session")]
         pane: String,
+        /// Hand the pane's queued tasks to this pane first (`ctl handoff`).
+        #[serde(default)]
+        queue_to: Option<String>,
         #[serde(default)]
         scope: Option<String>,
         #[serde(default)]
@@ -1042,6 +1049,7 @@ mod tests {
             submit: true,
             force: false,
             queue: false,
+            now: false,
             scope: Some("lab".into()),
             from: Some("orch".into()),
         };

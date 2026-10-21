@@ -1002,6 +1002,9 @@ fn auto_sleep_takes_idle_restorable_panes() {
         let skip = vec!["l6-leveling".to_string()];
 
         let idle_ms = 6 * 60 * 60 * 1000;
+        // An open task or a waiting send doesn't keep an idle pane awake.
+        eng.begin_task(&idle, "never finished");
+        eng.queue_task(&idle, "next", "cli");
         assert_eq!(
             eng.auto_sleep_candidates(idle_ms, now, &skip),
             vec![idle.clone()]

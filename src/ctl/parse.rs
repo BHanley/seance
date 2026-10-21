@@ -193,6 +193,7 @@ pub(crate) fn with_identity(
             submit,
             force,
             queue,
+            now,
             ..
         } => Send {
             pane,
@@ -200,6 +201,7 @@ pub(crate) fn with_identity(
             submit,
             force,
             queue,
+            now,
             scope,
             from,
         },
@@ -268,7 +270,12 @@ pub(crate) fn with_identity(
             from,
         },
         Status { pane, .. } => Status { pane, scope, from },
-        Kill { pane, .. } => Kill { pane, scope, from },
+        Kill { pane, queue_to, .. } => Kill {
+            pane,
+            queue_to,
+            scope,
+            from,
+        },
         Select { pane, .. } => Select { pane, scope, from },
         Scratchpad { pane, .. } => Scratchpad { pane, scope, from },
         Propose {
@@ -499,13 +506,14 @@ pub(crate) fn parse_new(args: Vec<String>) -> Result<ControlRequest, String> {
     })
 }
 
-/// `send SESSION TEXT... [--no-submit]`
+/// `send SESSION TEXT... [--no-submit] [--now]`
 ///
 /// The pane is the first positional; everything else that isn't a flag is
 /// joined with spaces into the text (so you don't have to quote the prompt).
 pub(crate) fn parse_send(args: Vec<String>) -> Result<ControlRequest, String> {
     let mut submit = true;
     let mut force = false;
+    let mut now = false;
     let mut file: Option<String> = None;
     let mut stdin = false;
     let mut positionals: Vec<String> = Vec::new();
@@ -515,12 +523,14 @@ pub(crate) fn parse_send(args: Vec<String>) -> Result<ControlRequest, String> {
             "--no-submit" => submit = false,
             "--submit" => submit = true,
             "--force" => force = true,
+            "--now" => now = true,
             "--file" => file = Some(it.next().ok_or("send: --file needs PATH")?),
             "--stdin" => stdin = true,
             "--help" | "-h" => {
                 return Err(
                     "__help__\nsend PANE TEXT... | send PANE --file PATH | send PANE --stdin\n  \
                      --no-submit  --force\n  \
+                     --now  cancel the pane's open task (else it is parked)\n  \
                      IMPORTANT: shell expands $VARS in TEXT — use --file for verbatim payloads"
                         .into(),
                 );
@@ -555,6 +565,7 @@ pub(crate) fn parse_send(args: Vec<String>) -> Result<ControlRequest, String> {
         submit,
         force,
         queue: false,
+        now,
         scope: None,
         from: None,
     })
@@ -782,6 +793,7 @@ pub(crate) fn parse_kill(args: Vec<String>) -> Result<ControlRequest, String> {
     let pane = single_positional(args, "kill")?;
     Ok(ControlRequest::Kill {
         pane,
+        queue_to: None,
         scope: None,
         from: None,
     })
