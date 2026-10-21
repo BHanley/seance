@@ -275,6 +275,15 @@ pub struct SeanceApp {
     /// Claude panes that finished while the human wasn't looking at them:
     /// a ✓ on their sidebar row until the pane is next focused.
     done_unseen: std::collections::HashSet<String>,
+    /// When each crew pane last finished out of sight, for the lead's card.
+    /// Drawn only while the pane is in `done_unseen`, so opening it clears
+    /// the line.
+    crew_done: std::collections::HashMap<String, std::time::Instant>,
+    /// Each pane's pending busy-to-idle edge and whether it's loud: only
+    /// that edge's timer may mark it done, not one left over from earlier in
+    /// the same turn. A blip that replaces a loud edge stays loud.
+    /// Loud is the long segment's length, for the banner.
+    idle_edge: std::collections::HashMap<String, (std::time::Instant, Option<u64>)>,
     /// The pane on show at the last render, so opening a pane marked unread
     /// (a change to it, not sitting on it) is what clears the mark.
     later_last: Option<String>,
@@ -517,6 +526,8 @@ impl SeanceApp {
             busy_panes: std::collections::HashSet::new(),
             busy_since: std::collections::HashMap::new(),
             done_unseen: std::collections::HashSet::new(),
+            crew_done: std::collections::HashMap::new(),
+            idle_edge: std::collections::HashMap::new(),
             later_last: None,
             workspace_was_working: std::collections::HashSet::new(),
             workspace_names: std::collections::HashMap::new(),
@@ -1101,9 +1112,9 @@ impl SeanceApp {
                 cx.notify();
             }
             GuiEvent::PaneBusy { pane, busy } => {
-                // A Claude that worked a while and stopped: "done" banner,
-                // for every Claude pane on either machine (no hook needed).
-                // Short blips (between tool calls) don't count.
+                // A Claude that stopped: ✓ done, and the "done" banner when
+                // it worked a while, for every Claude pane on either machine
+                // (no hook needed).
                 if busy {
                     self.busy_since
                         .insert(pane.clone(), std::time::Instant::now());
@@ -1112,33 +1123,51 @@ impl SeanceApp {
                     // Busy only ever comes from an agent's spinner title, so
                     // no command check: most panes start Claude from a shell
                     // (`bash -l`), and those never got a banner or a ✓.
-                    if took >= 5 {
-                        // Decide a moment later: sleeping a pane also clears
-                        // busy (its `asleep` lands with the next State), and a
-                        // spinner that comes straight back wasn't done.
-                        let pane = pane.clone();
-                        cx.spawn(async move |this, cx| {
-                            cx.background_executor()
-                                .timer(Duration::from_millis(1500))
-                                .await;
-                            let Some(this) = this.upgrade() else { return };
-                            this.update(cx, |app: &mut SeanceApp, cx| {
-                                let idle = !app.busy_panes.contains(&pane)
-                                    && app.panes.iter().any(|p| p.slug == pane && !p.asleep);
-                                if idle {
-                                    app.mark_done_unseen(&pane);
-                                    cx.notify();
-                                    let body = if took >= 60 {
-                                        format!("finished after {}m {}s", took / 60, took % 60)
-                                    } else {
-                                        format!("finished after {took}s")
-                                    };
-                                    app.on_pane_alert(&pane, "done", "", &body, 0, None);
-                                }
-                            });
-                        })
-                        .detach();
-                    }
+                    // Every finished turn gets its ✓ (a 4s reply is still
+                    // output to read); only 5s+ ones banner and ding.
+                    let pending = self.idle_edge.get(&pane).and_then(|(_, l)| *l);
+                    let loud = (took >= 5).then_some(took).or(pending);
+                    // Decide a moment later: sleeping a pane also clears
+                    // busy (its `asleep` lands with the next State), and a
+                    // spinner that comes straight back wasn't done. Short
+                    // turns wait longer, past a pause between tool calls.
+                    let settle = if loud.is_some() { 1500 } else { 4000 };
+                    let edge = std::time::Instant::now();
+                    self.idle_edge.insert(pane.clone(), (edge, loud));
+                    let pane = pane.clone();
+                    cx.spawn(async move |this, cx| {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(settle))
+                            .await;
+                        let Some(this) = this.upgrade() else { return };
+                        this.update(cx, |app: &mut SeanceApp, cx| {
+                            if app.idle_edge.get(&pane).map(|(e, _)| *e) != Some(edge) {
+                                return;
+                            }
+                            if !app.panes.iter().any(|p| p.slug == pane && !p.asleep) {
+                                app.idle_edge.remove(&pane);
+                                return;
+                            }
+                            // Busy again: leave the edge, so the next one
+                            // inherits a loud one.
+                            if app.busy_since.contains_key(&pane) || app.busy_panes.contains(&pane)
+                            {
+                                return;
+                            }
+                            app.idle_edge.remove(&pane);
+                            app.mark_done_unseen(&pane, loud.is_some());
+                            cx.notify();
+                            if let Some(took) = loud {
+                                let body = if took >= 60 {
+                                    format!("finished after {}m {}s", took / 60, took % 60)
+                                } else {
+                                    format!("finished after {took}s")
+                                };
+                                app.on_pane_alert(&pane, "done", "", &body, 0, None);
+                            }
+                        });
+                    })
+                    .detach();
                 }
                 let changed = if busy {
                     self.busy_panes.insert(pane)
@@ -1161,6 +1190,8 @@ impl SeanceApp {
                 self.busy_panes.remove(&slug);
                 self.busy_since.remove(&slug);
                 self.done_unseen.remove(&slug);
+                self.crew_done.remove(&slug);
+                self.idle_edge.remove(&slug);
                 if self.subs_pref.later.remove(&slug) {
                     self.save_arrangement_local();
                 }

@@ -317,7 +317,12 @@ impl SeanceApp {
     /// A done chip's body: open its peek card, or close it when it's the
     /// one open. The pad is read once here, not kept on the cache's poll.
     fn toggle_peek(&mut self, ws: &str, slug: &str, cx: &mut Context<Self>) {
-        if self.stage.peek.as_ref().is_some_and(|p| p.circle == ws) {
+        if self
+            .stage
+            .peek
+            .as_ref()
+            .is_some_and(|p| p.circle == ws && p.pane == slug)
+        {
             self.stage.peek = None;
             cx.notify();
             return;
@@ -592,8 +597,39 @@ impl SeanceApp {
 
     /// Circles with a finished pane you haven't seen (their sticky unread
     /// is done), as chips after the waiting ones. Viewing the circle clears
-    /// its unread, and with it the chip.
+    /// its unread, and with it the chip. The circle you're on gets a chip
+    /// per finished pane instead, until you open that pane.
     fn stage_done(&self) -> Vec<Waiting> {
+        let mut out = self.stage_done_elsewhere();
+        let Some(here) = self.selected_workspace.as_deref() else {
+            return out;
+        };
+        out.extend(
+            self.panes
+                .iter()
+                .filter(|p| p.workspace == here && self.finished_unseen(&p.slug))
+                .map(|p| Waiting {
+                    circle: p.workspace.clone(),
+                    pane: Some(p.slug.clone()),
+                    what: p.name.clone(),
+                    ask: None,
+                    done: true,
+                    later: false,
+                }),
+        );
+        out
+    }
+
+    /// Finished out of sight and not back at work or asking since.
+    fn finished_unseen(&self, slug: &str) -> bool {
+        self.done_unseen.contains(slug)
+            && !matches!(
+                self.pane_attention(slug),
+                Some(WorkspaceAttention::Working | WorkspaceAttention::NeedsHuman)
+            )
+    }
+
+    fn stage_done_elsewhere(&self) -> Vec<Waiting> {
         // The circle you're on: paths that select without select_workspace
         // can leave its unread behind.
         let selected = self.selected_workspace.as_deref();
@@ -701,7 +737,7 @@ impl SeanceApp {
         let peeked = self.stage.peek.as_ref().and_then(|p| {
             chips
                 .iter()
-                .find(|w| w.done && w.circle == p.circle)
+                .find(|w| w.done && w.circle == p.circle && w.pane.as_deref() == Some(&p.pane))
                 .map(|w| w.pane.clone())
         });
         let peek = match peeked {
@@ -1217,9 +1253,14 @@ impl SeanceApp {
         } else {
             WorkspaceAttention::Later.color()
         };
-        let peek = self.stage.peek.as_ref().map(|p| p.circle.as_str());
+        let peek = self
+            .stage
+            .peek
+            .as_ref()
+            .map(|p| (p.circle.as_str(), p.pane.as_str()));
         let chips = waiting.into_iter().enumerate().map(|(i, w)| {
-            let peeking = w.done && peek == Some(w.circle.as_str());
+            let peeking =
+                w.done && peek == Some((w.circle.as_str(), w.pane.as_deref().unwrap_or("")));
             let circle_label = if w.circle.is_empty() {
                 String::new()
             } else {
@@ -1377,6 +1418,7 @@ impl SeanceApp {
                 .child(if read { "no finish note" } else { "reading…" }),
         };
         let seen_ws = ws.clone();
+        let seen_pane = peek.pane.clone();
         let mut buttons = div().flex().gap(px(6.)).justify_end();
         if let Some(slug) = open {
             let ws = ws.clone();
@@ -1393,6 +1435,7 @@ impl SeanceApp {
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.stage.peek = None;
                     this.workspace_unread.remove(&seen_ws);
+                    this.done_unseen.remove(&seen_pane);
                     cx.notify();
                 })),
         );
@@ -1573,6 +1616,69 @@ impl SeanceApp {
             );
         }
 
+        // Crew that finished out of sight: one line on the lead's card,
+        // the newest, until you open that pane.
+        let crew_line = is_lead
+            .then(|| {
+                let mut done: Vec<(&Pane, Instant)> = self
+                    .panes
+                    .iter()
+                    .filter(|c| c.workspace == ws && c.slug != pane.slug)
+                    .filter(|c| self.finished_unseen(&c.slug))
+                    .filter_map(|c| Some((c, *self.crew_done.get(&c.slug)?)))
+                    .collect();
+                done.sort_by_key(|(_, at)| std::cmp::Reverse(*at));
+                let more = done.len().saturating_sub(1);
+                done.first().map(|(c, at)| (*c, *at, more))
+            })
+            .flatten()
+            .map(|(crew, at, more)| {
+                let p = &crew.slug;
+                let said = self
+                    .statuses
+                    .get(p)
+                    .and_then(|s| s.note.as_deref())
+                    .and_then(|n| n.strip_prefix("turn ended: "))
+                    .map(|n| format!(" · {n}"))
+                    .unwrap_or_default();
+                let ago = rel_label(at.elapsed().as_millis() as u64);
+                let when = if ago == "now" {
+                    ago
+                } else {
+                    format!("{ago} ago")
+                };
+                let tail = if more > 0 {
+                    format!("  (+{more} more)")
+                } else {
+                    String::new()
+                };
+                let slug = p.clone();
+                div()
+                    .id("stage-crew-done")
+                    .flex()
+                    .gap_1()
+                    .min_w_0()
+                    .text_xs()
+                    .cursor_pointer()
+                    .tooltip(tip("open it"))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.set_active(&slug, window, cx);
+                    }))
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_color(SeancePalette::success())
+                            .child("✓ Crew"),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(SeancePalette::text_dim())
+                            .child(format!("{} finished {when}{said}{tail}", crew.name)),
+                    )
+            });
+
         let row2 = line.map(|l| {
             let field = |key: &'static str, value: Option<String>, accent: bool| {
                 value.map(|v| {
@@ -1664,7 +1770,8 @@ impl SeanceApp {
                     .border_b_1()
                     .border_color(SeancePalette::border())
                     .child(row1)
-                    .children(row2),
+                    .children(row2)
+                    .children(crew_line),
             )
             .child(body)
             .into_any_element()

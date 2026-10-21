@@ -93,7 +93,8 @@ impl SeanceApp {
     /// A Claude pane finished out of sight: ✓ on its row, and the circle's
     /// "done" mark when the human is in another circle (so the alert says
     /// where to look, not just that something happened).
-    pub(super) fn mark_done_unseen(&mut self, pane: &str) {
+    /// `loud`: a turn long enough for the lead's ding.
+    pub(super) fn mark_done_unseen(&mut self, pane: &str, loud: bool) {
         let watching = self.window_active && self.active_slug.as_deref() == Some(pane);
         if watching {
             return;
@@ -108,10 +109,17 @@ impl SeanceApp {
             return;
         };
         // Only a circle's lead dings (its crew finishing is the lead's
-        // business), and on every finish, like the done banner: one still
-        // unseen from before doesn't make the next one silent.
+        // business), and on every finish of 5s or more, like the done
+        // banner: one still unseen from before doesn't make the next one
+        // silent.
         if self.stage.leads.get(&ws).map(String::as_str) == Some(pane) {
-            desktop_notify::done_sound();
+            if loud {
+                desktop_notify::done_sound();
+            }
+        } else {
+            // Crew: the lead's card says so, without a word to the lead.
+            self.crew_done
+                .insert(pane.to_string(), std::time::Instant::now());
         }
         if self.selected_workspace.as_deref() == Some(ws.as_str()) {
             return;
