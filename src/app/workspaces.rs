@@ -990,7 +990,13 @@ impl SeanceApp {
         self.reorder_pane(slug, &ws, before.as_deref(), cx);
     }
 
-    pub(super) fn create_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// A new circle in the space on show, its name open for typing. Returns
+    /// its slug.
+    pub(super) fn create_workspace(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> String {
         let existing = self.known_workspace_names();
         let mut n = existing.len() + 1;
         let name = loop {
@@ -1017,6 +1023,7 @@ impl SeanceApp {
         // restore_keyboard_focus parks on the app root so ctrl+shift+n works
         // without an intervening click.
         self.start_rename(RenameTarget::Workspace(name.clone()), &name, window, cx);
+        name
     }
 
     pub(super) fn select_workspace(

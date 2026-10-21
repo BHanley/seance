@@ -62,6 +62,9 @@ pub(super) struct StageState {
     pub(super) pills_open: bool,
     /// This frame's height of that row, so the jump palette drops below it.
     pub(super) pills_row_h: f32,
+    /// The circle "+ circle" just made, while its name is being typed:
+    /// Enter opens its first pane.
+    pub(super) new_circle: Option<String>,
     /// (circle, its newest lead log entry).
     lead_log: Option<(String, Option<LeadLine>)>,
     lead_log_asked: Option<(String, Instant)>,
@@ -830,8 +833,10 @@ impl SeanceApp {
         // The mark sits on the space row above when that row shows.
         let tabs = self.space_tabs_shown();
         let mark_w = if tabs { 0. } else { 84. + 14. };
-        // Strip padding, the mark, the toggle, the jump box and the gaps.
-        let avail = width - 28. - mark_w - switch_w - jump_w - 14. * 2.;
+        let add_w = 76.;
+        // Strip padding, the mark, the toggle, the jump box, "+ circle" and
+        // the gaps.
+        let avail = width - 28. - mark_w - switch_w - jump_w - 14. * 2. - add_w - 6.;
         let labels: Vec<String> = circles.iter().map(|c| self.workspace_label(c)).collect();
         let widths: Vec<f32> = labels.iter().map(|l| pill_width(l)).collect();
         let sel_idx = selected
@@ -941,6 +946,29 @@ impl SeanceApp {
                     format!("+{} more", hidden.len())
                 })
         });
+        let add = div()
+            .id("stage-add-circle")
+            .flex_none()
+            .w(px(add_w))
+            .flex()
+            .justify_center()
+            .py(px(5.))
+            .rounded_full()
+            .border_1()
+            .border_dashed()
+            .border_color(SeancePalette::border())
+            .text_xs()
+            .text_color(SeancePalette::text_faint())
+            .cursor_pointer()
+            .hover(|s| s.text_color(SeancePalette::text()))
+            .tooltip(tip("new circle in this space"))
+            .on_click(cx.listener(|this, _, window, cx| {
+                // New circles land in the rail's space; make that this one.
+                this.rail_space = Some(this.shown_space());
+                let name = this.create_workspace(window, cx);
+                this.stage.new_circle = Some(name);
+            }))
+            .child("+ circle");
         // Over the top of what's below, so the lead terminal keeps its size
         // (a resize would reflow the PTY on every click).
         let row = open.then(|| {
@@ -983,7 +1011,7 @@ impl SeanceApp {
                     .items_center()
                     .gap(px(6.))
                     .children(rename)
-                    .when(!renaming, |d| d.children(pills).children(more)),
+                    .when(!renaming, |d| d.children(pills).children(more).child(add)),
             )
             .child(
                 div()

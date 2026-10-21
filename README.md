@@ -228,7 +228,10 @@ in the middle of the window, live and typeable. From top to bottom:
   current space as pills, in rail order, each with its state: ✓ done,
   ◐ working, a violet dot when it needs you, ✕ exited, a faint dot when idle.
   Click one to switch. Pills that don't fit fold into "+N more", which opens
-  the jump palette. Then the layout toggle and a jump box (ctrl+shift+j, the
+  the jump palette. **+ circle** after them makes a new circle in this
+  space and opens its name; Enter names it and opens its first pane (a
+  shell, or `seance-new-circle-command`), Esc leaves it empty. Then the
+  layout toggle and a jump box (ctrl+shift+j, the
   same jump palette).
 - **Needs you.** Only when something waits: one chip per pane, in every
   circle, that is needs-human, blocked or risky or has asked a question.
@@ -280,6 +283,14 @@ lead log's newest `## ` entry supplies the line, from bullets such as
 file is re-read every minute; its first line is
 `# Seance health <date> <time>: <status>`. Leave a key out and its part of
 Stage stays hidden.
+
+`seance-new-circle-command` is what the first pane of a circle made with
+**+ circle** runs, on the daemon's machine like any pane (unset: a plain
+shell):
+
+```
+seance-new-circle-command = claude-mac
+```
 
 ### Wall
 
@@ -349,7 +360,8 @@ see above), `theme`, `palette`, `background`, `foreground`, `cursor-color`,
 `seance-done-sound` and `seance-done-sound-volume` (played when a pane
 finishes while you're looking elsewhere; leads only),
 `seance-auto-sleep-idle` and `seance-auto-sleep-skip` (see below),
-`seance-hud` (see below). A pane's BEL plays the bell sound; OSC 9 /
+`seance-hud` (see below), `seance-new-circle-command` (Stage, see above).
+A pane's BEL plays the bell sound; OSC 9 /
 OSC 777 and long shell commands post a desktop notification when you
 aren't looking at that pane (a command-finish notification also plays the bell sound); OSC 52
 copies reach the clipboard. Restart the daemon (`seance upgrade`) and GUI

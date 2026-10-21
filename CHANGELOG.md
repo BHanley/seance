@@ -155,6 +155,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   upgrade bundles gain IDs and save them immediately. Processes retained
   by a live upgrade receive the env vars on their next wake/restore.
 
+- **+ circle on Stage.** The strip ends with a "+ circle" chip that makes a
+  circle in the space on show and opens its name. Enter names it and opens
+  its first pane: a plain shell, or what the new `terminal.conf` key
+  `seance-new-circle-command` names. Esc leaves the circle empty.
+
 ### Fixed
 
 - A pane that slept and woke quickly could be closed by the old session's

@@ -2137,6 +2137,8 @@ impl SeanceApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Only the rename "+ circle" opens (set after this) spawns a pane.
+        self.stage.new_circle = None;
         let input = cx.new(|cx| InputState::new(window, cx).default_value(current.to_string()));
         cx.subscribe_in(
             &input,
@@ -2226,6 +2228,24 @@ impl SeanceApp {
         let Some((target, _)) = self.renaming.take() else {
             return true;
         };
+        // Stage's "+ circle", named: its first pane.
+        let new_circle = self.stage.new_circle.take();
+        if let RenameTarget::Workspace(slug) = &target {
+            if new_circle.as_ref() == Some(slug) {
+                let n = self.session_counter + 1;
+                let command = crate::term_config::get().seance_new_circle_command.clone();
+                self.spawn_internal(
+                    SpawnRequest {
+                        name: format!("term-{n}"),
+                        cwd: None,
+                        command,
+                        workspace: Some(slug.clone()),
+                        file: None,
+                    },
+                    cx,
+                );
+            }
+        }
         if new_name.is_empty() {
             cx.notify();
             return true;

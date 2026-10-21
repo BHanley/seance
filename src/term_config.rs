@@ -26,6 +26,7 @@
 //! | `seance-done-sound`, `seance-done-sound-volume` | sound when a circle lead finishes out of sight |
 //! | `seance-hud` (`ink`/`pips`/`off`) | the Mac's floating progress HUD at launch (GUI) |
 //! | `seance-lead-sprite.<circle-slug>` | a seed that swaps that circle's lead creature (GUI) |
+//! | `seance-new-circle-command` | the first pane of a circle made with Stage's "+ circle" (GUI; runs on the daemon's machine) |
 //!
 //! The two Stage paths are read through the daemon's fs bridge, so they name
 //! files on the daemon's machine and a leading `~` is the daemon's home.
@@ -100,6 +101,9 @@ pub struct TermConfig {
     /// `seance-hud`: which progress HUD the GUI opens with (`ink`, `pips`,
     /// `off`). Read by `app::hud`; None is off.
     pub seance_hud: Option<String>,
+    /// `seance-new-circle-command`: what the first pane of a circle made with
+    /// Stage's "+ circle" runs. None is a plain shell.
+    pub seance_new_circle_command: Option<String>,
     /// `seance-lead-sprite.<circle-slug> = SEED`: re-seeds that circle's creature.
     pub lead_sprites: std::collections::HashMap<String, String>,
 }
@@ -127,6 +131,7 @@ impl Default for TermConfig {
             seance_auto_sleep_idle_ms: None,
             seance_auto_sleep_skip: Vec::new(),
             seance_hud: None,
+            seance_new_circle_command: None,
             lead_sprites: Default::default(),
         }
     }
@@ -268,6 +273,7 @@ fn apply(cfg: &mut TermConfig, key: &str, value: &str) {
         "seance-health-file" => cfg.seance_health_file = non_empty(value),
         "seance-needs-sound" => cfg.seance_needs_sound = non_empty(value),
         "seance-hud" => cfg.seance_hud = non_empty(value),
+        "seance-new-circle-command" => cfg.seance_new_circle_command = non_empty(value),
         "seance-done-sound" => cfg.seance_done_sound = non_empty(value).map(PathBuf::from),
         // `off` (or 0) turns auto-sleep off.
         "seance-auto-sleep-idle" => {
@@ -447,6 +453,21 @@ mod tests {
             Some("frog")
         );
         assert_eq!(cfg.lead_sprites.len(), 1);
+    }
+
+    #[test]
+    fn reads_new_circle_command() {
+        let dir = test_dir("newcircle");
+        let p = write(
+            &dir,
+            "terminal.conf",
+            "seance-new-circle-command = claude-mac\n",
+        );
+        assert_eq!(
+            load(&p).seance_new_circle_command.as_deref(),
+            Some("claude-mac")
+        );
+        assert_eq!(TermConfig::default().seance_new_circle_command, None);
     }
 
     #[test]
