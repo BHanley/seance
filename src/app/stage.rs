@@ -23,10 +23,10 @@ use crate::theme::SeancePalette;
 
 use super::actions::{ActDeleteSpace, ActRenameSpace, ActSpaceDefault};
 use super::stage_parse::{
-    circle_folder, crew_order, done_chips, ellipsize, filed_label, fit_pills, is_bare_shell,
-    jump_ring, last_output_lines, latest_finish, latest_finish_at, lead_log_path, next_waiting,
-    pane_host, parse_health, parse_lead_log, pill_width, reply_repeats, CrewBand, Health,
-    HealthLevel, LeadLine,
+    circle_folder, compacted_while_idle, crew_order, done_chips, ellipsize, filed_label, fit_pills,
+    is_bare_shell, jump_ring, last_output_lines, latest_finish, latest_finish_at, lead_log_path,
+    next_waiting, pane_host, parse_health, parse_lead_log, pill_width, reply_repeats, CrewBand,
+    Health, HealthLevel, LeadLine,
 };
 use super::util::{tip, tip_s, unread_menu};
 use super::views::ViewMode;
@@ -1470,6 +1470,7 @@ impl SeanceApp {
                     this.stage.peek = None;
                     this.workspace_unread.remove(&seen_ws);
                     this.done_unseen.remove(&seen_pane);
+                    crate::desktop_notify::clear_pane(&seen_pane);
                     cx.notify();
                 })),
         );
@@ -2192,6 +2193,14 @@ pub(super) fn read_lead_line(
 /// Terminals that can take the stage: not files, not popped out.
 pub(super) fn stageable(p: &Pane) -> bool {
     matches!(p.body, PaneBody::Remote { .. }) && p.popped.is_none()
+}
+
+/// The pane's newest output is Claude Code's idle-compaction note.
+pub(super) fn idle_compacted(snap: &GridSnapshot) -> bool {
+    compacted_while_idle(&last_output_lines(
+        &bottom_rows(snap, LAST_LINE_ROWS),
+        LAST_LINE_ROWS,
+    ))
 }
 
 /// The last `n` screen rows as text.

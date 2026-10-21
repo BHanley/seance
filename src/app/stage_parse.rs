@@ -542,6 +542,21 @@ pub(super) fn last_output_lines(rows: &[String], n: usize) -> Vec<String> {
     out
 }
 
+/// Claude Code's idle compaction ("Compacted while idle, before the prompt
+/// cache expired") wears the spinner title like a turn. True when that note
+/// is in the newest block of `lines` (from its last `⏺`/`●` reply or `>`/`❯`
+/// prompt down), so a real turn after it still counts.
+pub(super) fn compacted_while_idle(lines: &[String]) -> bool {
+    let start = lines
+        .iter()
+        .rposition(|l| l.trim_start().starts_with(['⏺', '●', '>', '❯']))
+        .unwrap_or(0);
+    lines[start..].iter().any(|l| {
+        l.trim_start_matches(['⏺', '●', ' '])
+            .starts_with("Compacted while idle")
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -946,6 +961,31 @@ a later note\n";
         assert_eq!(last_output_lines(&shell, 5).len(), 3);
         assert_eq!(last_output_line(&rows(&["", "   "])), None);
         assert_eq!(last_output_line(&[]), None);
+    }
+
+    #[test]
+    fn idle_compaction_is_not_a_turn() {
+        let compacted = rows(&[
+            "> ship it",
+            "⏺ Shipped.",
+            "⏺ Compacted while idle, before the prompt cache expired",
+            "  ⎿  Read src/app/mod.rs (120 lines)",
+        ]);
+        assert!(compacted_while_idle(&compacted));
+        let after = rows(&[
+            "⏺ Compacted while idle, before the prompt cache expired",
+            "> and the docs",
+            "⏺ Docs updated.",
+        ]);
+        assert!(!compacted_while_idle(&after));
+        assert!(!compacted_while_idle(&rows(&[
+            "⏺ Done.",
+            "✻ Cooked for 48s"
+        ])));
+        assert!(!compacted_while_idle(&[]));
+        // A reply that only mentions it is a turn.
+        let quoted = rows(&["⏺ Panes showing \"Compacted while idle\" no longer ding."]);
+        assert!(!compacted_while_idle(&quoted));
     }
 
     #[test]

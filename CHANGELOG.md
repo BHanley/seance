@@ -173,6 +173,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 - Repeated status-sets no longer write the event log, save state and
   broadcast when nothing changed, and finished tasks leave saved state a
   week after they finish.
+- Claude Code compacting an idle session (about 55 minutes after its last
+  turn) no longer counts as a finished turn: no ✓, done banner or ding.
+- macOS banners (with terminal-notifier) are one per pane: a pane's new
+  banner replaces its old one, and opening the pane, or Seen on its Stage
+  peek card, takes it out of Notification Center.
 
 ### Removed
 

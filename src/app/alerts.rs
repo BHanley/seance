@@ -3,6 +3,10 @@
 //! when you aren't looking at that pane. Sound and the command rule come from
 //! `~/.config/seance/terminal.conf` (see `term_config`).
 
+use std::time::Duration;
+
+use gpui::Context;
+
 use super::workspaces::WorkspaceAttention;
 use super::SeanceApp;
 use crate::desktop_notify;
@@ -71,10 +75,11 @@ impl SeanceApp {
         }
     }
 
-    /// Opening a pane marked unread reads it. Only a change of pane counts,
-    /// and only in the window you're using. The Wall only shows circles, so
-    /// moving across its tiles opens nothing; Stage or Classic count the pane
-    /// they show when you get there.
+    /// Opening a pane marked unread reads it, and takes its banner out of
+    /// Notification Center. Only a change of pane counts, and only in the
+    /// window you're using. The Wall only shows circles, so moving across
+    /// its tiles opens nothing; Stage or Classic count the pane they show
+    /// when you get there.
     pub(super) fn read_later(&mut self) {
         if self.view.mode == super::views::ViewMode::Wall || self.active_slug == self.later_last {
             return;
@@ -84,9 +89,74 @@ impl SeanceApp {
             return;
         }
         if let Some(slug) = self.active_slug.as_deref() {
+            desktop_notify::clear_pane(slug);
             if self.subs_pref.later.remove(slug) {
                 self.save_arrangement();
             }
+        }
+    }
+
+    /// A Claude pane went idle and stayed idle: its ✓, and the done banner
+    /// when `loud` (the turn's seconds). Not when it was Claude Code
+    /// compacting an idle session, which wears the spinner like a turn: the
+    /// screen says so. A circle that isn't streaming here has a stale
+    /// screen, so ask for a fresh one and look a moment later.
+    pub(super) fn pane_finished(&mut self, pane: &str, loud: Option<u64>, cx: &mut Context<Self>) {
+        let Some(ws) = self
+            .panes
+            .iter()
+            .find(|p| p.slug == pane)
+            .map(|p| &p.workspace)
+        else {
+            return;
+        };
+        let streamed = self.overview() || self.selected_workspace.as_ref() == Some(ws);
+        if streamed {
+            self.turn_done(pane, loud, cx);
+            return;
+        }
+        if self.screen_check.insert(pane.to_string(), loud).is_some() {
+            return;
+        }
+        let _ = self.client.refresh_grid(pane);
+        // Decided when the grid lands (`apply_grid_snap`); this is for one
+        // that never comes, on what the pane last showed here.
+        let pane = pane.to_string();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(5)).await;
+            let Some(this) = this.upgrade() else { return };
+            this.update(cx, |app: &mut SeanceApp, cx| {
+                if let Some(loud) = app.screen_check.remove(&pane) {
+                    app.turn_done(&pane, loud, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    pub(super) fn turn_done(&mut self, pane: &str, loud: Option<u64>, cx: &mut Context<Self>) {
+        // Closed or slept while its screen was on the way.
+        if !self.panes.iter().any(|p| p.slug == pane && !p.asleep) {
+            return;
+        }
+        let compacted = self
+            .panes
+            .iter()
+            .find(|p| p.slug == pane)
+            .and_then(|p| p.remote_terminal())
+            .is_some_and(|t| super::stage::idle_compacted(&t.read(cx).snapshot));
+        if compacted {
+            return;
+        }
+        self.mark_done_unseen(pane, loud.is_some());
+        cx.notify();
+        if let Some(took) = loud {
+            let body = if took >= 60 {
+                format!("finished after {}m {}s", took / 60, took % 60)
+            } else {
+                format!("finished after {took}s")
+            };
+            self.on_pane_alert(pane, "done", "", &body, 0, None);
         }
     }
 

@@ -109,22 +109,68 @@ fn post(last_ms: &AtomicU64, pane: Option<&str>, summary: &str, body: &str, soun
 }
 
 /// Apps opened from Finder don't get Homebrew on PATH, so check its
-/// prefixes first. False when terminal-notifier isn't installed.
+/// prefixes first.
+fn terminal_notifier() -> Option<std::path::PathBuf> {
+    ["/opt/homebrew/bin", "/usr/local/bin"]
+        .iter()
+        .map(|d| std::path::Path::new(d).join("terminal-notifier"))
+        .find(|p| p.exists())
+}
+
+/// Banner groups posted since launch and not yet removed.
+static POSTED: std::sync::Mutex<std::collections::BTreeSet<String>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+/// The human read `pane`: take its banner out of Notification Center.
+/// macOS with terminal-notifier only.
+pub fn clear_pane(pane: &str) {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let group = format!("seance-{pane}");
+    // Only groups with a banner up: this runs on every change of pane.
+    if !POSTED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&group)
+    {
+        return;
+    }
+    let Some(bin) = terminal_notifier() else {
+        return;
+    };
+    std::thread::spawn(move || {
+        let _ = Command::new(bin)
+            .args(["-remove", &group])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    });
+}
+
+/// False when terminal-notifier isn't installed.
 fn mac_terminal_notifier(
     pane: Option<&str>,
     summary: &str,
     body: &str,
     sound: Option<&str>,
 ) -> bool {
-    let Some(bin) = ["/opt/homebrew/bin", "/usr/local/bin"]
-        .iter()
-        .map(|d| std::path::Path::new(d).join("terminal-notifier"))
-        .find(|p| p.exists())
-    else {
+    let Some(bin) = terminal_notifier() else {
         return false;
     };
     let mut cmd = Command::new(bin);
     cmd.args(["-title", summary, "-message", body]);
+    // One banner per pane: a new one replaces the last, and reading the pane
+    // takes it away (`clear_pane`).
+    if let Some(pane) = pane {
+        let group = format!("seance-{pane}");
+        cmd.args(["-group", &group]);
+        POSTED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(group);
+    }
     if let Some(sound) = sound {
         cmd.args(["-sound", sound]);
     }

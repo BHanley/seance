@@ -286,6 +286,10 @@ pub struct SeanceApp {
     /// the same turn. A blip that replaces a loud edge stays loud.
     /// Loud is the long segment's length, for the banner.
     idle_edge: std::collections::HashMap<String, (std::time::Instant, Option<u64>)>,
+    /// Finished panes in circles not streaming here, and their loud, waiting
+    /// on the screen asked for to check it (`pane_finished`): their grid is
+    /// let through and decides.
+    screen_check: std::collections::HashMap<String, Option<u64>>,
     /// The pane on show at the last render, so opening a pane marked unread
     /// (a change to it, not sitting on it) is what clears the mark.
     later_last: Option<String>,
@@ -527,6 +531,7 @@ impl SeanceApp {
             done_unseen: std::collections::HashSet::new(),
             crew_done: std::collections::HashMap::new(),
             idle_edge: std::collections::HashMap::new(),
+            screen_check: std::collections::HashMap::new(),
             later_last: None,
             workspace_was_working: std::collections::HashSet::new(),
             workspace_names: std::collections::HashMap::new(),
@@ -1153,16 +1158,7 @@ impl SeanceApp {
                                 return;
                             }
                             app.idle_edge.remove(&pane);
-                            app.mark_done_unseen(&pane, loud.is_some());
-                            cx.notify();
-                            if let Some(took) = loud {
-                                let body = if took >= 60 {
-                                    format!("finished after {}m {}s", took / 60, took % 60)
-                                } else {
-                                    format!("finished after {took}s")
-                                };
-                                app.on_pane_alert(&pane, "done", "", &body, 0, None);
-                            }
+                            app.pane_finished(&pane, loud, cx);
                         });
                     })
                     .detach();
@@ -1466,7 +1462,8 @@ impl SeanceApp {
                 self.resize_settle.remove(&slug);
             }
         }
-        if content_changed {
+        // A screen fetched for `pane_finished` is catch-up, not new output.
+        if content_changed && !self.screen_check.contains_key(&slug) {
             if let Some(ws) = self
                 .panes
                 .iter()
@@ -1496,12 +1493,15 @@ impl SeanceApp {
                         .map(title_looks_busy)
                         .unwrap_or(false);
                     let new_busy = snap.title.as_deref().map(title_looks_busy).unwrap_or(false);
-                    if old_busy == new_busy {
+                    if old_busy == new_busy && !self.screen_check.contains_key(&slug) {
                         return;
                     }
                     rt.update(cx, |t, cx| {
                         t.apply_snapshot(snap, cx);
                     });
+                    if let Some(loud) = self.screen_check.remove(&slug) {
+                        self.turn_done(&slug, loud, cx);
+                    }
                     // Deliberately NO touch bump here. Grid frames arrive only
                     // for the SELECTED circle, so this edge fires when a stale
                     // title catches up on click — bumping touch there moved the
@@ -2925,10 +2925,12 @@ impl Render for SeanceApp {
         // stderr (gui.stderr.log). Measures element construction only — gpui
         // layout/paint happen outside this fn — but the RATE is exact.
         self.render_probe.tick();
-        // Looking at a finished pane is reading it: drop its ✓.
+        // Looking at a finished pane is reading it: drop its ✓ and banner.
         if self.window_active {
             if let Some(slug) = self.active_slug.as_deref() {
-                self.done_unseen.remove(slug);
+                if self.done_unseen.remove(slug) {
+                    crate::desktop_notify::clear_pane(slug);
+                }
             }
         }
         crate::latency_probe::complete("g_kick", "app", "gui kick→render");
