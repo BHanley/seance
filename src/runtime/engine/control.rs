@@ -298,16 +298,8 @@ impl Engine {
                     let behind = !self.queued_for(&slug).is_empty()
                         || self.send_queue.inflight.contains_key(&slug);
                     if submit && (queue || busy || behind) && !self.panes[idx].asleep {
-                        let superseded = if now {
-                            self.supersede_active(&slug)
-                        } else {
-                            None
-                        };
-                        let (tid, position) = self.queue_task(&slug, &text, &act);
-                        self.set_supersedes(&tid, superseded);
-                        events::log(&act, Some(&ws), Some(&slug), "task_queued", tid.clone());
-                        self.persist();
-                        return ok(self.queued_reply(&slug, &tid, position));
+                        self.record_contact(from.as_deref(), &ws);
+                        return ok(self.queue_send(&slug, &ws, &text, &act, now));
                     }
                     // Addressing a sleeping pane wakes it. Anything else makes
                     // every orchestrator break silently the first time it
@@ -322,17 +314,7 @@ impl Engine {
                         // always submits, so a --no-submit send goes straight in.
                         if submit {
                             self.record_contact(from.as_deref(), &ws);
-                            let superseded = if now {
-                                self.supersede_active(&slug)
-                            } else {
-                                None
-                            };
-                            let (tid, position) = self.queue_task(&slug, &text, &act);
-                            self.set_supersedes(&tid, superseded);
-                            events::log(&act, Some(&ws), Some(&slug), "task_queued", tid.clone());
-                            self.persist();
-                            self.push_state_to_all();
-                            return ok(self.queued_reply(&slug, &tid, position));
+                            return ok(self.queue_send(&slug, &ws, &text, &act, now));
                         }
                         self.persist();
                         self.push_state_to_all();

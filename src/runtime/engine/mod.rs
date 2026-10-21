@@ -362,6 +362,7 @@ impl Engine {
         }
 
         eng.load_frozen_grids();
+        eng.drop_paneless_tasks();
 
         if eng.panes.is_empty() {
             let _ = eng.spawn(SpawnSpec {
@@ -576,6 +577,7 @@ impl Engine {
             eng.ensure_workspace_id(&slug);
         }
         eng.load_frozen_grids();
+        eng.drop_paneless_tasks();
         eng.save_state()?;
         Ok((eng, event_rx))
     }

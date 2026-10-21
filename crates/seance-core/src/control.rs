@@ -84,8 +84,8 @@ pub enum ControlRequest {
         /// deliver it when the pane is next idle (`send --queue`).
         #[serde(default)]
         queue: bool,
-        /// Replace the pane's open task now instead of queueing behind it
-        /// (`send --now`; tasks are otherwise FIFO).
+        /// Cancel the pane's open task instead of parking it, and when the
+        /// send is queued, go to the front (`send --now`).
         #[serde(default)]
         now: bool,
         #[serde(default)]

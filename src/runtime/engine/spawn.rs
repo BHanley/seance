@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 use super::agent_session::{launch_with_session, new_session_uuid, split_session, Agent};
-use super::helpers::{now_ms, shell_rc_path};
+use super::helpers::shell_rc_path;
 use super::{Engine, EnginePane, SpawnSpec, DEFAULT_COMMAND, DEFAULT_WORKSPACE};
 use crate::events;
 use crate::runtime::pty_session::{PtySession, SpawnConfig};
@@ -344,27 +344,7 @@ impl Engine {
                 let _ = std::fs::remove_file(path);
             }
             self.pane_parents.remove(slug);
-            // Slugs get reused: a new pane with this one's must not inherit
-            // its open task (the next send would park it as the new pane's),
-            // its queue or its parked tasks.
-            if let Some(tid) = self.active_tasks.remove(slug) {
-                if let Some(t) = self.tasks.get_mut(&tid).filter(|t| t.status == "open") {
-                    t.status = "orphaned".into();
-                    t.finished_ms = Some(now_ms());
-                }
-            }
-            for tid in self.queued_for(slug) {
-                if let Some(t) = self.tasks.get_mut(&tid) {
-                    t.status = "cancelled".into();
-                    t.finished_ms = Some(now_ms());
-                    t.note = Some("pane closed before delivery".into());
-                }
-            }
-            for tid in self.parked_for(slug) {
-                if let Some(t) = self.tasks.get_mut(&tid) {
-                    t.status = "orphaned".into();
-                }
-            }
+            self.drop_pane_tasks(slug);
             // Slugs get reused. A window still holding this pane's frame as a
             // damage base would otherwise apply the next pane's rows onto it.
             self.invalidate_bases(slug);

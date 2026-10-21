@@ -83,8 +83,8 @@ seance ctl roster                              # slug, activity, status, task, p
 seance ctl new --name w --cwd "$PWD" --agent claude --task-file /tmp/task.md --json
 # (name taken → slug is w-2; always use the returned slug)
 # untrusted cwd → ready fails naming the trust dialog; add --trust to accept it
-seance ctl send w-2 --file /tmp/next.md        # new task; busy pane: queued, delivered when idle
-seance ctl send w-2 --file /tmp/next.md --now  # cancel the open task and replace it
+seance ctl send w-2 --file /tmp/next.md        # new task; busy: queued till idle
+seance ctl send w-2 --file /tmp/next.md --now  # cancel the open task, replace it
 seance ctl send w-2 --file /tmp/next.md --queue  # busy? queued; daemon delivers when idle
 seance ctl note-agent w-2 "also cover X"       # into the CURRENT task: no new task, no cancel
 seance ctl wait w-2 --task task-N --artifact /abs/result.md --either --fresh \
@@ -118,8 +118,8 @@ progressively written file matches, e.g. its closing ```json block.
   (`queued behind task-N (K ahead)`), delivered when idle, oldest first.
   Idle with an open task: the new one goes in and the old one is `parked`
   (`parked=` in `list`); finish it later with `finish --task ID`. Only
-  `send --now` cancels the open task. Mid-task notes go through
-  `note-agent`, never a second `send`.
+  `send --now` cancels the open task (queued, it goes to the front).
+  Mid-task notes go through `note-agent`, never a second `send`.
 - `wait --status done` requires **pad growth since inject** (not badge-only).
   `--cat` / `--harvest` prints each pad body after success.
 - Panes you spawn from inside a pane record you as `parent`;
@@ -139,8 +139,8 @@ oldest first) · `task_id` / `task_status` (current, else latest task) ·
 `status` / `status_note` (badge) · `owner` / `drive_mode` / `human_idle` ·
 `scratchpad` / `scratchpad_bytes` / `pad_rev` / `inject_pad_rev` /
 `inject_pad_bytes` · `open_asks` · `title` · `tiled` · `parked_tasks`. Task
-statuses: queued · open · parked · done · cancelled · failed. `task --id T --json` adds `supersedes`,
-`delivery`, `note`.
+statuses: queued · open · parked · done · cancelled · failed. `task --id T
+--json` adds `supersedes`, `delivery`, `note`.
 
 ### Talking to another circle (another session)
 

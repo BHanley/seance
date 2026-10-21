@@ -786,7 +786,7 @@ pub struct TaskRecord {
     /// Full inject text (durable inbox for workers / orchestrators).
     #[serde(default)]
     pub body: String,
-    /// queued | open | done | cancelled | failed | orphaned
+    /// queued | open | parked | done | cancelled | failed | orphaned
     #[serde(default = "default_task_open")]
     pub status: String,
     #[serde(default)]
@@ -807,6 +807,9 @@ pub struct TaskRecord {
     /// Why it failed or was cancelled, when seance knows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Queued by `send --now`: delivered ahead of the rest of the queue.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub front: bool,
 }
 
 fn default_task_open() -> String {

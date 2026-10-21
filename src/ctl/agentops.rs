@@ -739,13 +739,15 @@ pub(super) fn run_handoff(args: Vec<String>, ctx: &Ctx) -> i32 {
         );
     }
     let text = takeover_text(&old, &new, &task_id, &cwd, note.as_deref(), &body);
+    // `now`: if the successor reads busy and this gets queued, it still goes
+    // ahead of the queue handed over below (it has no task to cancel).
     let req = ControlRequest::Send {
         pane: new.clone(),
         text: text.clone(),
         submit: true,
         force: false,
         queue: false,
-        now: false,
+        now: true,
         scope: None,
         from: None,
     };

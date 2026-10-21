@@ -170,10 +170,15 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   cancelled: `ctl list` shows `parked=` ids, `ctl finish --task ID` still
   finishes one, and parked tasks prune after 7 days like finished ones.
   `send --now` cancels the open task on every path, `--queue` and a
-  sleeping pane included. `ctl list` also shows `queued=` ids. Queued tasks
+  sleeping pane included, and a queued one goes to the front. `ctl list` also shows `queued=` ids. Queued tasks
   no longer keep a pane from auto-sleeping. Killing a pane orphans its open
   task and cancels its queue, so a pane that reuses the slug starts clean;
-  `ctl handoff` hands the queue to the successor.
+  `ctl handoff` hands the queue to the successor. Tasks of panes that
+  don't come back on load are orphaned the same way. `ctl wait --task T
+  --status done` on a task the pane has moved past judges T itself, not the
+  pane's badge. A queued task now needs 1.5s of unbroken idle, and a paste
+  stuck in the composer fails at the end of its window instead of holding
+  the queue.
 
 ### Fixed
 

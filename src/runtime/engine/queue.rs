@@ -92,6 +92,51 @@ impl Engine {
         Some(old)
     }
 
+    /// A pane is gone (killed, or not there on load). Slugs get reused: a new
+    /// pane with this one's must not inherit its open task (the next send
+    /// would park it as the new pane's), its queue or its parked tasks.
+    pub(super) fn drop_pane_tasks(&mut self, slug: &str) {
+        if let Some(tid) = self.active_tasks.remove(slug) {
+            if let Some(t) = self.tasks.get_mut(&tid).filter(|t| t.status == "open") {
+                t.status = "orphaned".into();
+                t.finished_ms = Some(now_ms());
+            }
+        }
+        for tid in self.queued_for(slug) {
+            if let Some(t) = self.tasks.get_mut(&tid) {
+                t.status = "cancelled".into();
+                t.finished_ms = Some(now_ms());
+                t.note = Some("pane closed before delivery".into());
+            }
+        }
+        for tid in self.parked_for(slug) {
+            if let Some(t) = self.tasks.get_mut(&tid) {
+                t.status = "orphaned".into();
+            }
+        }
+    }
+
+    /// On load: tasks of panes that didn't come back (`drop_pane_tasks`).
+    pub(super) fn drop_paneless_tasks(&mut self) {
+        let mut gone: Vec<String> = self
+            .active_tasks
+            .keys()
+            .chain(
+                self.tasks
+                    .values()
+                    .filter(|t| matches!(t.status.as_str(), "parked" | "queued"))
+                    .map(|t| &t.pane),
+            )
+            .filter(|s| !self.panes.iter().any(|p| &p.slug == *s))
+            .cloned()
+            .collect();
+        gone.sort();
+        gone.dedup();
+        for slug in gone {
+            self.drop_pane_tasks(&slug);
+        }
+    }
+
     /// Record the task `tid` displaced, when there was one.
     pub(super) fn set_supersedes(&mut self, tid: &str, old: Option<String>) {
         if let (Some(t), Some(old)) = (self.tasks.get_mut(tid), old) {
@@ -118,16 +163,38 @@ impl Engine {
         q.into_iter().map(|t| t.id.clone()).collect()
     }
 
-    /// A queued send's reply: its place in line and the task right in front
-    /// of it (the running one counts).
-    pub(super) fn queued_reply(&self, slug: &str, tid: &str, position: usize) -> serde_json::Value {
+    /// Queue a send for the pump. `now` (`send --now`) cancels the open task
+    /// and goes to the front. Returns the sender's reply: its place in line
+    /// and the task right in front of it (the running one counts).
+    pub(super) fn queue_send(
+        &mut self,
+        slug: &str,
+        ws: &str,
+        text: &str,
+        act: &str,
+        now: bool,
+    ) -> serde_json::Value {
+        let superseded = if now {
+            self.supersede_active(slug)
+        } else {
+            None
+        };
+        let (tid, _) = self.queue_task(slug, text, act);
+        self.set_supersedes(&tid, superseded);
+        if let Some(t) = self.tasks.get_mut(&tid) {
+            t.front = now;
+        }
+        events::log(act, Some(ws), Some(slug), "task_queued", tid.clone());
+        self.persist();
+        self.push_state_to_all();
+        let queued = self.queued_for(slug);
         let mut ahead: Vec<String> = self.open_task(slug).into_iter().collect();
-        ahead.extend(self.queued_for(slug).into_iter().take_while(|t| t != tid));
+        ahead.extend(queued.iter().take_while(|t| **t != tid).cloned());
         serde_json::json!({
             "slug": slug,
             "task_id": tid,
             "status": "queued",
-            "position": position,
+            "position": queued.iter().position(|t| *t == tid).map_or(0, |i| i + 1),
             "behind": ahead.last(),
             "ahead": ahead.len(),
         })
@@ -153,14 +220,14 @@ impl Engine {
         (id, position)
     }
 
-    /// The pane's queued task ids, oldest first.
+    /// The pane's queued task ids, oldest first (`--now` ones ahead).
     pub(super) fn queued_for(&self, slug: &str) -> Vec<String> {
         let mut q: Vec<&TaskRecord> = self
             .tasks
             .values()
             .filter(|t| t.pane == slug && t.status == "queued")
             .collect();
-        q.sort_by_key(|t| (t.created_ms, t.id.len(), t.id.clone()));
+        q.sort_by_key(|t| (!t.front, t.created_ms, t.id.len(), t.id.clone()));
         q.into_iter().map(|t| t.id.clone()).collect()
     }
 
@@ -311,17 +378,24 @@ impl Engine {
             if starting && look.activity != Activity::Idle {
                 continue;
             }
-            if self.send_queue.inflight.contains_key(&slug) {
-                changed |= self.advance_inflight(idx, &slug, look, now);
-            } else if !self.queued_for(&slug).is_empty() && look.activity != Activity::Busy {
-                changed |= self.maybe_deliver(idx, &slug, look, now);
-            } else {
-                // Messages land mid-turn, so a task waiting out a busy pane
-                // doesn't hold them up.
-                changed |= self.maybe_deliver_message(idx, &slug, look, now);
-            }
+            changed |= self.pump_pane(idx, &slug, look, now);
         }
         changed
+    }
+
+    /// One pane's step of the pump, given what its screen reads now.
+    pub(super) fn pump_pane(&mut self, idx: usize, slug: &str, look: Look, now: u64) -> bool {
+        if self.send_queue.inflight.contains_key(slug) {
+            self.advance_inflight(idx, slug, look, now)
+        } else if !self.queued_for(slug).is_empty() && look.activity != Activity::Busy {
+            self.maybe_deliver(idx, slug, look, now)
+        } else {
+            // A busy frame breaks the idle run a queued task waits for.
+            self.send_queue.idle_since.remove(slug);
+            // Messages land mid-turn, so a task waiting out a busy pane
+            // doesn't hold them up.
+            self.maybe_deliver_message(idx, slug, look, now)
+        }
     }
 
     fn maybe_deliver(&mut self, idx: usize, slug: &str, look: Look, now: u64) -> bool {
@@ -477,9 +551,9 @@ impl Engine {
                 self.finish_delivery(slug, via);
                 return true;
             }
-            Judgement::Stuck => {
+            Judgement::Stuck if f.resubmits < 2 => {
                 let since = *f.stuck_since.get_or_insert(now);
-                if now.saturating_sub(since) >= STUCK_ENTER_MS && f.resubmits < 2 {
+                if now.saturating_sub(since) >= STUCK_ENTER_MS {
                     if let Some(s) = session {
                         s.write_bytes(b"\r".to_vec());
                     }
@@ -488,6 +562,9 @@ impl Engine {
                 }
                 return false;
             }
+            // Enter spent: the window below fails it rather than waiting
+            // forever (later sends line up behind an in-flight delivery).
+            Judgement::Stuck => {}
             Judgement::Pending => f.stuck_since = None,
         }
         if now.saturating_sub(f.started_ms) < CONFIRM_WINDOW_MS {
@@ -501,7 +578,8 @@ impl Engine {
             self.finish_delivery(slug, "mid-turn");
             return true;
         }
-        if f.attempts < 2 {
+        // Still sitting in the composer: a re-paste would only stack a copy.
+        if f.attempts < 2 && f.resubmits < 2 {
             f.attempts += 1;
             f.started_ms = now;
             if let Some(s) = session {

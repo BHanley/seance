@@ -87,8 +87,8 @@ seance ctl skill                 # agent-facing protocol (⚡ arm / paste)
 seance ctl doctor
 seance ctl roster
 seance ctl new --name w --agent claude --wait-ready
-seance ctl send w --file /tmp/task.md        # busy: queued; idle: goes in, open task parked
-seance ctl send w --file /tmp/task.md --now  # cancel w's open task and replace it
+seance ctl send w --file /tmp/task.md        # busy: queued; idle: in, old task parked
+seance ctl send w --file /tmp/task.md --now  # cancel w's open task, replace it
 seance ctl wait w --status done --timeout 600 --cat
 seance ctl harvest w1 w2 w3 --timeout 900
 seance ctl phone w               # telegram topic + stage card (no claim)
@@ -372,8 +372,9 @@ after editing.
 its process stops and frees its memory, and the pane keeps its name, place
 and last screen. Only panes that can come back exactly are slept (a Claude
 pane whose conversation is on disk, including Claude started from a shell
-or a wrapper), and never one that is busy, waiting on you or focused. Typing into a sleeping pane, `seance ctl send` to it, or
-**awaken** wakes it into the same conversation.
+or a wrapper), and never one that is busy, waiting on you or focused.
+Typing into a sleeping pane, `seance ctl send` to it, or **awaken** wakes it
+into the same conversation.
 
 ```
 seance-auto-sleep-idle = 6h            # default 12h; off turns it off

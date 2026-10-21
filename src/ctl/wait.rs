@@ -287,7 +287,13 @@ pub(crate) fn run_wait(
                 ok &= match_o;
                 want_default = false;
             }
-            if let Some(want_st) = &status {
+            // `--task T` for a task the pane has moved past (parked, or done
+            // before a later one went in): the badge and pad belong to the
+            // current task, so T's own state below decides.
+            let past_task = task_id
+                .as_deref()
+                .is_some_and(|w| row.get("task_id").and_then(|v| v.as_str()) != Some(w));
+            if let Some(want_st) = status.as_ref().filter(|_| !past_task) {
                 ok &= st == Some(want_st.as_str());
                 want_default = false;
                 // Evidence-bound done (0.9.6): badge alone is not enough when
@@ -381,8 +387,9 @@ pub(crate) fn run_wait(
                         return wait_fail(
                             json_out,
                             &format!(
-                                "task {want} on '{pane}' is {} (current task {}; only send --now \
-                                 cancels a task)",
+                                "task {want} on '{pane}' is {} (current task {}; tasks end this \
+                                 way from send --now, a failed delivery, or a kill, which \
+                                 cancels queued tasks and orphans open and parked ones)",
                                 state.as_deref().unwrap_or("unknown"),
                                 got.unwrap_or("?")
                             ),

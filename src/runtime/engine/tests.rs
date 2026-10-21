@@ -1,6 +1,7 @@
 //! Engine integration tests (control plane with stub panes).
 
 use super::helpers::now_ms;
+use super::queue::IDLE_SETTLE_MS;
 use super::*;
 use crate::control::{ControlRequest, ControlResponse};
 use std::path::PathBuf;
@@ -680,17 +681,24 @@ fn sends_park_queue_or_replace() {
         assert_eq!(eng.queued_for(&w), vec![third.clone(), fourth.clone()]);
         assert_eq!(eng.tasks[&second].status, "open");
 
-        // `--now` cancels the open task outright, --queue included, so
-        // delivery parks nothing.
+        // `--now` cancels the open task outright, --queue included, and goes
+        // to the front, so it is delivered next and parks nothing.
         let d = send(&mut eng, &w, "urgent", true, true).data.unwrap();
         let urgent = d["task_id"].as_str().unwrap().to_string();
+        assert_eq!(
+            (d["position"].as_u64(), d["ahead"].as_u64()),
+            (Some(1), Some(0))
+        );
         assert_eq!(eng.tasks[&second].status, "cancelled");
+        assert_eq!(
+            eng.queued_for(&w),
+            vec![urgent.clone(), third.clone(), fourth.clone()]
+        );
+        eng.activate_queued(&w, &urgent);
         assert_eq!(
             eng.tasks[&urgent].supersedes.as_deref(),
             Some(second.as_str())
         );
-        eng.activate_queued(&w, &third);
-        assert_eq!(eng.tasks[&third].supersedes, None);
 
         // Handoff: the successor takes the queue; a plain kill cancels it and
         // orphans the open task, so a reused slug starts clean.
@@ -701,8 +709,8 @@ fn sends_park_queue_or_replace() {
             from: None,
         });
         assert!(r.ok, "{:?}", r.error);
-        assert_eq!(eng.queued_for(&other), vec![fourth.clone(), urgent.clone()]);
-        assert_eq!(eng.tasks[&third].status, "orphaned");
+        assert_eq!(eng.queued_for(&other), vec![third.clone(), fourth.clone()]);
+        assert_eq!(eng.tasks[&urgent].status, "orphaned");
         let parked = eng.begin_task(&other, "a");
         eng.begin_task(&other, "b");
         eng.kill_pane(&other);
@@ -714,6 +722,88 @@ fn sends_park_queue_or_replace() {
         old.status = "parked".into();
         old.finished_ms = Some(1);
         assert!(!super::keep_task(&old, now_ms()));
+        let _ = std::fs::remove_dir_all(&scratch);
+    });
+}
+
+/// Saved state can name panes that didn't come back (seven of them on the
+/// live daemon): their tasks must not wait for a pane reusing the slug.
+#[test]
+fn load_drops_tasks_of_panes_that_did_not_come_back() {
+    with_test_state_dir("load-ghosts", || {
+        let scratch = temp_scratch("load-ghosts");
+        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
+        let ghost = eng.push_stub_pane("ghost", "lab");
+        let live = eng.push_stub_pane("live", "lab");
+        let parked = eng.begin_task(&ghost, "a");
+        let open = eng.begin_task(&ghost, "b");
+        let (queued, _) = eng.queue_task(&ghost, "c", "cli");
+        let kept = eng.begin_task(&live, "d");
+        eng.panes.retain(|p| p.slug != ghost);
+        eng.drop_paneless_tasks();
+        assert_eq!(eng.tasks[&parked].status, "orphaned");
+        assert_eq!(eng.tasks[&open].status, "orphaned");
+        assert_eq!(eng.tasks[&queued].status, "cancelled");
+        assert!(!eng.active_tasks.contains_key(&ghost));
+        assert_eq!(eng.open_task(&live), Some(kept));
+        let _ = std::fs::remove_dir_all(&scratch);
+    });
+}
+
+fn look(
+    activity: seance_core::agent_state::Activity,
+    screen: &str,
+) -> seance_core::agent_state::Look {
+    seance_core::agent_state::Look {
+        activity,
+        evidence: None,
+        queued_input: false,
+        screen: screen.into(),
+    }
+}
+
+/// A queued task goes in only after IDLE_SETTLE_MS of unbroken idle: a busy
+/// frame between two idle ones starts the wait over.
+#[test]
+fn pump_waits_for_a_continuous_idle_run() {
+    use seance_core::agent_state::Activity::{Busy, Idle};
+    with_test_state_dir("pump-idle", || {
+        let scratch = temp_scratch("pump-idle");
+        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
+        let w = eng.push_stub_pane("w", "lab");
+        let (tid, _) = eng.queue_task(&w, "next job", "cli");
+        let t0 = now_ms();
+        assert!(!eng.pump_pane(0, &w, look(Idle, ""), t0));
+        assert!(!eng.pump_pane(0, &w, look(Busy, ""), t0 + 500));
+        // Idle again past t0 + settle, but only just: not yet.
+        assert!(!eng.pump_pane(0, &w, look(Idle, ""), t0 + 2_000));
+        assert_eq!(eng.tasks[&tid].status, "queued");
+        assert!(eng.pump_pane(0, &w, look(Idle, ""), t0 + 2_000 + IDLE_SETTLE_MS));
+        assert_eq!(eng.tasks[&tid].status, "open");
+        let _ = std::fs::remove_dir_all(&scratch);
+    });
+}
+
+/// A paste stuck in the composer gets two Enters, then fails at the end of
+/// the window instead of holding the pane's line forever.
+#[test]
+fn stuck_delivery_fails_once_enter_is_spent() {
+    use seance_core::agent_state::Activity::Idle;
+    with_test_state_dir("pump-stuck", || {
+        let scratch = temp_scratch("pump-stuck");
+        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
+        let w = eng.push_stub_pane("w", "lab");
+        let (tid, _) = eng.queue_task(&w, "next job", "cli");
+        let t0 = now_ms();
+        eng.pump_pane(0, &w, look(Idle, ""), t0);
+        assert!(eng.pump_pane(0, &w, look(Idle, ""), t0 + IDLE_SETTLE_MS));
+        let stuck = look(Idle, "──────────\n❯ next job\n──────────");
+        let mut t = t0 + IDLE_SETTLE_MS;
+        for _ in 0..40 {
+            t += 500;
+            eng.pump_pane(0, &w, stuck.clone(), t);
+        }
+        assert_eq!(eng.tasks[&tid].status, "failed");
         let _ = std::fs::remove_dir_all(&scratch);
     });
 }
@@ -1167,6 +1257,7 @@ fn week_old_finished_tasks_are_not_saved() {
             queued_by: None,
             delivery: None,
             note: None,
+            front: false,
         };
         for t in [
             task("old-done", "done", Some(now - week - 1)),
