@@ -888,6 +888,44 @@ fn sleeping_keeps_the_pane_and_survives_its_own_exit_event() {
     });
 }
 
+/// A status-set that repeats the pane's last (state, note) changes nothing a
+/// window shows, so it isn't broadcast; a new note is.
+#[test]
+fn repeated_status_set_is_not_broadcast() {
+    with_test_state_dir("status-repeat", || {
+        let scratch = temp_scratch("status-repeat");
+        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
+        let slug = eng.push_stub_pane("worker", "lab");
+        let gui = FakeGui::attach_to(&mut eng);
+        let set = |eng: &mut Engine, note: &str| {
+            let r = eng.handle_control(ControlRequest::StatusSet {
+                state: "working".into(),
+                note: Some(note.into()),
+                pane: Some(slug.clone()),
+                scope: None,
+                from: None,
+            });
+            assert!(r.ok, "{:?}", r.error);
+        };
+        let statuses = |gui: &FakeGui| {
+            gui.drain()
+                .into_iter()
+                .filter(|ev| matches!(ev, GuiEvent::Status { .. }))
+                .count()
+        };
+        gui.drain();
+
+        set(&mut eng, "reading");
+        assert_eq!(statuses(&gui), 1);
+        set(&mut eng, "reading");
+        assert_eq!(statuses(&gui), 0, "a repeat is skipped");
+        set(&mut eng, "writing");
+        assert_eq!(statuses(&gui), 1);
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    });
+}
+
 /// A pane that woke on a new session must not die of the old session's exit.
 /// Shutdown is async, so the slept PTY's `Exited` can land after the wake;
 /// only an exit from the session the pane holds now closes it.

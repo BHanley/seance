@@ -43,6 +43,20 @@ use crate::state::{new_identity_uuid, AppState, PersistedPane};
 const DEFAULT_COMMAND: &str = "bash -l";
 const DEFAULT_WORKSPACE: &str = "main";
 
+/// How long a finished task stays in saved state. Nothing reads one after a
+/// week, and the map was never trimmed before (it had grown past 170 KB).
+const FINISHED_TASK_TTL_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+
+/// Whether `t` is still worth keeping at `now`: done, orphaned and cancelled
+/// tasks go a week after they finished; every other status stays.
+fn keep_task(t: &TaskRecord, now: u64) -> bool {
+    if !matches!(t.status.as_str(), "done" | "orphaned" | "cancelled") {
+        return true;
+    }
+    let at = t.finished_ms.unwrap_or(t.created_ms);
+    now.saturating_sub(at) < FINISHED_TASK_TTL_MS
+}
+
 pub struct SpawnSpec {
     pub name: String,
     pub cwd: Option<String>,
@@ -306,7 +320,8 @@ impl Engine {
         eng.pane_parents = state.pane_parents.iter().cloned().collect();
         eng.comms = state.comms.clone();
 
-        for t in state.tasks {
+        let now = helpers::now_ms();
+        for t in state.tasks.into_iter().filter(|t| keep_task(t, now)) {
             eng.tasks.insert(t.id.clone(), t);
         }
         for (slug, tid) in state.active_tasks {
@@ -412,11 +427,15 @@ impl Engine {
                 .into_iter()
                 .map(|b| (b.slug, (b.pad_rev, b.pad_bytes)))
                 .collect(),
-            tasks: bundle
-                .tasks
-                .into_iter()
-                .map(|t| (t.id.clone(), t))
-                .collect(),
+            tasks: {
+                let now = helpers::now_ms();
+                bundle
+                    .tasks
+                    .into_iter()
+                    .filter(|t| keep_task(t, now))
+                    .map(|t| (t.id.clone(), t))
+                    .collect()
+            },
             active_tasks: bundle.active_tasks.into_iter().collect(),
             task_counter: bundle.task_counter,
             proposals: HashMap::new(),
@@ -623,7 +642,14 @@ impl Engine {
             workspace_ids: self.workspace_ids.clone(),
             window_size: None,
             // Keep open + recently finished tasks (cap body size already at create).
-            tasks: self.tasks.values().cloned().collect(),
+            tasks: {
+                let now = helpers::now_ms();
+                self.tasks
+                    .values()
+                    .filter(|t| keep_task(t, now))
+                    .cloned()
+                    .collect()
+            },
             task_counter: self.task_counter,
             active_tasks: self
                 .active_tasks

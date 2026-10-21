@@ -1015,3 +1015,49 @@ fn space_ops_edit_the_rail_blob_and_keep_its_other_keys() {
         let _ = std::fs::remove_dir_all(&scratch);
     });
 }
+
+/// Done, orphaned and cancelled tasks leave saved state a week after they
+/// finish; open and queued ones stay however old they are.
+#[test]
+fn week_old_finished_tasks_are_not_saved() {
+    with_test_state_dir("task-prune", || {
+        let scratch = std::env::temp_dir().join(format!("seance-task-prune-{}", now_ms()));
+        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
+        let now = now_ms();
+        let week = 7 * 24 * 60 * 60 * 1000;
+        let task = |id: &str, status: &str, finished: Option<u64>| TaskRecord {
+            id: id.into(),
+            pane: "p".into(),
+            inject_pad_rev: 0,
+            inject_pad_bytes: 0,
+            body: String::new(),
+            status: status.into(),
+            created_ms: now - 2 * week,
+            finished_ms: finished,
+            supersedes: None,
+            queued_by: None,
+            delivery: None,
+            note: None,
+        };
+        for t in [
+            task("old-done", "done", Some(now - week - 1)),
+            task("old-orphaned", "orphaned", Some(now - week - 1)),
+            task("old-cancelled", "cancelled", None),
+            task("new-done", "done", Some(now - 1000)),
+            task("old-open", "open", None),
+            task("old-queued", "queued", None),
+        ] {
+            eng.tasks.insert(t.id.clone(), t);
+        }
+        eng.persist();
+
+        let mut kept: Vec<String> = crate::state::AppState::load()
+            .tasks
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        kept.sort();
+        assert_eq!(kept, ["new-done", "old-open", "old-queued"]);
+        let _ = std::fs::remove_dir_all(&scratch);
+    });
+}

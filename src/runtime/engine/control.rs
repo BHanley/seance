@@ -756,22 +756,27 @@ impl Engine {
                                 ));
                             }
                         }
-                        self.statuses
-                            .insert(slug.clone(), (state.clone(), note.clone()));
-                        if state == "done" {
-                            self.complete_active_task(&slug, None);
+                        let pair = (state.clone(), note.clone());
+                        let unchanged = self.statuses.get(&slug) == Some(&pair);
+                        self.statuses.insert(slug.clone(), pair);
+                        let completed =
+                            state == "done" && self.complete_active_task(&slug, None).is_some();
+                        // Most status-sets repeat the pane's last one. A repeat
+                        // changes nothing anyone can see, so it skips the log,
+                        // the save and the broadcast.
+                        if !unchanged || completed {
+                            let detail = match &note {
+                                Some(n) => format!("{state}: {n}"),
+                                None => state.clone(),
+                            };
+                            events::log(&act, Some(&ws), Some(&slug), "status_set", detail);
+                            self.broadcast(GuiEvent::Status {
+                                slug: slug.clone(),
+                                state: state.clone(),
+                                note: note.clone(),
+                            });
+                            self.persist();
                         }
-                        let detail = match &note {
-                            Some(n) => format!("{state}: {n}"),
-                            None => state.clone(),
-                        };
-                        events::log(&act, Some(&ws), Some(&slug), "status_set", detail);
-                        self.broadcast(GuiEvent::Status {
-                            slug: slug.clone(),
-                            state: state.clone(),
-                            note: note.clone(),
-                        });
-                        self.persist();
                         ok(json!({
                             "slug": slug,
                             "status": state,
