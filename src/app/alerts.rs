@@ -110,7 +110,13 @@ impl SeanceApp {
         else {
             return;
         };
-        let streamed = self.overview() || self.selected_workspace.as_ref() == Some(ws);
+        // The Wall streams the subscribed circles, the other views the one on
+        // show.
+        let streamed = if self.overview() {
+            self.subscriptions.contains(ws)
+        } else {
+            self.selected_workspace.as_ref() == Some(ws)
+        };
         if streamed {
             self.turn_done(pane, loud, cx);
             return;
@@ -137,6 +143,10 @@ impl SeanceApp {
     pub(super) fn turn_done(&mut self, pane: &str, loud: Option<u64>, cx: &mut Context<Self>) {
         // Closed or slept while its screen was on the way.
         if !self.panes.iter().any(|p| p.slug == pane && !p.asleep) {
+            return;
+        }
+        // Busy again while its screen was on the way: that turn's end says.
+        if self.busy_panes.contains(pane) {
             return;
         }
         let compacted = self
