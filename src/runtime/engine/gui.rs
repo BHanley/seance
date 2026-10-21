@@ -852,6 +852,7 @@ impl Engine {
                     .unwrap_or(false);
                 let was_busy = self.pane_busy.contains(slug);
                 if was_busy != now_busy {
+                    self.pane_busy_at.insert(slug.clone(), now_ms());
                     if now_busy {
                         self.pane_busy.insert(slug.clone());
                     } else {

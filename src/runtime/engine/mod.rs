@@ -20,7 +20,7 @@ mod tests;
 
 // Re-export helpers used by sibling modules / tests.
 pub use helpers::OwnedFdAdopt;
-pub use sleep::AUTO_SLEEP_IDLE_MS;
+pub use sleep::auto_sleep_idle_ms;
 
 use gui::{GuiConn, LastGridFrame};
 
@@ -140,6 +140,16 @@ pub struct Engine {
     /// party that sees EVERY title (grid frames go to subscribers only), so it
     /// owns this and broadcasts the flips (`GuiEvent::PaneBusy`).
     pane_busy: HashSet<String>,
+    /// pane slug → when it last went busy or idle (unix ms): auto-sleep's
+    /// clock, since output never stops on a Claude pane.
+    pub(super) pane_busy_at: HashMap<String, u64>,
+    /// When this daemon started: the busy clock for panes it hasn't seen
+    /// change yet.
+    pub(super) started_ms: u64,
+    /// pane slug → when it last woke, so the send pump waits for its agent.
+    pub(super) pane_woke_at: HashMap<String, u64>,
+    /// pane slug → when the pump last failed to wake it.
+    pub(super) wake_failed_at: HashMap<String, u64>,
     /// workspace → last real pane output (unix ms). Daemon-owned so the
     /// sidebar's "time since update" survives GUI relaunch, workspace pulls
     /// between windows, and `seance upgrade`. Fed by the recorder tap.
@@ -200,6 +210,10 @@ impl Engine {
             grid_flush_pending: HashSet::new(),
             last_grid_cells: HashMap::new(),
             pane_busy: HashSet::new(),
+            pane_busy_at: HashMap::new(),
+            started_ms: helpers::now_ms(),
+            pane_woke_at: HashMap::new(),
+            wake_failed_at: HashMap::new(),
             frozen_grids: HashMap::new(),
             workspace_output: HashMap::new(),
             workspace_touch_ms: HashMap::new(),
@@ -273,6 +287,10 @@ impl Engine {
             grid_flush_pending: HashSet::new(),
             last_grid_cells: HashMap::new(),
             pane_busy: HashSet::new(),
+            pane_busy_at: HashMap::new(),
+            started_ms: helpers::now_ms(),
+            pane_woke_at: HashMap::new(),
+            wake_failed_at: HashMap::new(),
             frozen_grids: HashMap::new(),
             workspace_output: HashMap::new(),
             workspace_touch_ms: HashMap::new(),
@@ -414,6 +432,10 @@ impl Engine {
             grid_flush_pending: HashSet::new(),
             last_grid_cells: HashMap::new(),
             pane_busy: HashSet::new(),
+            pane_busy_at: HashMap::new(),
+            started_ms: helpers::now_ms(),
+            pane_woke_at: HashMap::new(),
+            wake_failed_at: HashMap::new(),
             frozen_grids: HashMap::new(),
             // Activity clocks ride the handoff — an upgrade must not reset
             // every circle's "time since update" to unknown.

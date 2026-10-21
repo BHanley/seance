@@ -785,9 +785,17 @@ impl SeanceApp {
             .unwrap_or_else(|| ws.to_string())
     }
 
-    /// Any pane of this circle is asleep — the circle reads as asleep.
+    /// The circle reads as asleep when all its terminals are. The daemon
+    /// sleeps idle Claude panes one at a time, so a circle with one asleep
+    /// beside a live shell or Mac pane is still awake; that pane shows its
+    /// own ☾ and wakes on a keystroke or Stage's awaken.
     pub(super) fn workspace_asleep(&self, ws: &str) -> bool {
-        self.panes.iter().any(|p| p.workspace == ws && p.asleep)
+        let mut terms = self
+            .panes
+            .iter()
+            .filter(|p| p.workspace == ws && !matches!(p.body, crate::pane::PaneBody::File { .. }))
+            .peekable();
+        terms.peek().is_some() && terms.all(|p| p.asleep)
     }
 
     /// Every pane in the circle can be put back exactly (daemon's verdict, on

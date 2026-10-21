@@ -299,6 +299,23 @@ impl Engine {
                         if let Err(e) = self.wake_pane(&slug) {
                             return err(format!("pane '{slug}' is asleep and would not wake: {e}"));
                         }
+                        // The agent is still starting: typed now, the text or
+                        // its Enter lands on a half-drawn screen. Queue it; the
+                        // pump delivers once the woken pane reads idle. The queue
+                        // always submits, so a --no-submit send goes straight in.
+                        if submit {
+                            self.record_contact(from.as_deref(), &ws);
+                            let (tid, position) = self.queue_task(&slug, &text, &act);
+                            events::log(&act, Some(&ws), Some(&slug), "task_queued", tid.clone());
+                            self.persist();
+                            self.push_state_to_all();
+                            return ok(json!({
+                                "slug": slug,
+                                "task_id": tid,
+                                "status": "queued",
+                                "position": position,
+                            }));
+                        }
                         self.persist();
                         self.push_state_to_all();
                     }

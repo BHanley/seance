@@ -22,6 +22,7 @@
 //! | `seance-circle-map` | TSV of `circle-slug<TAB>folder` for Stage's lead log line (GUI) |
 //! | `seance-health-file` | health report Stage's footer reads (GUI) |
 //! | `seance-needs-sound` | macOS sound name for needs-you banners (`default` = the system's) |
+//! | `seance-auto-sleep-idle` (e.g. `6h`), `seance-auto-sleep-skip` (circle slugs, comma separated) | daemon's auto-sleep of idle Claude panes |
 //! | `seance-done-sound`, `seance-done-sound-volume` | sound when a circle lead finishes out of sight |
 //!
 //! The two Stage paths are read through the daemon's fs bridge, so they name
@@ -89,6 +90,11 @@ pub struct TermConfig {
     /// elsewhere (its done mark). None plays nothing.
     pub seance_done_sound: Option<PathBuf>,
     pub seance_done_sound_volume: f32,
+    /// `seance-auto-sleep-idle`: how long a Claude pane sits idle before the
+    /// daemon sleeps it. None keeps the built-in default.
+    pub seance_auto_sleep_idle_ms: Option<u64>,
+    /// `seance-auto-sleep-skip`: circles whose panes are never auto-slept.
+    pub seance_auto_sleep_skip: Vec<String>,
 }
 
 impl Default for TermConfig {
@@ -111,6 +117,8 @@ impl Default for TermConfig {
             seance_needs_sound: None,
             seance_done_sound: None,
             seance_done_sound_volume: 0.6,
+            seance_auto_sleep_idle_ms: None,
+            seance_auto_sleep_skip: Vec::new(),
         }
     }
 }
@@ -251,6 +259,22 @@ fn apply(cfg: &mut TermConfig, key: &str, value: &str) {
         "seance-health-file" => cfg.seance_health_file = non_empty(value),
         "seance-needs-sound" => cfg.seance_needs_sound = non_empty(value),
         "seance-done-sound" => cfg.seance_done_sound = non_empty(value).map(PathBuf::from),
+        // `off` (or 0) turns auto-sleep off.
+        "seance-auto-sleep-idle" => {
+            cfg.seance_auto_sleep_idle_ms = if value == "off" || value == "0" {
+                Some(0)
+            } else {
+                parse_duration_ms(value)
+            }
+        }
+        "seance-auto-sleep-skip" => {
+            cfg.seance_auto_sleep_skip = value
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect();
+        }
         "seance-done-sound-volume" => {
             if let Ok(v) = value.parse::<f32>() {
                 cfg.seance_done_sound_volume = v.clamp(0.0, 1.0);
@@ -403,6 +427,23 @@ mod tests {
         assert_eq!(cfg.seance_needs_sound.as_deref(), Some("default"));
         assert_eq!(cfg.seance_done_sound, Some(dir.join("sounds/ding.aiff")));
         assert_eq!(cfg.seance_done_sound_volume, 0.6);
+    }
+
+    #[test]
+    fn reads_auto_sleep_settings() {
+        let dir = test_dir("autosleep");
+        let p = write(
+            &dir,
+            "terminal.conf",
+            "seance-auto-sleep-idle = 6h\n\
+             seance-auto-sleep-skip = l6-leveling, main\n",
+        );
+        let cfg = load(&p);
+        assert_eq!(cfg.seance_auto_sleep_idle_ms, Some(6 * 3_600_000));
+        assert_eq!(cfg.seance_auto_sleep_skip, vec!["l6-leveling", "main"]);
+        assert_eq!(TermConfig::default().seance_auto_sleep_idle_ms, None);
+        let off = write(&dir, "off.conf", "seance-auto-sleep-idle = off\n");
+        assert_eq!(load(&off).seance_auto_sleep_idle_ms, Some(0));
     }
 
     #[test]

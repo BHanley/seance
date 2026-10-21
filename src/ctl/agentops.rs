@@ -245,6 +245,11 @@ fn send_task(
         ));
     }
     let mut data = ctx.call(req)?;
+    // The daemon queued it (the pane was asleep and is starting up): the pump
+    // delivers and confirms it, so there is nothing here to confirm.
+    if data.get("status").and_then(|s| s.as_str()) == Some("queued") {
+        return Ok(data);
+    }
     let Some(before) = before else {
         return Ok(data);
     };

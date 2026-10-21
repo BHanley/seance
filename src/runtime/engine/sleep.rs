@@ -28,7 +28,8 @@ use super::Engine;
 use crate::events;
 use crate::runtime::snapshot::{decode_grid_bin, encode_grid_bin, GridSnapshot};
 
-/// Idle before a circle sleeps itself, when every pane in it is restorable.
+/// Idle before the daemon sleeps a restorable pane, unless terminal.conf's
+/// `seance-auto-sleep-idle` says otherwise.
 pub const AUTO_SLEEP_IDLE_MS: u64 = 12 * 60 * 60 * 1000;
 
 /// `<state-dir>/frozen/<slug>.scg` — the last frame of a sleeping pane.
@@ -43,13 +44,154 @@ fn frozen_path(slug: &str) -> PathBuf {
     frozen_dir().join(format!("{slug}.scg"))
 }
 
+/// `<state-dir>/hosted/<pane_id>.json`: the Claude conversation running in a
+/// pane Seance didn't start as an agent (`claude` typed into a shell, or a
+/// wrapper like `lead-resume`). A SessionStart hook writes
+/// `{"session": "<id>", "cwd": "<dir>"}` on every start, resume and clear.
+pub(super) fn hosted_path(pane_id: &str) -> Option<PathBuf> {
+    let dir = crate::state::state_dir().ok()?.join("hosted");
+    Some(dir.join(format!("{pane_id}.json")))
+}
+
+/// That record, when the file holds one.
+fn hosted_record(pane_id: &str) -> Option<(String, String)> {
+    let text = std::fs::read_to_string(hosted_path(pane_id)?).ok()?;
+    parse_hosted(&text)
+}
+
+pub(crate) fn parse_hosted(text: &str) -> Option<(String, String)> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    let session = v.get("session")?.as_str()?.trim().to_string();
+    let cwd = v.get("cwd")?.as_str()?.trim().to_string();
+    (!session.is_empty() && !cwd.is_empty()).then_some((session, cwd))
+}
+
+/// What the processes under a pane say about the Claude in it: each claude
+/// process's session id and status (from Claude's own
+/// `~/.claude/sessions/<pid>.json`), and whether a Bash tool command is
+/// running (a `shell-snapshots` shell under it). Empty off Linux.
+#[derive(Default)]
+pub(crate) struct ClaudeProcs {
+    pub sessions: Vec<(String, String)>,
+    pub tool_running: bool,
+}
+
+pub(crate) fn claude_procs(root: u32) -> ClaudeProcs {
+    let mut out = ClaudeProcs::default();
+    let Ok(dir) = std::fs::read_dir("/proc") else {
+        return out;
+    };
+    // pid → parent, for every process, to walk down from the pane's shell.
+    let mut parent = std::collections::HashMap::new();
+    for e in dir.flatten() {
+        let Ok(pid) = e.file_name().to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            continue;
+        };
+        // The command name can hold spaces and parens: fields follow the last ')'.
+        if let Some(ppid) = stat
+            .rsplit_once(')')
+            .and_then(|(_, rest)| rest.split_whitespace().nth(1))
+            .and_then(|p| p.parse::<u32>().ok())
+        {
+            parent.insert(pid, ppid);
+        }
+    }
+    let under = |mut pid: u32| {
+        for _ in 0..64 {
+            if pid == root {
+                return true;
+            }
+            match parent.get(&pid) {
+                Some(&p) if p > 1 => pid = p,
+                _ => return false,
+            }
+        }
+        false
+    };
+    let sessions_dir = PathBuf::from(shellexpand::tilde("~/.claude/sessions").into_owned());
+    for &pid in parent.keys() {
+        if !under(pid) {
+            continue;
+        }
+        let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
+        if comm.trim() == "claude" {
+            if let Some((id, status)) =
+                std::fs::read_to_string(sessions_dir.join(format!("{pid}.json")))
+                    .ok()
+                    .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                    .and_then(|v| {
+                        Some((
+                            v.get("sessionId")?.as_str()?.to_string(),
+                            v.get("status")
+                                .and_then(|s| s.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                        ))
+                    })
+            {
+                out.sessions.push((id, status));
+            }
+        } else if std::fs::read(format!("/proc/{pid}/cmdline"))
+            .is_ok_and(|c| String::from_utf8_lossy(&c).contains("shell-snapshots"))
+        {
+            out.tool_running = true;
+        }
+    }
+    out
+}
+
+/// A Claude title: its idle ✳ or a working spinner. A pane whose title is
+/// back to the shell's (`user@host:~`) left Claude, so its record is stale.
+pub(crate) fn title_is_claude(title: Option<&str>) -> bool {
+    title.is_some_and(|t| {
+        t.trim_start().starts_with('\u{2733}') || seance_core::util::title_looks_busy(t)
+    })
+}
+
+/// Two folder names for the same place (`~` against the full path).
+fn same_dir(a: &str, b: &str) -> bool {
+    let full = |s: &str| {
+        let p = PathBuf::from(shellexpand::tilde(s).into_owned());
+        p.canonicalize().unwrap_or(p)
+    };
+    full(a) == full(b)
+}
+
+/// What a hosted pane wakes into: Claude resumed in its own folder, with a
+/// login shell back underneath once it exits. The shell is a fresh one: its
+/// old variables, jobs and history went with the sleep.
+pub(crate) fn hosted_launch(session: &str, cwd: &str) -> String {
+    let q = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+    format!(
+        "bash -c {} {} {}",
+        q("cd -- \"$0\" && claude --resume \"$1\"; exec bash -l"),
+        q(cwd),
+        q(session)
+    )
+}
+
+/// Auto-sleep's knobs, from the daemon machine's terminal.conf:
+/// `seance-auto-sleep-idle` (default [`AUTO_SLEEP_IDLE_MS`]) and
+/// `seance-auto-sleep-skip` (circles never auto-slept).
+pub fn auto_sleep_idle_ms() -> u64 {
+    crate::term_config::get()
+        .seance_auto_sleep_idle_ms
+        .unwrap_or(AUTO_SLEEP_IDLE_MS)
+}
+
 impl Engine {
     /// Can this pane be put back exactly as it is?
     ///
     /// * file pane — yes, it's a path and a viewer, there is no process.
     /// * claude / grok / codex pane with a session id **and its conversation
     ///   on disk** — yes, a resume lands on the same conversation.
-    /// * anything else (a shell, another agent, an agent pane that was never
+    /// * Claude typed into a shell or started by a wrapper (`lead-resume`) —
+    ///   yes while it is still running there and its session record
+    ///   (`hosted/<pane_id>.json`) names that live conversation.
+    /// * anything else (a bare shell, another agent, an agent pane that was never
     ///   prompted) — no. Sleeping it would throw away state nothing can
     ///   rebuild, so it isn't offered.
     pub fn pane_restorable(&self, slug: &str) -> bool {
@@ -60,7 +202,18 @@ impl Engine {
             return true;
         }
         let Some(agent) = Agent::of(&p.command) else {
-            return false;
+            // Claude hosted in a shell or wrapper: restorable while it is
+            // still the thing running and its conversation is on disk.
+            // Cheap: this runs for every pane on every state push. Sleeping
+            // checks the live process too (`hosted_live`). A pane already
+            // asleep was checked when it went to sleep.
+            if p.asleep {
+                return hosted_record(&p.pane_id).is_some();
+            }
+            let title = p.session.as_ref().and_then(|s| s.title());
+            return title_is_claude(title.as_deref())
+                && hosted_record(&p.pane_id)
+                    .is_some_and(|(id, cwd)| transcript_exists(Agent::Claude, &cwd, &id));
         };
         p.agent_session
             .as_ref()
@@ -100,9 +253,10 @@ impl Engine {
         if self.panes[idx].asleep {
             return Ok(false);
         }
-        if !self.pane_restorable(slug) {
+        if !self.pane_restorable(slug) || !self.hosted_live(&self.panes[idx]) {
             bail!("pane '{slug}' can't be restored, so it won't be slept");
         }
+
         // Freeze BEFORE the process dies — after shutdown the grid is gone.
         if let Some(snap) = self.snapshot_pane(slug) {
             self.freeze_grid(slug, snap);
@@ -132,7 +286,7 @@ impl Engine {
         if !self.panes[idx].asleep {
             return Ok(false);
         }
-        let (kind, cwd, command, workspace, session_id) = {
+        let (kind, cwd, command, workspace, session_id, pane_id) = {
             let p = &self.panes[idx];
             (
                 p.kind.clone(),
@@ -140,6 +294,7 @@ impl Engine {
                 p.command.clone(),
                 p.workspace.clone(),
                 p.agent_session.clone(),
+                p.pane_id.clone(),
             )
         };
 
@@ -160,9 +315,23 @@ impl Engine {
 
         // Resume only when the conversation is on disk: a missing one makes
         // the agent exit non-zero, which would close the pane we are bringing back.
-        let launch = match session_id.as_deref() {
-            Some(id) => launch_with_session(&command, &cwd, id),
-            None => command.clone(),
+        // Claude hosted in a shell or wrapper comes back from its record:
+        // nothing can rewrite it while the pane sleeps, so it still names the
+        // conversation the pane went to sleep on.
+        // A Claude agent pane does the same after a /clear, which moves it to
+        // a new conversation its spawn-time session id doesn't know.
+        let agent = Agent::of(&command);
+        let record = hosted_record(&pane_id)
+            .filter(|(id, rec_cwd)| transcript_exists(Agent::Claude, rec_cwd, id));
+        let launch = match (agent, record, session_id.as_deref()) {
+            (None, Some((id, rec_cwd)), _) => hosted_launch(&id, &rec_cwd),
+            (Some(Agent::Claude), Some((id, rec_cwd)), _) if same_dir(&rec_cwd, &cwd) => {
+                // Keep it, so a cold restart resumes this one too.
+                self.panes[idx].agent_session = Some(id.clone());
+                launch_with_session(&command, &cwd, &id)
+            }
+            (_, _, Some(id)) => launch_with_session(&command, &cwd, id),
+            _ => command.clone(),
         };
         let session =
             self.spawn_terminal_session(slug, &launch, &cwd, &workspace, &self.panes[idx].pane_id)?;
@@ -174,6 +343,10 @@ impl Engine {
         // one scrolls past underneath, and only local echo (which leaves rev
         // alone) puts a character or two on the glass.
         session.seed_rev(self.frozen_grid(slug).map(|s| s.rev).unwrap_or(0));
+        // Waking is activity: the sweep must not put it straight back.
+        let now = now_ms();
+        self.pane_busy_at.insert(slug.to_string(), now);
+        self.pane_woke_at.insert(slug.to_string(), now);
         let pane = &mut self.panes[idx];
         pane.session = Some(session);
         pane.asleep = false;
@@ -228,58 +401,113 @@ impl Engine {
     }
 
     /// True while any pane of the circle is asleep.
+    #[cfg(test)]
     pub fn workspace_asleep(&self, workspace: &str) -> bool {
         self.panes
             .iter()
             .any(|p| p.workspace == workspace && p.asleep)
     }
 
-    /// Circles idle longer than `idle_ms` whose every pane is restorable.
+    /// Panes idle longer than `idle_ms` that can be put back exactly.
     ///
-    /// Idle is the daemon's own clock — last real pane output, floored by last
-    /// human input — the same pair the sidebar shows, so "12h since anything
-    /// happened here" means what it says on the row.
-    pub fn auto_sleep_candidates(&self, idle_ms: u64, now: u64) -> Vec<String> {
-        let mut names: Vec<String> = self
-            .panes
+    /// Per pane, not per circle: a circle's Mac panes and shells can't sleep,
+    /// and they shouldn't keep its idle Claude panes awake. Idle is the later
+    /// of the circle's last human input and the pane's last busy change (the
+    /// daemon's start when it saw none); screen output doesn't count, since a
+    /// Claude status line redraws all the time. Never: a busy pane, one
+    /// waiting on the human (needs-human, blocked, risky, an open ask), one
+    /// with queued tasks, the focused pane, or a circle in `skip`.
+    pub fn auto_sleep_candidates(&self, idle_ms: u64, now: u64, skip: &[String]) -> Vec<String> {
+        self.panes
             .iter()
-            .map(|p| p.workspace.clone())
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        names.retain(|ws| {
-            if self.workspace_asleep(ws) || !self.workspace_restorable(ws) {
-                return false;
-            }
-            let last = self
-                .workspace_output
-                .get(ws)
-                .copied()
-                .unwrap_or(0)
-                .max(self.workspace_touch_ms.get(ws).copied().unwrap_or(0));
-            // Never slept an unclocked circle: no observation is not evidence
-            // of idleness.
-            last > 0 && now.saturating_sub(last) >= idle_ms
-        });
-        names
+            .filter(|p| {
+                if p.asleep || p.kind == "file" || skip.contains(&p.workspace) {
+                    return false;
+                }
+                let slug = p.slug.as_str();
+                let waiting =
+                    self.statuses.get(slug).is_some_and(|s| {
+                        matches!(s.0.as_str(), "needs-human" | "blocked" | "risky")
+                    }) || self
+                        .asks
+                        .iter()
+                        .any(|a| a.answer.is_none() && a.from == slug);
+                if self.pane_busy.contains(slug)
+                    || waiting
+                    || !self.queued_for(slug).is_empty()
+                    || self.focused_pane.as_deref() == Some(slug)
+                {
+                    return false;
+                }
+                let touch = self
+                    .workspace_touch_ms
+                    .get(&p.workspace)
+                    .copied()
+                    .unwrap_or(0);
+                let busy = self
+                    .pane_busy_at
+                    .get(slug)
+                    .copied()
+                    .unwrap_or(self.started_ms);
+                now.saturating_sub(touch.max(busy)) >= idle_ms
+                    && self.pane_quiet(p)
+                    && self.pane_restorable(slug)
+            })
+            .map(|p| p.slug.clone())
+            .collect()
     }
 
-    /// One sweep. Returns the circles it put to sleep.
-    pub fn auto_sleep_sweep(&mut self, idle_ms: u64) -> Vec<String> {
+    /// For Claude hosted in a shell or wrapper: the session record names the
+    /// conversation running there now. A pane that left that Claude (exited,
+    /// or went on to ssh into another) would otherwise wake into an old one.
+    /// True for every other pane. Walks /proc, so only sleeping calls it.
+    fn hosted_live(&self, p: &super::EnginePane) -> bool {
+        if Agent::of(&p.command).is_some() || p.kind == "file" {
+            return true;
+        }
+        let Some((id, _)) = hosted_record(&p.pane_id) else {
+            return false;
+        };
+        p.session
+            .as_ref()
+            .and_then(|s| s.child_pid())
+            .is_some_and(|pid| claude_procs(pid).sessions.iter().any(|(s, _)| *s == id))
+    }
+
+    /// Nothing is happening in the pane right now, beyond its title: the
+    /// screen reads idle with nothing typed and waiting, and no Claude under it
+    /// is busy or running a Bash command (a background job or a Monitor loop
+    /// keeps the title idle). A stub pane with no process (tests) is quiet.
+    fn pane_quiet(&self, p: &super::EnginePane) -> bool {
+        let Some(s) = p.session.as_ref() else {
+            return true;
+        };
+        let look = seance_core::agent_state::classify(&s.live_screen_text(), s.title().as_deref());
+        if look.activity != seance_core::agent_state::Activity::Idle || look.queued_input {
+            return false;
+        }
+        let procs = s.child_pid().map(claude_procs).unwrap_or_default();
+        !procs.tool_running && procs.sessions.iter().all(|(_, status)| status == "idle")
+    }
+
+    /// One sweep. Returns the panes it put to sleep.
+    pub fn auto_sleep_sweep(&mut self, idle_ms: u64, skip: &[String]) -> Vec<String> {
         let mut slept = Vec::new();
-        for ws in self.auto_sleep_candidates(idle_ms, now_ms()) {
-            match self.sleep_workspace(&ws) {
-                Ok(n) if n > 0 => {
-                    events::log(
-                        "daemon",
-                        Some(&ws),
-                        None,
-                        "workspace_slept",
-                        format!("{n} panes slept after {}h idle", idle_ms / 3_600_000),
-                    );
-                    slept.push(ws);
-                }
-                _ => {}
+        for slug in self.auto_sleep_candidates(idle_ms, now_ms(), skip) {
+            if let Ok(true) = self.sleep_pane(&slug) {
+                let ws = self
+                    .panes
+                    .iter()
+                    .find(|p| p.slug == slug)
+                    .map(|p| p.workspace.clone());
+                events::log(
+                    "daemon",
+                    ws.as_deref(),
+                    Some(&slug),
+                    "pane_auto_slept",
+                    format!("slept after {}h idle", idle_ms / 3_600_000),
+                );
+                slept.push(slug);
             }
         }
         slept

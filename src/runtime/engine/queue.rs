@@ -56,6 +56,12 @@ pub struct SendQueueState {
     inflight: HashMap<String, Inflight>,
 }
 
+/// How long a woken pane gets to start its agent before the pump treats an
+/// unreadable screen as "not an agent" again.
+const WAKE_SETTLE_MS: u64 = 60_000;
+
+/// How long the pump waits before trying again to wake a pane that wouldn't.
+const WAKE_RETRY_MS: u64 = 5 * 60_000;
 impl Engine {
     /// Cancel the pane's active open task (a new one is replacing it);
     /// returns its id so the replacement can record what it superseded.
@@ -201,6 +207,30 @@ impl Engine {
                 changed = true;
                 continue;
             };
+            // Work for a sleeping pane (a queued task, a message) wakes it;
+            // delivery waits for a later pass, once it is up.
+            if self.panes[idx].asleep {
+                // A daemon notice ("lead of X closed") isn't worth waking a
+                // pane for; a failed wake waits a few minutes before trying again.
+                let wanted =
+                    !self.queued_for(&slug).is_empty()
+                        || self.comms.messages.iter().any(|m| {
+                            m.status == "pending" && m.to_pane == slug && m.kind != "notice"
+                        });
+                let retry = self
+                    .wake_failed_at
+                    .get(&slug)
+                    .is_none_or(|t| now.saturating_sub(*t) >= WAKE_RETRY_MS);
+                if wanted && retry {
+                    if self.wake_pane(&slug).is_ok() {
+                        self.wake_failed_at.remove(&slug);
+                    } else {
+                        self.wake_failed_at.insert(slug.clone(), now);
+                    }
+                    changed = true;
+                }
+                continue;
+            }
             let Some(look) = self.panes[idx]
                 .session
                 .as_ref()
@@ -209,6 +239,15 @@ impl Engine {
             else {
                 continue;
             };
+            // A pane woken in the last minute is still starting its agent,
+            // which can read as Unknown: hold everything until it reads idle.
+            let starting = self
+                .pane_woke_at
+                .get(&slug)
+                .is_some_and(|t| now.saturating_sub(*t) < WAKE_SETTLE_MS);
+            if starting && look.activity != Activity::Idle {
+                continue;
+            }
             if self.send_queue.inflight.contains_key(&slug) {
                 changed |= self.advance_inflight(idx, &slug, look, now);
             } else if !self.queued_for(&slug).is_empty() {

@@ -887,46 +887,79 @@ fn sleeping_keeps_the_pane_and_survives_its_own_exit_event() {
     });
 }
 
-/// The sweep only takes circles that are idle past the threshold AND fully
-/// restorable AND actually clocked — no observation is not evidence of idle.
+/// The sweep takes idle restorable panes one by one: a shell beside them
+/// doesn't block, and busy, waiting, focused, skipped or recently touched
+/// panes stay awake. Screen output never counts as activity.
 #[test]
-fn auto_sleep_takes_only_idle_restorable_clocked_circles() {
+fn auto_sleep_takes_idle_restorable_panes() {
     with_test_state_dir("sleep-sweep", || {
         let scratch = temp_scratch("sleep-sweep");
         let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
-        let idle = eng.push_stub_pane("agent", "idle-circle");
-        let fresh = eng.push_stub_pane("agent", "fresh-circle");
-        let never = eng.push_stub_pane("agent", "unclocked");
-        let shell = eng.push_stub_pane("worker", "has-a-shell");
+        let idle = eng.push_stub_pane("agent", "quiet");
+        let shell = eng.push_stub_pane("worker", "quiet");
+        let busy = eng.push_stub_pane("agent", "busy-circle");
+        let asking = eng.push_stub_pane("agent", "asking-circle");
+        let skipped = eng.push_stub_pane("agent", "l6-leveling");
         let t1 = fake_claude_pane(&mut eng, &idle, "sweep-1");
-        let t2 = fake_claude_pane(&mut eng, &fresh, "sweep-2");
-        let t3 = fake_claude_pane(&mut eng, &never, "sweep-3");
+        let t2 = fake_claude_pane(&mut eng, &busy, "sweep-2");
+        let t3 = fake_claude_pane(&mut eng, &asking, "sweep-3");
+        let t4 = fake_claude_pane(&mut eng, &skipped, "sweep-4");
 
         let now = now_ms();
         let day = 24 * 60 * 60 * 1000;
-        eng.workspace_output.insert("idle-circle".into(), now - day);
-        eng.workspace_output
-            .insert("fresh-circle".into(), now - 1000);
-        eng.workspace_output.insert("has-a-shell".into(), now - day);
-        // `unclocked` deliberately gets no stamp.
+        eng.started_ms = now - day;
+        // Output a second ago is a status line redrawing, not activity.
+        eng.workspace_output.insert("quiet".into(), now - 1000);
+        eng.pane_busy.insert(busy.clone());
+        eng.statuses
+            .insert(asking.clone(), ("needs-human".into(), None));
+        let skip = vec!["l6-leveling".to_string()];
 
-        let idle_ms = 12 * 60 * 60 * 1000;
+        let idle_ms = 6 * 60 * 60 * 1000;
         assert_eq!(
-            eng.auto_sleep_candidates(idle_ms, now),
-            vec!["idle-circle".to_string()]
+            eng.auto_sleep_candidates(idle_ms, now, &skip),
+            vec![idle.clone()]
         );
 
-        // Human input inside the window keeps a circle awake even with no output.
-        eng.workspace_touch_ms
-            .insert("idle-circle".into(), now - 60_000);
-        assert!(eng.auto_sleep_candidates(idle_ms, now).is_empty());
+        // A recent busy change, human input, or focus keeps it awake.
+        eng.pane_busy_at.insert(idle.clone(), now - 60_000);
+        assert!(eng.auto_sleep_candidates(idle_ms, now, &skip).is_empty());
+        eng.pane_busy_at.insert(idle.clone(), now - day);
+        eng.workspace_touch_ms.insert("quiet".into(), now - 60_000);
+        assert!(eng.auto_sleep_candidates(idle_ms, now, &skip).is_empty());
+        eng.workspace_touch_ms.insert("quiet".into(), now - day);
+        eng.focused_pane = Some(idle.clone());
+        assert!(eng.auto_sleep_candidates(idle_ms, now, &skip).is_empty());
+        eng.focused_pane = None;
 
-        let _ = shell;
-        for t in [t1, t2, t3] {
+        // The shell sharing its circle stays up; the Claude pane sleeps.
+        assert_eq!(eng.auto_sleep_sweep(idle_ms, &skip), vec![idle.clone()]);
+        assert!(!eng.panes.iter().find(|p| p.slug == shell).unwrap().asleep);
+
+        for t in [t1, t2, t3, t4] {
             let _ = std::fs::remove_file(t);
         }
         let _ = std::fs::remove_dir_all(&scratch);
     });
+}
+
+#[test]
+fn hosted_claude_records_titles_and_launch() {
+    use super::sleep::{hosted_launch, parse_hosted, title_is_claude};
+    assert_eq!(
+        parse_hosted(r#"{"session":"abc","cwd":"/home/b/x y"}"#),
+        Some(("abc".into(), "/home/b/x y".into()))
+    );
+    assert_eq!(parse_hosted(r#"{"session":"","cwd":"/x"}"#), None);
+    assert_eq!(parse_hosted("not json"), None);
+    assert!(title_is_claude(Some("\u{2733} Q4 roadmap review")));
+    assert!(title_is_claude(Some("\u{25D0} working")));
+    assert!(!title_is_claude(Some("bhanley@omarchy:~")));
+    assert!(!title_is_claude(None));
+    assert_eq!(
+        hosted_launch("abc", "/home/b/it's here"),
+        r#"bash -c 'cd -- "$0" && claude --resume "$1"; exec bash -l' '/home/b/it'\''s here' 'abc'"#
+    );
 }
 
 /// Give a stub pane the shape of a resumable claude pane: a claude command, a

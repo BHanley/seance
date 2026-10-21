@@ -159,7 +159,7 @@ fn run_daemon_inner(args: Vec<String>) -> Result<()> {
 
     // Host circle modes (AFK) the host owns: poll its state_cmd.
     modewatch::start_mode_poller(Arc::clone(&engine));
-    // Idle circles stop holding RAM (12h; restorable circles only).
+    // Idle Claude panes stop holding RAM (terminal.conf `seance-auto-sleep-idle`).
     sleepsweep::start_sleep_sweeper(Arc::clone(&engine));
     agentsessions::start_agent_session_watcher(Arc::clone(&engine));
     // `send --queue`: deliver queued tasks when their pane goes idle.
