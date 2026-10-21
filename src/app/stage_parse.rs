@@ -397,17 +397,8 @@ pub(super) fn latest_finish(pad: &str, max: usize) -> Option<Vec<String>> {
         let t = l.trim();
         t.starts_with("<!--") && t.ends_with("-->")
     };
-    let is_finish = |l: &str| {
-        is_header(l)
-            && l.trim()
-                .trim_end_matches("-->")
-                .trim_end()
-                .rsplit(" · ")
-                .next()
-                == Some("finish")
-    };
     let lines: Vec<&str> = pad.lines().collect();
-    let start = lines.iter().rposition(|l| is_finish(l))? + 1;
+    let start = lines.iter().rposition(|l| finish_time(l).is_some())? + 1;
     let mut body: Vec<&str> = Vec::new();
     for (i, line) in lines.iter().enumerate().skip(start) {
         if line.trim() == "---" && lines.get(i + 1).is_some_and(|n| is_header(n)) {
@@ -434,6 +425,41 @@ pub(super) fn latest_finish(pad: &str, max: usize) -> Option<Vec<String>> {
         out.push("…".into());
     }
     Some(out)
+}
+
+/// When the newest finish note was filed, as "12:16".
+pub(super) fn latest_finish_at(pad: &str) -> Option<String> {
+    let t = pad.lines().rev().find_map(finish_time)?;
+    Some(t.rsplit_once(':').map_or(t, |(hm, _)| hm).to_string())
+}
+
+/// The peek card's "report filed" label. Headers carry no date, so a time
+/// later than now (`HH:MM` both) can only be from an earlier day.
+pub(super) fn filed_label(filed: &str, now: &str) -> String {
+    if filed > now {
+        format!("report filed {filed}, an earlier day")
+    } else {
+        format!("report filed {filed}")
+    }
+}
+
+/// Whether the hook's reply line (markdown marks stripped, trimmed, cut
+/// at 140 chars) is just the finish note's first line again.
+pub(super) fn reply_repeats(reply: &str, first: &str) -> bool {
+    let first: String = first
+        .chars()
+        .filter(|c| !matches!(c, '*' | '#' | '`'))
+        .collect();
+    let reply = reply.trim();
+    !reply.is_empty() && first.trim().starts_with(reply)
+}
+
+/// A finish section's header (`<!-- who · 12:16:49 · finish -->`): its time.
+fn finish_time(l: &str) -> Option<&str> {
+    let t = l.trim().strip_prefix("<!--")?.strip_suffix("-->")?.trim();
+    let mut parts = t.rsplit(" · ");
+    parts.next().filter(|p| *p == "finish")?;
+    parts.next().map(str::trim)
 }
 
 /// A crew member's sort band: waiting on you, then working, then finished,
@@ -825,6 +851,17 @@ a later note\n";
         );
         assert_eq!(latest_finish("---\n<!-- a · 1 · finish -->\n\n", 12), None);
         assert_eq!(latest_finish("", 12), None);
+        assert_eq!(latest_finish_at(PAD).as_deref(), Some("12:16"));
+        assert_eq!(latest_finish_at("plain pad\n<!-- a · 1 -->\n"), None);
+        assert_eq!(filed_label("12:16", "21:30"), "report filed 12:16");
+        assert_eq!(
+            filed_label("22:40", "09:05"),
+            "report filed 22:40, an earlier day"
+        );
+        assert!(reply_repeats("Done: shipped it", "**Done:** shipped it"));
+        assert!(reply_repeats("Shipped", "## Shipped"));
+        assert!(!reply_repeats("Something newer", "Shipped it."));
+        assert!(!reply_repeats("", "Shipped it."));
     }
 
     #[test]

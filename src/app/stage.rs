@@ -22,9 +22,10 @@ use crate::theme::SeancePalette;
 
 use super::actions::{ActDeleteSpace, ActRenameSpace, ActSpaceDefault};
 use super::stage_parse::{
-    circle_folder, crew_order, done_chips, ellipsize, fit_pills, is_bare_shell, jump_ring,
-    last_output_lines, latest_finish, lead_log_path, next_waiting, pane_host, parse_health,
-    parse_lead_log, pill_width, CrewBand, Health, HealthLevel, LeadLine,
+    circle_folder, crew_order, done_chips, ellipsize, filed_label, fit_pills, is_bare_shell,
+    jump_ring, last_output_lines, latest_finish, latest_finish_at, lead_log_path, next_waiting,
+    pane_host, parse_health, parse_lead_log, pill_width, reply_repeats, CrewBand, Health,
+    HealthLevel, LeadLine,
 };
 use super::util::{tip, tip_s, unread_menu};
 use super::views::ViewMode;
@@ -1388,7 +1389,8 @@ impl SeanceApp {
     }
 
     /// A done chip's peek card, over the top of the terminal so the PTY
-    /// keeps its size: the pane's latest finish note, Open and Seen. It
+    /// keeps its size: the pane's latest finish note and when it was
+    /// filed, its last reply's first line, Open and Seen. It
     /// takes no focus; keys stay with the pane on stage.
     /// `open` is the chip's pane now, for Open.
     fn render_stage_peek(&self, open: Option<String>, cx: &Context<Self>) -> Option<AnyElement> {
@@ -1399,6 +1401,27 @@ impl SeanceApp {
             .pad
             .as_deref()
             .and_then(|pad| latest_finish(pad, PEEK_LINES));
+        let filed = peek.pad.as_deref().and_then(latest_finish_at).map(|t| {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis() as u64);
+            let now = crate::events::fmt_time(now_ms);
+            filed_label(&t, &now[..5])
+        });
+        // The first line of the pane's last reply (its status note), so a
+        // pane that kept talking after its last report doesn't look stuck
+        // on it. Working or asking replaces that note.
+        let reply = self
+            .statuses
+            .get(&peek.pane)
+            .and_then(|s| s.note.as_deref())
+            .and_then(|n| n.strip_prefix("turn ended: "))
+            .filter(|r| {
+                note.as_ref()
+                    .and_then(|n| n.first())
+                    .is_none_or(|first| !reply_repeats(r, first))
+            })
+            .map(str::to_string);
         let name = self
             .panes
             .iter()
@@ -1474,8 +1497,34 @@ impl SeanceApp {
                             .font_semibold()
                             .text_color(SeancePalette::text())
                             .child(name),
-                    ),
+                    )
+                    .children(filed.map(|t| {
+                        div()
+                            .flex_none()
+                            .ml_auto()
+                            .text_color(SeancePalette::text_faint())
+                            .child(t)
+                    })),
             )
+            .children(reply.map(|r| {
+                div()
+                    .flex()
+                    .gap_1()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_color(SeancePalette::text_faint())
+                            .child("Last reply"),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(SeancePalette::text())
+                            .child(r),
+                    )
+            }))
             .child(body)
             .child(buttons)
             .into_any_element()
