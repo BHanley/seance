@@ -875,6 +875,7 @@ fn sleeping_keeps_the_pane_and_survives_its_own_exit_event() {
         // the auto-close path would delete the pane we just slept.
         eng.handle_session_event(SessionEvent::Exited {
             slug: slug.clone(),
+            generation: 0,
             code: Some(0),
         });
         assert!(eng.panes.iter().any(|p| p.slug == slug && p.asleep));
@@ -883,6 +884,54 @@ fn sleeping_keeps_the_pane_and_survives_its_own_exit_event() {
         assert!(!eng.sleep_pane(&slug).unwrap());
 
         let _ = std::fs::remove_file(&transcript);
+        let _ = std::fs::remove_dir_all(&scratch);
+    });
+}
+
+/// A pane that woke on a new session must not die of the old session's exit.
+/// Shutdown is async, so the slept PTY's `Exited` can land after the wake;
+/// only an exit from the session the pane holds now closes it.
+#[test]
+fn a_late_exit_from_the_replaced_session_leaves_the_woken_pane() {
+    with_test_state_dir("sleep-race", || {
+        let scratch = temp_scratch("sleep-race");
+        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
+        let slug = eng.push_stub_pane("agent", "lab");
+        let (workspace, pane_id) = {
+            let p = eng.panes.iter().find(|p| p.slug == slug).unwrap();
+            (p.workspace.clone(), p.pane_id.clone())
+        };
+        let cwd = std::env::temp_dir().to_string_lossy().to_string();
+        let spawn = |eng: &Engine| {
+            eng.spawn_terminal_session(&slug, "sleep 30", &cwd, &workspace, &pane_id)
+                .unwrap()
+        };
+        let old = spawn(&eng);
+        let old_gen = old.generation;
+        old.shutdown();
+        let new = spawn(&eng);
+        let new_gen = new.generation;
+        assert_ne!(old_gen, new_gen);
+        let idx = eng.panes.iter().position(|p| p.slug == slug).unwrap();
+        eng.panes[idx].session = Some(new);
+
+        eng.handle_session_event(SessionEvent::Exited {
+            slug: slug.clone(),
+            generation: old_gen,
+            code: None,
+        });
+        assert!(eng.panes.iter().any(|p| p.slug == slug), "woken pane kept");
+
+        eng.handle_session_event(SessionEvent::Exited {
+            slug: slug.clone(),
+            generation: new_gen,
+            code: Some(0),
+        });
+        assert!(
+            !eng.panes.iter().any(|p| p.slug == slug),
+            "its own exit closes it"
+        );
+
         let _ = std::fs::remove_dir_all(&scratch);
     });
 }

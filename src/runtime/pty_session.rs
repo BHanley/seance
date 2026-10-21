@@ -34,6 +34,11 @@ use super::upgrade_in_progress;
 
 const SCROLL_HISTORY: usize = 10_000;
 
+/// Hands every session its own number. A pane that sleeps and wakes gets a
+/// new session under the same slug, and the old PTY's exit can land after the
+/// new one is running; the number is how the daemon tells the two apart.
+static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
+
 /// Events surfaced to the engine / GUI broadcaster.
 #[derive(Clone, Debug)]
 pub enum SessionEvent {
@@ -61,6 +66,8 @@ pub enum SessionEvent {
     },
     Exited {
         slug: String,
+        /// [`PtySession::generation`] of the session that died.
+        generation: u64,
         code: Option<i32>,
     },
     /// Recorder-observed real output for a pane (unix ms). Forwarded from the
@@ -89,6 +96,7 @@ pub enum SessionEvent {
 
 struct Listener {
     slug: String,
+    generation: u64,
     tx: Sender<SessionEvent>,
     /// Write-back path for OSC replies / PtyWrite (must reach the PTY).
     write_tx: IoSender,
@@ -121,12 +129,14 @@ impl EventListener for Listener {
             AlacEvent::ChildExit(status) => {
                 let _ = self.tx.send(SessionEvent::Exited {
                     slug: self.slug.clone(),
+                    generation: self.generation,
                     code: status.code(),
                 });
             }
             AlacEvent::Exit => {
                 let _ = self.tx.send(SessionEvent::Exited {
                     slug: self.slug.clone(),
+                    generation: self.generation,
                     code: None,
                 });
             }
@@ -234,6 +244,9 @@ impl IoSender {
 /// One live terminal session.
 pub struct PtySession {
     pub slug: String,
+    /// This session's spawn number (see [`NEXT_GENERATION`]). Its `Exited`
+    /// carries it.
+    pub generation: u64,
     term: Arc<FairMutex<Term<Listener>>>,
     io_tx: IoSender,
     _io_thread: Option<JoinHandle<()>>,
@@ -416,6 +429,7 @@ impl PtySession {
         ghost: Option<GhostSnap>,
         event_tx: Sender<SessionEvent>,
     ) -> Result<Self> {
+        let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
         let title = Arc::new(Mutex::new(title_init));
         // I/O channel first so the Term listener can write OSC replies back.
         let (tx, io_rx) = mpsc::channel::<IoMsg>();
@@ -426,6 +440,7 @@ impl PtySession {
         };
         let listener = Listener {
             slug: slug.clone(),
+            generation,
             tx: event_tx.clone(),
             write_tx: io_tx.clone(),
             title: title.clone(),
@@ -479,6 +494,7 @@ impl PtySession {
                     exited_io,
                     io_released_io,
                     slug_io,
+                    generation,
                     event_tx_io,
                     cols_io,
                     rows_io,
@@ -488,6 +504,7 @@ impl PtySession {
 
         Ok(Self {
             slug,
+            generation,
             term,
             io_tx,
             _io_thread: Some(io_thread),
@@ -839,6 +856,7 @@ fn io_loop(
     exited: Arc<AtomicBool>,
     io_released: Arc<AtomicBool>,
     slug: String,
+    generation: u64,
     event_tx: Sender<SessionEvent>,
     cols: Arc<Mutex<u16>>,
     rows: Arc<Mutex<u16>>,
@@ -930,6 +948,7 @@ fn io_loop(
                     if !exited.swap(true, Ordering::SeqCst) {
                         let _ = event_tx.send(SessionEvent::Exited {
                             slug: slug.clone(),
+                            generation,
                             code: None,
                         });
                     }
@@ -954,6 +973,7 @@ fn io_loop(
                     if !exited.swap(true, Ordering::SeqCst) {
                         let _ = event_tx.send(SessionEvent::Exited {
                             slug: slug.clone(),
+                            generation,
                             code: None,
                         });
                     }
@@ -968,6 +988,7 @@ fn io_loop(
                     if !exited.swap(true, Ordering::SeqCst) {
                         let _ = event_tx.send(SessionEvent::Exited {
                             slug: slug.clone(),
+                            generation,
                             code: status.code(),
                         });
                     }
@@ -987,6 +1008,7 @@ fn io_loop(
                     };
                     let _ = event_tx.send(SessionEvent::Exited {
                         slug: slug.clone(),
+                        generation,
                         code,
                     });
                 }

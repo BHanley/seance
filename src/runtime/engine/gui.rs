@@ -875,11 +875,23 @@ impl Engine {
                     self.broadcast_grid(s);
                 }
             }
-            SessionEvent::Exited { slug, code } => {
+            SessionEvent::Exited {
+                slug,
+                generation,
+                code,
+            } => {
                 // Sleeping a pane kills its child, which lands here. That exit
                 // is the point, not a death — the pane keeps its identity and
                 // its frozen frame, so it must NOT be auto-closed.
-                if self.panes.iter().any(|p| p.slug == *slug && p.asleep) {
+                // The same exit can also arrive after the pane woke on a new
+                // session: it belongs to the old PTY, so the generation decides.
+                if self.panes.iter().any(|p| {
+                    p.slug == *slug
+                        && (p.asleep
+                            || p.session
+                                .as_ref()
+                                .is_some_and(|s| s.generation != *generation))
+                }) {
                     return;
                 }
                 self.record_grid_tap(&slug.clone(), true);

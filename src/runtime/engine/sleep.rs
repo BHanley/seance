@@ -265,7 +265,7 @@ impl Engine {
         pane.asleep = true;
         // `asleep` is set first on purpose: shutting the PTY down fires
         // `SessionEvent::Exited`, whose handler auto-closes panes. That guard
-        // reads this flag.
+        // reads this flag, and once the pane wakes, the session generation.
         if let Some(s) = pane.session.take() {
             s.shutdown();
         }
