@@ -19,6 +19,7 @@ use gpui::{
 use gpui_component::{ActiveTheme as _, StyledExt as _};
 
 use crate::events::{self, Event};
+use crate::gui_client::fs_not_found;
 use crate::remote_term_view::OverviewThumb;
 use crate::theme::SeancePalette;
 
@@ -266,16 +267,25 @@ impl SeanceApp {
                             .into_iter()
                             .filter_map(|slug| {
                                 let path = Self::scratch_path(&slug, "md");
-                                // A missing pad (or a failed stat) has nothing.
-                                let mtime = client.fs_stat(&path).ok()??;
+                                // A failed read keeps what the card showed; only
+                                // a missing pad has nothing.
+                                let kept = had.remove(&slug);
+                                let mtime = match client.fs_stat(&path) {
+                                    Ok(Some(m)) => m,
+                                    Ok(None) => return None,
+                                    Err(_) => return kept.map(|o| (slug, o)),
+                                };
                                 // Unchanged since the last read: keep it.
-                                let same = had.get(&slug).is_some_and(|o| o.0 == mtime);
-                                if same && mtime.is_some() {
-                                    let old = had.remove(&slug)?;
-                                    return Some((slug, old));
+                                if mtime.is_some() && kept.as_ref().is_some_and(|o| o.0 == mtime) {
+                                    return kept.map(|o| (slug, o));
                                 }
-                                let (pad, mtime) = client.fs_read_string(&path).ok()?;
-                                Some((slug, (mtime, finish_excerpt(&pad, RESULT_LINES))))
+                                match client.fs_read_string(&path) {
+                                    Ok((pad, mtime)) => {
+                                        Some((slug, (mtime, finish_excerpt(&pad, RESULT_LINES))))
+                                    }
+                                    Err(e) if fs_not_found(&e) => None,
+                                    Err(_) => kept.map(|o| (slug, o)),
+                                }
                             })
                             .collect::<HashMap<_, _>>()
                     })
@@ -310,17 +320,29 @@ impl SeanceApp {
             self.wall.lead_circles = circles.to_vec();
             let client = Arc::clone(&self.client);
             let circles = circles.to_vec();
+            let mut had = self.wall.lead_lines.clone();
             cx.spawn(async move |this, cx| {
                 let lines = cx
                     .background_executor()
                     .spawn(async move {
-                        let Ok((text, _)) = client.fs_read_string(&map) else {
-                            return HashMap::new();
+                        // A failed read keeps each card's line; a missing map
+                        // or log clears it.
+                        let text = match client.fs_read_string(&map) {
+                            Ok((text, _)) => Some(text),
+                            Err(e) if fs_not_found(&e) => return HashMap::new(),
+                            Err(_) => None,
                         };
                         circles
                             .into_iter()
                             .filter_map(|c| {
-                                Some((c.clone(), read_lead_line(&client, &map, &text, &c)?))
+                                let kept = had.remove(&c);
+                                let line = match &text {
+                                    Some(text) => {
+                                        read_lead_line(&client, &map, text, &c).unwrap_or(kept)
+                                    }
+                                    None => kept,
+                                };
+                                Some((c, line?))
                             })
                             .collect::<HashMap<_, _>>()
                     })

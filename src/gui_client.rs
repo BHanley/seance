@@ -600,6 +600,12 @@ impl GuiClient {
 /// Default budget for small fs bridge ops (reads, writes, stats).
 const FS_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Whether an fs bridge error means the file isn't there, as opposed to a
+/// call that failed or timed out (a tunnel blip) and says nothing about it.
+pub fn fs_not_found(e: &anyhow::Error) -> bool {
+    e.to_string().contains("(os error 2)")
+}
+
 // ---------------------------------------------------------------------------
 // connection supervisor
 // ---------------------------------------------------------------------------
@@ -982,5 +988,17 @@ mod tests {
         preflight(&path).expect("a wordless close is not a refusal");
         let _ = h.join();
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// The daemon's read error for a missing file counts as gone; a timeout
+    /// or a dropped connection doesn't.
+    #[test]
+    fn only_a_missing_file_is_not_found() {
+        let path = std::env::temp_dir().join("seance-no-such-file-here");
+        let io = std::fs::read(&path).unwrap_err();
+        // Same shape as the daemon's `FsOp::Read` error.
+        assert!(fs_not_found(&anyhow::anyhow!("read {path:?}: {io}")));
+        assert!(!fs_not_found(&anyhow::anyhow!("fs op timed out")));
+        assert!(!fs_not_found(&anyhow::anyhow!("daemon connection lost")));
     }
 }

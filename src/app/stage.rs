@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use gpui::{div, prelude::*, px, relative, AnyElement, Context, Hsla, SharedString, Window};
 use gpui_component::{input::Input, menu::ContextMenuExt as _, ActiveTheme as _, StyledExt as _};
 
+use crate::gui_client::fs_not_found;
 use crate::pane::{Pane, PaneBody};
 use crate::runtime::snapshot::GridSnapshot;
 use crate::theme::SeancePalette;
@@ -419,8 +420,11 @@ impl SeanceApp {
                     let line = cx
                         .background_executor()
                         .spawn(async move {
-                            let (text, _) = client.fs_read_string(&map).ok()?;
-                            read_lead_line(&client, &map, &text, &circle)
+                            match client.fs_read_string(&map) {
+                                Ok((text, _)) => read_lead_line(&client, &map, &text, &circle),
+                                Err(e) if fs_not_found(&e) => Some(None),
+                                Err(_) => None,
+                            }
                         })
                         .await;
                     let Some(this) = this.upgrade() else { return };
@@ -431,6 +435,8 @@ impl SeanceApp {
                         if app.selected_workspace.as_ref() != Some(&ws) {
                             cx.notify();
                         }
+                        // A failed read keeps the card as it was.
+                        let Some(line) = line else { return };
                         let fresh = Some((ws, line));
                         if app.stage.lead_log != fresh {
                             app.stage.lead_log = fresh;
@@ -462,13 +468,18 @@ impl SeanceApp {
                     let health = cx
                         .background_executor()
                         .spawn(async move {
-                            let (text, _) = client.fs_read_string(&path).ok()?;
-                            parse_health(&text)
+                            match client.fs_read_string(&path) {
+                                Ok((text, _)) => Some(parse_health(&text)),
+                                Err(e) if fs_not_found(&e) => Some(None),
+                                Err(_) => None,
+                            }
                         })
                         .await;
                     let Some(this) = this.upgrade() else { return };
                     this.update(cx, |app: &mut SeanceApp, cx| {
                         app.stage.health_busy = false;
+                        // A failed read keeps the last report on screen.
+                        let Some(health) = health else { return };
                         if app.stage.health != health {
                             app.stage.health = health;
                             cx.notify();
@@ -2153,16 +2164,23 @@ impl SeanceApp {
 }
 
 /// The newest Doing / Next / Waiting on for `circle`, from the circle map
-/// text already read from `map`. Runs off the UI thread.
+/// text already read from `map`. Runs off the UI thread. `None` when the read
+/// failed and the caller should keep what it showed; `Some(None)` when there
+/// is no log to show.
 pub(super) fn read_lead_line(
     client: &crate::gui_client::GuiClient,
     map: &str,
     map_text: &str,
     circle: &str,
-) -> Option<LeadLine> {
-    let folder = circle_folder(map_text, circle)?;
-    let (log, _) = client.fs_read_string(&lead_log_path(map, &folder)).ok()?;
-    parse_lead_log(&log)
+) -> Option<Option<LeadLine>> {
+    let Some(folder) = circle_folder(map_text, circle) else {
+        return Some(None);
+    };
+    match client.fs_read_string(&lead_log_path(map, &folder)) {
+        Ok((log, _)) => Some(parse_lead_log(&log)),
+        Err(e) if fs_not_found(&e) => Some(None),
+        Err(_) => None,
+    }
 }
 
 /// Terminals that can take the stage: not files, not popped out.
