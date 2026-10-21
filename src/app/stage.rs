@@ -268,7 +268,7 @@ impl SeanceApp {
     /// space, in the needs-you bar's order. Classic and Stage open it like
     /// the chip's Open; the Wall only selects its circle's tile.
     pub(super) fn jump_next_waiting(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let chips = self.waiting_list();
+        let (chips, _) = self.waiting_list();
         let pairs: Vec<(&str, Option<&str>)> = chips
             .iter()
             .map(|w| (w.circle.as_str(), w.pane.as_deref()))
@@ -635,6 +635,13 @@ impl SeanceApp {
         out
     }
 
+    /// A done chip that names a pane that finished, not the lead standing in
+    /// for a circle's leftover mark: only that pane can be snoozed.
+    fn real_done(&self, slug: &str) -> bool {
+        self.done_unseen.contains(slug)
+            || self.statuses.get(slug).is_some_and(|s| s.state == "done")
+    }
+
     /// Finished out of sight and not back at work or asking since.
     fn finished_unseen(&self, slug: &str) -> bool {
         self.done_unseen.contains(slug)
@@ -666,12 +673,16 @@ impl SeanceApp {
                 .map(|p| (p.workspace.as_str(), p.slug.as_str()))
                 .collect()
         };
-        let unseen = in_order(&|p| self.done_unseen.contains(&p.slug));
-        let status_done = in_order(&|p| {
+        let mut unseen = in_order(&|p| self.done_unseen.contains(&p.slug));
+        let mut status_done = in_order(&|p| {
             self.statuses
                 .get(&p.slug)
                 .is_some_and(|s| s.state == "done")
         });
+        // A circle's chip names its first done pane: not a snoozed one while
+        // another is there.
+        unseen.sort_by_key(|(_, s)| self.snoozed(s));
+        status_done.sort_by_key(|(_, s)| self.snoozed(s));
         done_chips(&self.workspaces(), &unread, &unseen, &status_done)
             .into_iter()
             .map(|(circle, pane)| {
@@ -720,13 +731,24 @@ impl SeanceApp {
     }
 
     /// The needs-you bar's chips in order: waiting, done, then unread. The
-    /// bar and the next-waiting key both read this.
-    pub(super) fn waiting_list(&self) -> Vec<Waiting> {
+    /// bar and the next-waiting key both read this. Snoozed panes' chips
+    /// are left out; the second value counts those panes.
+    pub(super) fn waiting_list(&self) -> (Vec<Waiting>, usize) {
         let mut out = self.stage_waiting();
         out.extend(self.stage_done());
         let later = self.stage_later(&out);
         out.extend(later);
-        out
+        let mut snoozed: Vec<String> = Vec::new();
+        out.retain(|w| match w.pane.as_deref().filter(|p| self.snoozed(p)) {
+            Some(p) => {
+                if !snoozed.iter().any(|s| s == p) {
+                    snoozed.push(p.to_string());
+                }
+                false
+            }
+            None => true,
+        });
+        (out, snoozed.len())
     }
 
     /// The whole Stage layout, in place of the rail and grid.
@@ -746,7 +768,7 @@ impl SeanceApp {
 
         let tabs = self.render_space_tabs("stage", cx);
         let top = self.render_stage_top(width, cx);
-        let chips = self.waiting_list();
+        let (chips, snoozed) = self.waiting_list();
         // A peek card whose chip went (seen, its pane closed, its circle
         // gone or selected) closes with it.
         let peeked = self.stage.peek.as_ref().and_then(|p| {
@@ -762,7 +784,7 @@ impl SeanceApp {
                 None
             }
         };
-        let needs = self.render_stage_needs(chips, cx);
+        let needs = self.render_stage_needs(chips, snoozed, cx);
         let lead_el = self.render_stage_lead(on_stage.as_deref(), lead.as_deref(), fold, cx);
         let crew_el = show_crew.then(|| {
             let crew = self.render_stage_crew(on_stage.as_deref(), crew_w, cx);
@@ -1273,10 +1295,16 @@ impl SeanceApp {
 
     /// "Needs you · N" and a chip per waiting pane, every circle, then
     /// "Done · N" and a chip per finished one. Hidden when there are none.
-    fn render_stage_needs(&self, waiting: Vec<Waiting>, cx: &Context<Self>) -> Option<AnyElement> {
-        if waiting.is_empty() {
+    fn render_stage_needs(
+        &self,
+        waiting: Vec<Waiting>,
+        snoozed: usize,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
+        if waiting.is_empty() && snoozed == 0 {
             return None;
         }
+        let only_snoozed = waiting.is_empty();
         let n_done = waiting.iter().filter(|w| w.done).count();
         let n_later = waiting.iter().filter(|w| w.later).count();
         let n = waiting.len() - n_done - n_later;
@@ -1344,6 +1372,7 @@ impl SeanceApp {
                         .child(ellipsize(&w.what, 70)),
                 );
             if let Some(slug) = w.pane {
+                let slug_for_snooze = slug.clone();
                 let ws = w.circle.clone();
                 let done = w.done;
                 if done {
@@ -1364,6 +1393,19 @@ impl SeanceApp {
                             this.open_chip(&ws, &slug, done, window, cx);
                         })),
                 );
+                if !w.later && (!done || self.real_done(&slug_for_snooze)) {
+                    let slug = slug_for_snooze;
+                    chip = chip.child(
+                        chip_button("Snooze 1h", false)
+                            .id(SharedString::from(format!("stage-wait-snooze-{i}")))
+                            .tooltip(tip("hide this for an hour: no chip, banner or ding"))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.snooze(&slug);
+                                cx.notify();
+                            })),
+                    );
+                }
                 if let Some(slug) = read {
                     chip = chip.child(
                         chip_button("Read", false)
@@ -1402,27 +1444,45 @@ impl SeanceApp {
                 .gap(px(10.))
                 .overflow_x_scroll()
                 .text_xs()
-                .bg(accent.opacity(0.12))
+                .when(!only_snoozed, |d| d.bg(accent.opacity(0.12)))
                 .border_b_1()
                 .border_color(SeancePalette::border())
-                .child(
-                    div()
-                        .flex_none()
-                        .font_semibold()
-                        .text_color(accent)
-                        .child(label),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .text_color(SeancePalette::text_faint())
-                        .child(if cfg!(target_os = "macos") {
-                            "⌘⇧I next"
-                        } else {
-                            "ctrl+shift+i next"
-                        }),
-                )
+                .when(!only_snoozed, |d| {
+                    d.child(
+                        div()
+                            .flex_none()
+                            .font_semibold()
+                            .text_color(accent)
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_color(SeancePalette::text_faint())
+                            .child(if cfg!(target_os = "macos") {
+                                "⌘⇧I next"
+                            } else {
+                                "ctrl+shift+i next"
+                            }),
+                    )
+                })
                 .children(chips)
+                .when(snoozed > 0, |d| {
+                    d.child(
+                        div()
+                            .id("stage-snoozed")
+                            .flex_none()
+                            .cursor_pointer()
+                            .text_color(SeancePalette::text_faint())
+                            .hover(|s| s.text_color(SeancePalette::text()))
+                            .tooltip(tip("bring them back now"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.unsnooze_all();
+                                cx.notify();
+                            }))
+                            .child(format!("{snoozed} snoozed")),
+                    )
+                })
                 .into_any_element(),
         )
     }
@@ -1489,6 +1549,19 @@ impl SeanceApp {
                     this.open_chip(&ws, &slug, true, window, cx);
                 }),
             ));
+        }
+        if self.real_done(&peek.pane) {
+            let snooze_pane = peek.pane.clone();
+            buttons = buttons.child(
+                chip_button("Snooze 1h", false)
+                    .id("stage-peek-snooze")
+                    .tooltip(tip("hide this for an hour: no chip, banner or ding"))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.stage.peek = None;
+                        this.snooze(&snooze_pane);
+                        cx.notify();
+                    })),
+            );
         }
         buttons = buttons.child(
             chip_button("Seen", false)

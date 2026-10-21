@@ -170,7 +170,9 @@ impl SeanceApp {
                 .asks
                 .iter()
                 .find(|a| a.answer.is_none() && a.from == p.slug);
-            let needs = ask.is_some() || matches!(state, "needs-human" | "blocked" | "risky");
+            // Snoozed on Stage: no purple row (a busy one still shows).
+            let needs = (ask.is_some() || matches!(state, "needs-human" | "blocked" | "risky"))
+                && !self.snoozed(&p.slug);
             // A working or planning status alone may be stale; the pane has
             // to be busy to count as running.
             let busy = self.busy_panes.contains(&p.slug);

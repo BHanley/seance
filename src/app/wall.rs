@@ -120,11 +120,12 @@ impl SeanceApp {
     /// Focus from the Wall: Stage on `ws`, with the pane waiting on you up
     /// front when there is one, else the lead.
     fn wall_focus(&mut self, ws: &str, window: &mut Window, cx: &mut Context<Self>) {
+        // Not a snoozed one: opening it would end the snooze.
         let asking = self
             .stage_waiting()
             .into_iter()
-            .find(|w| w.circle == ws && w.pane.is_some())
-            .and_then(|w| w.pane);
+            .filter_map(|w| w.pane.filter(|p| w.circle == ws && !self.snoozed(p)))
+            .next();
         self.focus_on_stage(ws, asking.as_deref(), window, cx);
     }
 
@@ -474,7 +475,7 @@ impl SeanceApp {
         // circle → the first pane waiting on you there, for Open.
         let mut asking: HashMap<String, String> = HashMap::new();
         for w in self.stage_waiting() {
-            if let Some(p) = w.pane {
+            if let Some(p) = w.pane.filter(|p| !self.snoozed(p)) {
                 asking.entry(w.circle).or_insert(p);
             }
         }

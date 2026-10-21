@@ -234,8 +234,9 @@ in the middle of the window, live and typeable. From top to bottom:
   shell, or `seance-new-circle-command`), Esc leaves it empty. Then the
   layout toggle and a jump box (ctrl+shift+j, the
   same jump palette).
-- **Needs you.** Only when something waits: one chip per pane, in every
-  circle, that is needs-human, blocked or risky or has asked a question.
+- **Needs you.** Only when something waits (or is snoozed): one chip per
+  pane, in every circle, that is needs-human, blocked or risky or has asked
+  a question.
   **Open** switches to that circle and puts the pane on stage. After them, a
   green ✓ chip per circle with a finished pane you haven't seen, and one per
   finished pane in the circle you're on. Click a ✓ chip to peek: the pane's
@@ -245,7 +246,14 @@ in the middle of the window, live and typeable. From top to bottom:
   the pane; **Seen** clears the mark without opening it. Last come
   **Unread** chips, one per pane you marked unread, until you open the
   pane. ctrl+shift+i walks the needs-you and done items in any layout (on
-  the Wall it selects the circle's tile).
+  the Wall it selects the circle's tile). **Snooze 1h** on a needs-you or
+  done chip (or the peek card) quiets that pane for an hour: no chip, no
+  banner or ding, no purple HUD row, and ctrl+shift+i skips it. Its row and
+  status stay. Opening the pane ends it early; when the hour is up the chip
+  comes back if it's still waiting. A faint "N snoozed" at the end of the
+  bar brings them all back (when only snoozed ones are left, the bar shows
+  just that). Snoozes are kept in `~/.config/seance/view.json`, so they
+  survive a restart; a blank second window keeps its own for the session.
 - **The lead.** The circle's lead pane (`seance ctl lead`, else its first
   terminal) is the real terminal: keys, esc and every chord work as in any
   focused pane. Its header shows the name, the machine (Mac or XPS, from a

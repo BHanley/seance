@@ -19,6 +19,13 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **Snooze 1h on Stage.** Needs-you and done chips, and the peek card, get
+  a **Snooze 1h** button: that pane's chip, banners, dings and purple HUD
+  row go quiet for an hour (ctrl+shift+i skips it too), then the chip comes
+  back if it's still waiting. Opening the pane ends it early. "N snoozed"
+  at the end of the bar brings them all back. Kept across restarts in
+  `~/.config/seance/view.json`.
+
 - **Layouts.** A classic · stage · wall toggle sits under the logo in the
   rail (and in the top bar of the other two); ctrl+shift+t cycles them.
   Classic is today's layout, unchanged. Wall replaces the live overview

@@ -24,8 +24,8 @@ pub(super) struct ViewState {
     pub(super) mode: ViewMode,
     before_wall: ViewMode,
     /// Off for blank windows, which show nothing on Wall and, like their
-    /// rail list, must not overwrite this machine's pick.
-    persist: bool,
+    /// rail list, must not overwrite this machine's pick (or snoozes).
+    pub(super) persist: bool,
 }
 
 impl ViewState {
@@ -57,7 +57,7 @@ fn config_path() -> PathBuf {
 }
 
 /// `text` (the file as it was) with `key` set to `value`, keeping the rest.
-fn put(text: &str, key: &str, value: &str) -> String {
+fn put(text: &str, key: &str, value: impl Into<serde_json::Value>) -> String {
     let mut v = serde_json::from_str::<serde_json::Value>(text)
         .ok()
         .filter(|v| v.is_object())
@@ -88,7 +88,7 @@ pub(super) fn saved_hud() -> Option<String> {
     hud_of(&std::fs::read_to_string(config_path()).ok()?)
 }
 
-fn save_key(key: &str, value: &str) {
+fn save_key(key: &str, value: impl Into<serde_json::Value>) {
     let path = config_path();
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
@@ -106,6 +106,22 @@ fn save(mode: ViewMode) {
 
 pub(super) fn save_hud(id: &str) {
     save_key("hud", id);
+}
+
+/// Stage's snoozed panes (slug to until, unix ms); empty when none are kept.
+fn snoozed_of(text: &str) -> std::collections::HashMap<String, u64> {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|v| serde_json::from_value(v.get("snoozed")?.clone()).ok())
+        .unwrap_or_default()
+}
+
+pub(super) fn saved_snoozes() -> std::collections::HashMap<String, u64> {
+    snoozed_of(&std::fs::read_to_string(config_path()).unwrap_or_default())
+}
+
+pub(super) fn save_snoozes(map: &std::collections::HashMap<String, u64>) {
+    save_key("snoozed", serde_json::json!(map));
 }
 
 impl SeanceApp {
@@ -265,6 +281,15 @@ mod tests {
             (ViewMode::Wall, Some("pips"))
         );
         assert_eq!(hud_of(&put("{", "hud", "off")).as_deref(), Some("off"));
+    }
+
+    #[test]
+    fn snoozes_share_the_file() {
+        assert!(snoozed_of(r#"{"layout":"stage"}"#).is_empty());
+        let map = std::collections::HashMap::from([("w".to_string(), 42u64)]);
+        let text = put(r#"{"hud":"ink"}"#, "snoozed", serde_json::json!(map));
+        assert_eq!(snoozed_of(&text), map);
+        assert_eq!(hud_of(&text).as_deref(), Some("ink"));
     }
 
     #[test]

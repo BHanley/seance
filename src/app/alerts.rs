@@ -7,10 +7,41 @@ use std::time::Duration;
 
 use gpui::Context;
 
+use super::util::now_ms;
 use super::workspaces::WorkspaceAttention;
 use super::SeanceApp;
 use crate::desktop_notify;
 use crate::term_config::CommandFinishNotify;
+
+/// How long Stage's "Snooze 1h" quiets a pane.
+const SNOOZE_MS: u64 = 60 * 60 * 1000;
+
+/// Stage's snoozed panes: slug to until (unix ms). While one is on, the
+/// pane's Stage chip, banners and dings are quiet; its row and status stay.
+/// It ends when the hour is up or the human opens the pane.
+#[derive(Default)]
+pub(super) struct Snoozes(pub(super) std::collections::HashMap<String, u64>);
+
+impl Snoozes {
+    fn add(&mut self, slug: &str, now: u64) {
+        self.0.insert(slug.to_string(), now + SNOOZE_MS);
+    }
+
+    pub(super) fn on(&self, slug: &str, now: u64) -> bool {
+        self.0.get(slug).is_some_and(|until| *until > now)
+    }
+
+    /// Ended early (the pane was opened). True when one was on.
+    fn clear(&mut self, slug: &str, now: u64) -> bool {
+        let was = self.on(slug, now);
+        self.0.remove(slug);
+        was
+    }
+
+    fn prune(&mut self, now: u64) {
+        self.0.retain(|_, until| *until > now);
+    }
+}
 
 impl SeanceApp {
     pub(super) fn on_pane_alert(
@@ -22,6 +53,10 @@ impl SeanceApp {
         duration_ms: u64,
         exit_code: Option<i32>,
     ) {
+        // Snoozed on Stage: no banner, but a bell is the terminal's own.
+        if self.snoozed(pane) && kind != "bell" {
+            return;
+        }
         let cfg = crate::term_config::get();
         // Looking right at the pane: like a focused terminal, sound only.
         let watching = self.window_active && self.active_slug.as_deref() == Some(pane);
@@ -75,11 +110,11 @@ impl SeanceApp {
         }
     }
 
-    /// Opening a pane marked unread reads it, and takes its banner out of
-    /// Notification Center. Only a change of pane counts, and only in the
-    /// window you're using. The Wall only shows circles, so moving across
-    /// its tiles opens nothing; Stage or Classic count the pane they show
-    /// when you get there.
+    /// Opening a pane marked unread reads it, takes its banner out of
+    /// Notification Center and ends its snooze. Only a change of pane
+    /// counts, and only in the window you're using. The Wall only shows
+    /// circles, so moving across its tiles opens nothing; Stage or Classic
+    /// count the pane they show when you get there.
     pub(super) fn read_later(&mut self) {
         if self.view.mode == super::views::ViewMode::Wall || self.active_slug == self.later_last {
             return;
@@ -88,8 +123,12 @@ impl SeanceApp {
         if !self.window_active {
             return;
         }
-        if let Some(slug) = self.active_slug.as_deref() {
+        if let Some(slug) = self.active_slug.clone() {
+            let slug = slug.as_str();
             desktop_notify::clear_pane(slug);
+            if self.snoozes.clear(slug, now_ms()) {
+                self.save_snoozes();
+            }
             if self.subs_pref.later.remove(slug) {
                 self.save_arrangement();
             }
@@ -193,7 +232,7 @@ impl SeanceApp {
         // banner: one still unseen from before doesn't make the next one
         // silent.
         if self.stage.leads.get(&ws).map(String::as_str) == Some(pane) {
-            if loud {
+            if loud && !self.snoozed(pane) {
                 desktop_notify::done_sound();
             }
         } else {
@@ -207,6 +246,31 @@ impl SeanceApp {
         self.workspace_unread.insert(ws, WorkspaceAttention::Done);
     }
 
+    /// Snoozed on Stage right now.
+    pub(super) fn snoozed(&self, slug: &str) -> bool {
+        self.snoozes.on(slug, now_ms())
+    }
+
+    /// Stage's "Snooze 1h" on a pane.
+    pub(super) fn snooze(&mut self, slug: &str) {
+        self.snoozes.add(slug, now_ms());
+        self.save_snoozes();
+    }
+
+    pub(super) fn unsnooze_all(&mut self) {
+        self.snoozes.0.clear();
+        self.save_snoozes();
+    }
+
+    /// Kept in this machine's view.json, from the window that keeps its
+    /// layout there.
+    fn save_snoozes(&mut self) {
+        self.snoozes.prune(now_ms());
+        if self.view.persist {
+            super::views::save_snoozes(&self.snoozes.0);
+        }
+    }
+
     /// What a notification calls a pane: "circle · name", the names the human
     /// gave them. Unknown slugs (an asker that isn't a pane) pass through.
     pub(super) fn pane_label(&self, pane: &str) -> String {
@@ -215,5 +279,28 @@ impl SeanceApp {
             .find(|p| p.slug == pane)
             .map(|p| format!("{} · {}", self.workspace_label(&p.workspace), p.name))
             .unwrap_or_else(|| pane.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snooze_lasts_an_hour_and_opening_ends_it() {
+        let mut s = Snoozes::default();
+        s.add("w", 1_000);
+        assert!(s.on("w", 1_000 + SNOOZE_MS - 1));
+        assert!(!s.on("w", 1_000 + SNOOZE_MS));
+        assert!(!s.on("other", 1_000));
+        // Opening ends it early, once.
+        assert!(s.clear("w", 2_000));
+        assert!(!s.on("w", 2_000));
+        assert!(!s.clear("w", 2_000));
+        // Expired ones are dropped before saving.
+        s.add("a", 0);
+        s.add("b", 5_000);
+        s.prune(SNOOZE_MS + 1);
+        assert_eq!(s.0.keys().collect::<Vec<_>>(), vec!["b"]);
     }
 }

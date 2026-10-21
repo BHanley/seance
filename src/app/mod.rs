@@ -277,6 +277,8 @@ pub struct SeanceApp {
     /// Claude panes that finished while the human wasn't looking at them:
     /// a ✓ on their sidebar row until the pane is next focused.
     done_unseen: std::collections::HashSet<String>,
+    /// Panes snoozed from Stage ("Snooze 1h"; see `alerts::Snoozes`).
+    snoozes: alerts::Snoozes,
     /// When each crew pane last finished out of sight, for the lead's card.
     /// Drawn only while the pane is in `done_unseen`, so opening it clears
     /// the line.
@@ -529,6 +531,7 @@ impl SeanceApp {
             busy_panes: std::collections::HashSet::new(),
             busy_since: std::collections::HashMap::new(),
             done_unseen: std::collections::HashSet::new(),
+            snoozes: alerts::Snoozes(views::saved_snoozes()),
             crew_done: std::collections::HashMap::new(),
             idle_edge: std::collections::HashMap::new(),
             screen_check: std::collections::HashMap::new(),
@@ -1222,7 +1225,9 @@ impl SeanceApp {
                 cx.notify();
             }
             GuiEvent::Ask { ask } => {
-                crate::desktop_notify::ask(&self.pane_label(&ask.from), &ask.question);
+                if !self.snoozed(&ask.from) {
+                    crate::desktop_notify::ask(&self.pane_label(&ask.from), &ask.question);
+                }
                 self.asks.push(PendingAsk {
                     id: ask.id,
                     from: ask.from,
@@ -1239,11 +1244,13 @@ impl SeanceApp {
             }
             GuiEvent::Status { slug, state, note } => {
                 if state == "needs-human" || state == "blocked" {
-                    crate::desktop_notify::needs_human(
-                        &slug,
-                        &self.pane_label(&slug),
-                        note.as_deref(),
-                    );
+                    if !self.snoozed(&slug) {
+                        crate::desktop_notify::needs_human(
+                            &slug,
+                            &self.pane_label(&slug),
+                            note.as_deref(),
+                        );
+                    }
                     // If this pane is phoned to telegram, post a one-liner.
                     telegram_status_bridge(
                         Arc::clone(&self.client),
