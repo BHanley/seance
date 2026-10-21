@@ -663,7 +663,10 @@ fn serve_upgrade_request(mut writer: UnixStream, engine: SharedEngine) -> Result
     if let Some(dir) = log_path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let log_file = std::fs::File::create(&log_path).context("daemon-upgrade.log")?;
+    // Appended, not truncated: the daemon this upgrade replaces may still hold
+    // the file at its old offset, and truncating under it filled the log
+    // with NULs up to there.
+    let log_file = open_log(&log_path).context("daemon-upgrade.log")?;
     let child = std::process::Command::new(&bin)
         .arg("daemon")
         .arg("--takeover")
@@ -906,16 +909,7 @@ fn resolve_upgrade_bin() -> Result<PathBuf> {
 fn daemon_log_file() -> Option<std::fs::File> {
     let dir = crate::state::state_dir().ok()?;
     let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join("daemon.log");
-    const MAX: u64 = 5 * 1024 * 1024;
-    if std::fs::metadata(&path).is_ok_and(|m| m.len() >= MAX) {
-        let _ = std::fs::rename(&path, dir.join("daemon.log.1"));
-    }
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .ok()?;
+    let mut file = open_log(&dir.join("daemon.log")).ok()?;
     // Who started this daemon, and which build — the two questions asked
     // first when a session's panes turn out to belong to someone else's
     // daemon.
@@ -926,6 +920,21 @@ fn daemon_log_file() -> Option<std::fs::File> {
         env!("CARGO_PKG_VERSION"),
     );
     Some(file)
+}
+
+/// Open a daemon log for appending (O_APPEND, so every writer lands at the
+/// end), first rotating it to `<name>.1` past ~5 MiB.
+fn open_log(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    const MAX: u64 = 5 * 1024 * 1024;
+    if std::fs::metadata(path).is_ok_and(|m| m.len() >= MAX) {
+        let mut rotated = path.as_os_str().to_owned();
+        rotated.push(".1");
+        let _ = std::fs::rename(path, rotated);
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
 }
 
 /// Ensure a daemon is running; spawn one if needed. Returns true if we spawned.
@@ -1057,4 +1066,26 @@ pub fn request_upgrade() -> Result<()> {
         thread::sleep(Duration::from_millis(50));
     }
     bail!("upgraded daemon did not become ready on control socket");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::open_log;
+    use std::io::Write;
+
+    /// Two writers on one log (an old daemon and the one replacing it) both
+    /// land at the end: no truncation, no gap of NULs.
+    #[test]
+    fn logs_are_appended_never_truncated() {
+        let path = std::env::temp_dir().join(format!("seance-log-test-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut old = open_log(&path).unwrap();
+        old.write_all(b"old daemon line\n").unwrap();
+        let mut new = open_log(&path).unwrap();
+        new.write_all(b"new daemon line\n").unwrap();
+        old.write_all(b"old again\n").unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text, "old daemon line\nnew daemon line\nold again\n");
+        let _ = std::fs::remove_file(&path);
+    }
 }

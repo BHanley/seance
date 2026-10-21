@@ -11,7 +11,7 @@ use std::path::Path;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context as _, Result};
 use base64::Engine as _;
@@ -25,6 +25,10 @@ const RECONNECT_BACKOFF: Duration = Duration::from_millis(400);
 /// until a human upgrades one side, so hammering the socket every 400ms just
 /// fills the log with the same sentence a hundred times a minute.
 const REFUSED_BACKOFF: Duration = Duration::from_secs(5);
+/// While the daemon can't be reached (a tunnel down), retries slow to this
+/// and the log hears about it this often.
+const UNREACHABLE_MAX_WAIT: Duration = Duration::from_secs(5);
+const UNREACHABLE_LOG_EVERY: Duration = Duration::from_secs(60);
 /// Preflight is a boot-blocking question — bounded so an unresponsive daemon
 /// delays launch rather than hanging it.
 const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -643,6 +647,33 @@ fn other_gui_running() -> bool {
     false
 }
 
+/// Paces reconnects while the daemon can't be reached: the wait doubles from
+/// [`RECONNECT_BACKOFF`] to [`UNREACHABLE_MAX_WAIT`], and only the first failure and
+/// one a minute after reach the log.
+#[derive(Default)]
+struct Unreachable {
+    failures: u32,
+    logged: Option<Instant>,
+}
+
+impl Unreachable {
+    /// Count a failed connect at `now`: how long to wait before the next try,
+    /// and whether to log this one.
+    fn fail(&mut self, now: Instant) -> (Duration, bool) {
+        let wait = RECONNECT_BACKOFF
+            .saturating_mul(1 << self.failures.min(4))
+            .min(UNREACHABLE_MAX_WAIT);
+        self.failures += 1;
+        let log = self
+            .logged
+            .is_none_or(|at| now.duration_since(at) >= UNREACHABLE_LOG_EVERY);
+        if log {
+            self.logged = Some(now);
+        }
+        (wait, log)
+    }
+}
+
 fn connection_supervisor(
     req_rx: Receiver<GuiRequest>,
     ev_tx: Sender<GuiEvent>,
@@ -656,6 +687,7 @@ fn connection_supervisor(
     let mut first = true;
     // Requests queued before the first Attach already carry the replay state.
     let mut attached_once = false;
+    let mut unreachable = Unreachable::default();
     loop {
         if stop.load(Ordering::SeqCst) {
             return;
@@ -666,17 +698,20 @@ fn connection_supervisor(
                 if stop.load(Ordering::SeqCst) {
                     return;
                 }
-                if first {
+                let (wait, log) = unreachable.fail(Instant::now());
+                let tries = unreachable.failures;
+                if log && first {
                     // connect() already probed successfully; this is a race.
                     eprintln!("[seance gui] connect failed: {e:#}; retrying…");
-                } else {
-                    eprintln!("[seance gui] reconnect failed: {e:#}; retrying…");
+                } else if log {
+                    eprintln!("[seance gui] reconnect attempt {tries} failed: {e:#}; retrying…");
                 }
-                thread::sleep(RECONNECT_BACKOFF);
+                thread::sleep(wait);
                 continue;
             }
         };
         first = false;
+        unreachable = Unreachable::default();
 
         let mut writer = match stream.try_clone() {
             Ok(w) => w,
@@ -1000,5 +1035,26 @@ mod tests {
         assert!(fs_not_found(&anyhow::anyhow!("read {path:?}: {io}")));
         assert!(!fs_not_found(&anyhow::anyhow!("fs op timed out")));
         assert!(!fs_not_found(&anyhow::anyhow!("daemon connection lost")));
+    }
+
+    /// A daemon out of reach is retried at 400 ms doubling to 5 s, and logged
+    /// on the first failure and then once a minute.
+    #[test]
+    fn unreachable_backs_off_and_logs_once_a_minute() {
+        let t0 = Instant::now();
+        let mut u = Unreachable::default();
+        let mut at = t0;
+        let mut waits = Vec::new();
+        let mut logs = 0;
+        for _ in 0..8 {
+            let (wait, log) = u.fail(at);
+            waits.push(wait.as_millis());
+            logs += usize::from(log);
+            at += wait;
+        }
+        assert_eq!(waits, [400, 800, 1600, 3200, 5000, 5000, 5000, 5000]);
+        assert_eq!(logs, 1, "30 s of failures log once");
+        let (_, log) = u.fail(t0 + Duration::from_secs(61));
+        assert!(log, "a minute on, it logs again");
     }
 }
