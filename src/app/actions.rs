@@ -13,6 +13,12 @@ use serde::Deserialize;
 #[action(namespace = seance, no_json)]
 pub struct ActQuit;
 
+/// Quit and open again: a fresh GUI on the same daemon (panes live there,
+/// so nothing is lost).
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActRestart;
+
 // Sidebar context-menu actions (menu items dispatch gpui actions).
 #[derive(Action, Clone, PartialEq, Deserialize)]
 #[action(namespace = seance, no_json)]

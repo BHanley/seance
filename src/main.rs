@@ -337,7 +337,7 @@ fn main() {
     });
 }
 
-/// The application menu, and the handler for the one action it dispatches.
+/// The application menu, and the handlers for the actions it dispatches.
 ///
 /// Only macOS grows a menu bar from this; gpui's linux backend just stores
 /// the menus and never renders them, so the call is harmless there and isn't
@@ -345,17 +345,20 @@ fn main() {
 /// terminal to ctrl-C, and closing the window doesn't quit on macOS, so ⌘Q
 /// hitting an app with no Quit item leaves force-quit as the only way out.
 ///
-/// Quit only. Hide / Hide Others / Show All are *zed's* actions, not gpui's —
-/// each would need a real implementation here, and a menu item that looks
-/// standard but does nothing is worse than no item. ⌘Q is the one that was
-/// actually missing.
+/// Quit and Restart only. Hide / Hide Others / Show All are *zed's* actions,
+/// not gpui's: each would need a real implementation here, and a menu item
+/// that looks standard but does nothing is worse than no item. ⌘Q is the one
+/// that was actually missing.
 fn install_app_menu(cx: &mut gpui::App) {
     use gpui::{Menu, MenuItem};
 
     cx.on_action(|_: &app::actions::ActQuit, cx| cx.quit());
-    cx.set_menus([
-        Menu::new("Seance").items([MenuItem::action("Quit Seance", app::actions::ActQuit)])
-    ]);
+    // gpui's restart: waits for this process to exit, then `open`s the bundle.
+    cx.on_action(|_: &app::actions::ActRestart, cx| cx.restart());
+    cx.set_menus([Menu::new("Seance").items([
+        MenuItem::action("Restart Seance", app::actions::ActRestart),
+        MenuItem::action("Quit Seance", app::actions::ActQuit),
+    ])]);
 }
 
 /// The live ssh tunnel for this GUI process, if any. Static so the quit hook
