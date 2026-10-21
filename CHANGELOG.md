@@ -92,6 +92,17 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   file panes open there by default, so terminals keep the grid; the button
   puts one back. Every window shares the arrangement.
 
+- **Progress HUD (macOS).** An always-on-top window that never takes focus
+  lists each pane that is working or needs you (circle, task or step,
+  elapsed time), with a hairline bar when a status note has a step count
+  like "build 3/5". Needs-you lines come first with a purple dot; finished
+  lines fade out after about 3 s and the HUD hides when nothing runs. Hover
+  for full names, click a line to open that pane on stage. Two looks: Ink
+  (bottom right, text and hairlines) and Pips (top centre, a pill of short
+  bars that opens into the list on hover). `seance-hud = ink | pips | off`
+  in `terminal.conf` (default off) picks one at launch; the Seance menu's
+  **Progress HUD** items switch it for the session.
+
 - **Restart Seance (macOS).** The app menu has **Restart Seance**, which
   quits and reopens the app. Panes live on the daemon, so it is the same as
   quitting and reopening by hand.

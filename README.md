@@ -348,7 +348,8 @@ see above), `theme`, `palette`, `background`, `foreground`, `cursor-color`,
 `default` = the system's, for needs-you and agent-ask banners),
 `seance-done-sound` and `seance-done-sound-volume` (played when a pane
 finishes while you're looking elsewhere; leads only),
-`seance-auto-sleep-idle` and `seance-auto-sleep-skip` (see below). A pane's BEL plays the bell sound; OSC 9 /
+`seance-auto-sleep-idle` and `seance-auto-sleep-skip` (see below),
+`seance-hud` (see below). A pane's BEL plays the bell sound; OSC 9 /
 OSC 777 and long shell commands post a desktop notification when you
 aren't looking at that pane (a command-finish notification also plays the bell sound); OSC 52
 copies reach the clipboard. Restart the daemon (`seance upgrade`) and GUI
@@ -366,6 +367,27 @@ work or focused. Typing into a sleeping pane, `seance ctl send` to it, or
 seance-auto-sleep-idle = 6h            # default 12h; off turns it off
 seance-auto-sleep-skip = l6-leveling, main   # circles never auto-slept
 ```
+
+**Progress HUD (macOS).** A tiny window floats over everything with one line
+per pane that is working or needs you: the circle, the task or step, and how
+long it has run. A status note with a step count ("build 3/5") also fills a
+hairline bar. Panes that need you come first with a purple dot; everything
+else is gray. A finished line fades out after about 3 seconds, and the HUD
+hides when nothing runs. It never takes focus or keystrokes. Hover it for
+each pane's full name; click a line to bring Seance forward with that pane
+on stage. Two looks:
+
+- **Ink**: bottom-right of the screen you launched Seance on, just text and
+  hairlines with a soft shadow; hovering adds a dark backing.
+- **Pips**: top centre under the menu bar, a small pill of short bars (a dot
+  for a pane that needs you); hovering opens the line list.
+
+```
+seance-hud = ink      # ink, pips or off (the default)
+```
+
+The Seance menu's **Progress HUD: Ink / Pips / Off** switch it for the
+session; `seance-hud` picks the one it starts with.
 
 ## Architecture (short)
 
