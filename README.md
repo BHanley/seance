@@ -399,8 +399,9 @@ on stage. Two looks:
 seance-hud = ink      # ink, pips or off (the default)
 ```
 
-The Seance menu's **Progress HUD: Ink / Pips / Off** switch it for the
-session; `seance-hud` picks the one it starts with.
+The Seance menu's **Progress HUD: Ink / Pips / Off** switch it, and the
+pick is kept on this machine (in `~/.config/seance/view.json`), so the next
+launch opens the same one. `seance-hud` is the default until you pick one.
 
 ### Lead sprites
 

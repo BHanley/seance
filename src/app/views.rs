@@ -1,7 +1,8 @@
 //! Window layouts: Classic (the rail and pane grid), Stage and Wall. Each
 //! window keeps its own, switched from the toggle, ctrl+shift+t or
 //! `ctl layout`, and the last pick is saved on this machine
-//! (`~/.config/seance/view.json`), never in the daemon's shared layout.
+//! (`~/.config/seance/view.json`), never in the daemon's shared layout. The
+//! same file keeps the progress HUD picked from the Seance menu (`hud`).
 //!
 //! Stage (`stage.rs`) and Wall (`wall.rs`) take the rail and grid's place:
 //! on Stage the pane on stage is the only place its terminal renders, and
@@ -55,8 +56,14 @@ fn config_path() -> PathBuf {
     PathBuf::from(shellexpand::tilde("~/.config/seance/view.json").as_ref())
 }
 
-fn encode(mode: ViewMode) -> String {
-    serde_json::json!({ "layout": mode.id() }).to_string()
+/// `text` (the file as it was) with `key` set to `value`, keeping the rest.
+fn put(text: &str, key: &str, value: &str) -> String {
+    let mut v = serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| serde_json::json!({}));
+    v[key] = value.into();
+    v.to_string()
 }
 
 /// Anything unreadable or unknown is Classic, so a bad file never strands a
@@ -68,15 +75,37 @@ fn decode(text: &str) -> ViewMode {
         .unwrap_or_default()
 }
 
-fn save(mode: ViewMode) {
+/// The HUD last picked from the menu; None in a file from before it was kept.
+fn hud_of(text: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()?
+        .get("hud")?
+        .as_str()
+        .map(str::to_string)
+}
+
+pub(super) fn saved_hud() -> Option<String> {
+    hud_of(&std::fs::read_to_string(config_path()).ok()?)
+}
+
+fn save_key(key: &str, value: &str) {
     let path = config_path();
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
+    let old = std::fs::read_to_string(&path).unwrap_or_default();
     let tmp = path.with_extension("json.tmp");
-    if std::fs::write(&tmp, encode(mode)).is_ok() {
+    if std::fs::write(&tmp, put(&old, key, value)).is_ok() {
         let _ = std::fs::rename(&tmp, &path);
     }
+}
+
+fn save(mode: ViewMode) {
+    save_key("layout", mode.id());
+}
+
+pub(super) fn save_hud(id: &str) {
+    save_key("hud", id);
 }
 
 impl SeanceApp {
@@ -214,9 +243,28 @@ mod tests {
     #[test]
     fn codec_roundtrips_every_layout() {
         for mode in ViewMode::ALL {
-            assert_eq!(decode(&encode(mode)), mode);
+            assert_eq!(decode(&put("", "layout", mode.id())), mode);
         }
-        assert_eq!(encode(ViewMode::Stage), r#"{"layout":"stage"}"#);
+        assert_eq!(put("", "layout", "stage"), r#"{"layout":"stage"}"#);
+    }
+
+    #[test]
+    fn layout_and_hud_share_the_file() {
+        // A file from before the HUD was kept has none.
+        let old = r#"{"layout":"stage"}"#;
+        assert_eq!(hud_of(old), None);
+        let both = put(old, "hud", "pips");
+        assert_eq!(
+            (decode(&both), hud_of(&both).as_deref()),
+            (ViewMode::Stage, Some("pips"))
+        );
+        // Saving the layout keeps the HUD, and the other way round.
+        let again = put(&both, "layout", "wall");
+        assert_eq!(
+            (decode(&again), hud_of(&again).as_deref()),
+            (ViewMode::Wall, Some("pips"))
+        );
+        assert_eq!(hud_of(&put("{", "hud", "off")).as_deref(), Some("off"));
     }
 
     #[test]

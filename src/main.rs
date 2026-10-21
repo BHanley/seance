@@ -353,10 +353,12 @@ fn install_app_menu(cx: &mut gpui::App) {
     cx.on_action(|_: &app::actions::ActQuit, cx| cx.quit());
     // gpui's restart: waits for this process to exit, then `open`s the bundle.
     cx.on_action(|_: &app::actions::ActRestart, cx| cx.restart());
-    use app::hud::{set_mode, HudMode};
-    cx.on_action(|_: &app::actions::ActHudInk, cx| set_mode(HudMode::Ink, cx));
-    cx.on_action(|_: &app::actions::ActHudPips, cx| set_mode(HudMode::Pips, cx));
-    cx.on_action(|_: &app::actions::ActHudOff, cx| set_mode(HudMode::Off, cx));
+    use app::hud::{pick, HudMode};
+    cx.on_action(|_: &app::actions::ActHudInk, cx| pick(HudMode::Ink, cx));
+    cx.on_action(|_: &app::actions::ActHudPips, cx| pick(HudMode::Pips, cx));
+    cx.on_action(|_: &app::actions::ActHudOff, cx| pick(HudMode::Off, cx));
+    // Off until the main window's HUD starts (`hud::start`), which checks the
+    // mode it opens with; a blank window or the picker has no HUD.
     set_app_menus(HudMode::Off, cx);
 }
 

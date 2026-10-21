@@ -24,7 +24,7 @@
 //! | `seance-needs-sound` | macOS sound name for needs-you banners (`default` = the system's) |
 //! | `seance-auto-sleep-idle` (e.g. `6h`), `seance-auto-sleep-skip` (circle slugs, comma separated) | daemon's auto-sleep of idle Claude panes |
 //! | `seance-done-sound`, `seance-done-sound-volume` | sound when a circle lead finishes out of sight |
-//! | `seance-hud` (`ink`/`pips`/`off`) | the Mac's floating progress HUD at launch (GUI) |
+//! | `seance-hud` (`ink`/`pips`/`off`) | the Mac's floating progress HUD at launch, the default until you pick one from the menu (GUI) |
 //! | `seance-lead-sprite.<circle-slug>` | a seed that swaps that circle's lead creature (GUI) |
 //! | `seance-new-circle-command` | the first pane of a circle made with Stage's "+ circle" (GUI; runs on the daemon's machine) |
 //!
@@ -98,8 +98,9 @@ pub struct TermConfig {
     pub seance_auto_sleep_idle_ms: Option<u64>,
     /// `seance-auto-sleep-skip`: circles whose panes are never auto-slept.
     pub seance_auto_sleep_skip: Vec<String>,
-    /// `seance-hud`: which progress HUD the GUI opens with (`ink`, `pips`,
-    /// `off`). Read by `app::hud`; None is off.
+    /// `seance-hud`: which progress HUD the GUI opens with until one is
+    /// picked from the menu (`ink`, `pips`, `off`). Read by `app::hud`;
+    /// None is off.
     pub seance_hud: Option<String>,
     /// `seance-new-circle-command`: what the first pane of a circle made with
     /// Stage's "+ circle" runs. None is a plain shell.

@@ -45,6 +45,24 @@ impl HudMode {
             _ => Self::Off,
         }
     }
+
+    fn id(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Ink => "ink",
+            Self::Pips => "pips",
+        }
+    }
+
+    /// What a launch opens: the last pick from the menu, else `seance-hud`.
+    fn at_launch() -> Self {
+        let saved = super::views::saved_hud();
+        Self::parse(
+            saved
+                .as_deref()
+                .or(crate::term_config::get().seance_hud.as_deref()),
+        )
+    }
 }
 
 /// A finished row stays this long, fading, before it goes.
@@ -626,8 +644,8 @@ struct HudCtl {
 
 impl Global for HudCtl {}
 
-/// Called once the main window is up: remember it, and open the HUD
-/// `seance-hud` asks for. A blank second window gets none.
+/// Called once the main window is up: remember it, and open the HUD it
+/// launches with (`HudMode::at_launch`). A blank second window gets none.
 pub fn start(
     app: WeakEntity<SeanceApp>,
     main: AnyWindowHandle,
@@ -644,11 +662,21 @@ pub fn start(
         mode: HudMode::Off,
         window: None,
     });
-    let mode = HudMode::parse(crate::term_config::get().seance_hud.as_deref());
+    set_mode(HudMode::at_launch(), cx);
+}
+
+/// A pick from the Seance menu: switch, and keep it for the next launch.
+/// Nothing in a process with no HUD (a blank window, the picker).
+pub fn pick(mode: HudMode, cx: &mut App) {
+    if cx.try_global::<HudCtl>().is_none() {
+        return;
+    }
+    super::views::save_hud(mode.id());
     set_mode(mode, cx);
 }
 
-/// Switch the HUD for this session (the Seance menu's Progress HUD items).
+/// Switch the HUD for this session (the Seance menu's items go through
+/// `pick`, which also keeps it).
 pub fn set_mode(mode: HudMode, cx: &mut App) {
     let Some(ctl) = cx.try_global::<HudCtl>() else {
         return;

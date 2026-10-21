@@ -162,6 +162,9 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Changed
 
+- The progress HUD picked from the Seance menu is kept across restarts (in
+  `~/.config/seance/view.json` on the GUI machine). `seance-hud` in
+  `terminal.conf` is the default until you pick one.
 - **A send no longer cancels a task.** `seance ctl send` to a busy pane is
   queued behind its turn (`queued behind task-N (K ahead)`) and delivered
   when it goes idle, oldest first, instead of being refused with exit 4. A
