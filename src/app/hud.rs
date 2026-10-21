@@ -558,9 +558,9 @@ impl HudView {
                 .h(px(PIP_H))
                 .rounded(px(2.))
                 .overflow_hidden()
-                .bg(gray(0.10))
+                .bg(gray(0.18))
                 .opacity(alpha)
-                .child(div().h_full().w(gpui::relative(fill)).bg(gray(0.55)))
+                .child(div().h_full().w(gpui::relative(fill)).bg(gray(0.7)))
         });
         div()
             .flex()
@@ -597,7 +597,7 @@ impl Render for HudView {
                 .items_center()
                 .px(px(PILL_PAD_X))
                 .rounded_full()
-                .bg(SeancePalette::bg().opacity(0.38))
+                .bg(SeancePalette::bg().opacity(0.62))
                 .child(self.render_pips()),
             (HudMode::Pips, true) => root
                 .px(px(LIST_PAD_X))
