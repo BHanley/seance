@@ -55,6 +55,11 @@ pub(super) struct StageState {
     /// Stage and by a circle pill. Other moves (a jump, ctrl+page, Open)
     /// keep the pane they land on.
     pub(super) want_lead: bool,
+    /// "+N more" opened: the circles that don't fit sit in a row under the
+    /// strip until it's clicked again.
+    pub(super) pills_open: bool,
+    /// This frame's height of that row, so the jump palette drops below it.
+    pub(super) pills_row_h: f32,
     /// (circle, its newest lead log entry).
     lead_log: Option<(String, Option<LeadLine>)>,
     lead_log_asked: Option<(String, Instant)>,
@@ -763,14 +768,16 @@ impl SeanceApp {
     }
 
     /// ✦ mark (unless the space row holds it), circle pills, the layout
-    /// toggle and the jump box.
-    fn render_stage_top(&self, width: f32, cx: &Context<Self>) -> AnyElement {
+    /// toggle and the jump box. With "+N more" open, the circles that don't
+    /// fit get a row of their own underneath.
+    fn render_stage_top(&mut self, width: f32, cx: &Context<Self>) -> AnyElement {
         let rename = self.render_rename_field();
         let renaming = rename.is_some();
         let selected = self.selected_workspace.clone();
         let space = self.shown_space();
         let circles = self.subs_pref.spaces.circles_in(&space, &self.workspaces());
-        let jump_w = if width >= 1200. { 270. } else { 190. };
+        let roomy = width >= 900.;
+        let jump_w = jump_box_w(roomy);
         let switch_w = 190.;
         // The mark sits on the space row above when that row shows.
         let tabs = self.space_tabs_shown();
@@ -783,12 +790,35 @@ impl SeanceApp {
             .as_ref()
             .and_then(|s| circles.iter().position(|c| c == s));
         let shown = fit_pills(&widths, avail, 74., 6., sel_idx);
-        let hidden: Vec<&str> = (0..circles.len())
-            .filter(|i| !shown.contains(i))
-            .map(|i| labels[i].as_str())
-            .collect();
+        let hidden: Vec<usize> = (0..circles.len()).filter(|i| !shown.contains(i)).collect();
+        if hidden.is_empty() {
+            self.stage.pills_open = false;
+        }
+        let open = self.stage.pills_open && !renaming;
 
-        let pills = shown.iter().map(|&i| {
+        // The hidden circles' row: wraps when they don't fit on one line.
+        // Its height is estimated for the palette, which drops below it.
+        let row_w = width - 28.;
+        let row_lines = if open {
+            let mut lines = 1.;
+            let mut x = 0.;
+            for &i in &hidden {
+                if x > 0. && x + widths[i] > row_w {
+                    lines += 1.;
+                    x = 0.;
+                }
+                x += widths[i] + 6.;
+            }
+            lines
+        } else {
+            0.
+        };
+        self.stage.pills_row_h = if open {
+            13. + row_lines * 30. + (row_lines - 1.) * 6.
+        } else {
+            0.
+        };
+        let pill = |i: usize| {
             let ws = circles[i].clone();
             let on = sel_idx == Some(i);
             let glyph = self.circle_glyph(&ws);
@@ -819,9 +849,14 @@ impl SeanceApp {
                 }))
                 .child(glyph)
                 .child(labels[i].clone())
-        });
+        };
+        let pills: Vec<_> = shown.iter().map(|&i| pill(i)).collect();
         let more = (!hidden.is_empty()).then(|| {
-            let names = hidden.join(", ");
+            let names = hidden
+                .iter()
+                .map(|&i| labels[i].as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
             div()
                 .id("stage-pill-more")
                 .flex_none()
@@ -830,26 +865,59 @@ impl SeanceApp {
                 .rounded_full()
                 .border_1()
                 .border_dashed()
-                .border_color(SeancePalette::border())
+                .border_color(if open {
+                    SeancePalette::flame_dim()
+                } else {
+                    SeancePalette::border()
+                })
                 .text_xs()
-                .text_color(SeancePalette::text_faint())
+                .text_color(if open {
+                    SeancePalette::text()
+                } else {
+                    SeancePalette::text_faint()
+                })
                 .cursor_pointer()
                 .hover(|s| s.text_color(SeancePalette::text()))
-                .tooltip(tip_s(format!("{names} · opens the jump palette")))
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.open_jump(window, cx);
+                .tooltip(tip_s(if open {
+                    "hide them again".to_string()
+                } else {
+                    format!("show {names}")
                 }))
-                .child(format!("+{} more", hidden.len()))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.stage.pills_open = !this.stage.pills_open;
+                    cx.notify();
+                }))
+                .child(if open {
+                    "less".to_string()
+                } else {
+                    format!("+{} more", hidden.len())
+                })
         });
-        let shortcut = if cfg!(target_os = "macos") {
-            "⌘⇧J"
-        } else {
-            "ctrl+shift+j"
-        };
+        // Over the top of what's below, so the lead terminal keeps its size
+        // (a resize would reflow the PTY on every click).
+        let row = open.then(|| {
+            div()
+                .id("stage-pills-row")
+                .absolute()
+                .top(px(STRIP_H))
+                .left_0()
+                .right_0()
+                .occlude()
+                .px(px(14.))
+                .py(px(6.))
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap(px(6.))
+                .bg(SeancePalette::bg_elevated())
+                .border_b_1()
+                .border_color(SeancePalette::border())
+                .children(hidden.iter().map(|&i| pill(i)))
+        });
 
-        div()
+        let strip = div()
             .flex_none()
-            .h(px(50.))
+            .h(px(STRIP_H))
             .px(px(14.))
             .flex()
             .items_center()
@@ -875,46 +943,12 @@ impl SeanceApp {
                     .w(px(switch_w))
                     .child(self.render_view_switch("strip", cx)),
             )
-            .child(
-                div()
-                    .id("stage-jump")
-                    .flex_none()
-                    .w(px(jump_w))
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .px(px(10.))
-                    .py(px(6.))
-                    .rounded_lg()
-                    .bg(SeancePalette::bg())
-                    .border_1()
-                    .border_color(SeancePalette::border())
-                    .text_xs()
-                    .text_color(SeancePalette::text_faint())
-                    .cursor_pointer()
-                    .hover(|s| s.border_color(SeancePalette::flame_dim()))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_jump(window, cx);
-                    }))
-                    .child("⌕")
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .child("Jump to circle, pane, file"),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .px(px(5.))
-                            .rounded_sm()
-                            .border_1()
-                            .border_color(SeancePalette::border())
-                            .text_size(px(10.))
-                            .child(shortcut),
-                    ),
-            )
+            .child(render_jump_box("stage-jump", roomy, cx));
+        div()
+            .flex_none()
+            .relative()
+            .child(strip)
+            .children(row)
             .into_any_element()
     }
 
@@ -1991,6 +2025,69 @@ fn bottom_rows(snap: &GridSnapshot, n: usize) -> Vec<String> {
         .filter_map(|r| snap.cells.get(r * cols..(r + 1) * cols))
         .map(|cells| cells.iter().map(|c| c.c).collect())
         .collect()
+}
+
+/// Stage's strip height; the jump palette drops below it.
+pub(super) const STRIP_H: f32 = 50.;
+
+/// The jump box's width: "⌕ Jump" and the shortcut, or just ⌕ when the
+/// window is narrow.
+pub(super) fn jump_box_w(roomy: bool) -> f32 {
+    match (roomy, cfg!(target_os = "macos")) {
+        (false, _) => 34.,
+        (true, true) => 120.,
+        (true, false) => 150.,
+    }
+}
+
+/// Stage and Wall's jump box: opens the jump palette just below it.
+pub(super) fn render_jump_box(
+    id: &'static str,
+    roomy: bool,
+    cx: &Context<SeanceApp>,
+) -> AnyElement {
+    let shortcut = if cfg!(target_os = "macos") {
+        "⌘⇧J"
+    } else {
+        "ctrl+shift+j"
+    };
+    div()
+        .id(id)
+        .flex_none()
+        .w(px(jump_box_w(roomy)))
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(8.))
+        .px(px(10.))
+        .py(px(5.))
+        .rounded_lg()
+        .bg(SeancePalette::bg())
+        .border_1()
+        .border_color(SeancePalette::border())
+        .text_xs()
+        .text_color(SeancePalette::text_faint())
+        .cursor_pointer()
+        .hover(|s| s.border_color(SeancePalette::flame_dim()))
+        .tooltip(tip_s(format!("jump to a circle ({shortcut})")))
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.open_jump(window, cx);
+        }))
+        .child("⌕")
+        .when(roomy, |d| {
+            d.child(div().flex_1().min_w_0().truncate().child("Jump"))
+                .child(
+                    div()
+                        .flex_none()
+                        .px(px(5.))
+                        .rounded_sm()
+                        .border_1()
+                        .border_color(SeancePalette::border())
+                        .text_size(px(10.))
+                        .child(shortcut),
+                )
+        })
+        .into_any_element()
 }
 
 pub(super) fn glyph(text: &'static str, color: Hsla) -> AnyElement {

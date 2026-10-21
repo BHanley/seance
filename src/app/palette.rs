@@ -7,6 +7,7 @@ use gpui::{div, prelude::*, px, Context, SharedString, Window};
 
 use crate::theme::SeancePalette;
 
+use super::views::ViewMode;
 use super::{Drawer, PaletteMode, PaneStatus, SeanceApp};
 
 /// Filter + order the jump list: every query token must appear in the slug or
@@ -239,18 +240,31 @@ impl SeanceApp {
             };
         let n = items.len();
         let sel = if n == 0 { 0 } else { selected.min(n - 1) };
+        // Stage and Wall have a jump box at the right of their top bar: the
+        // jump palette drops down from it rather than sitting mid-screen.
+        let header = match self.view.mode {
+            ViewMode::Stage => Some(super::stage::STRIP_H + self.stage.pills_row_h),
+            ViewMode::Wall => Some(super::wall::HEADER_H),
+            ViewMode::Classic => None,
+        }
+        .filter(|_| matches!(self.palette, PaletteMode::Jump { .. }));
+        let top = match header {
+            Some(h) => self.space_tabs_h() + h + 4.,
+            None => 48. + self.space_tabs_h(),
+        };
         Some(
             div()
                 .id("palette-overlay")
                 .absolute()
-                .top(px(48. + self.space_tabs_h()))
+                .top(px(top))
                 .left_0()
                 .right_0()
                 .flex()
-                .justify_center()
+                .when(header.is_some(), |d| d.justify_end().pr(px(14.)))
+                .when(header.is_none(), |d| d.justify_center())
                 .child(
                     div()
-                        .w(px(520.))
+                        .w(px(if header.is_some() { 420. } else { 520. }))
                         .max_h(px(360.))
                         .rounded_lg()
                         .border_1()

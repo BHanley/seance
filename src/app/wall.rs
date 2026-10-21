@@ -39,7 +39,7 @@ use super::SeanceApp;
 const FEED_EVERY: Duration = Duration::from_secs(20);
 const LEAD_LOGS_EVERY: Duration = Duration::from_secs(60);
 const FEED_W: f32 = 286.;
-const HEADER_H: f32 = 46.;
+pub(super) const HEADER_H: f32 = 46.;
 const GAP: f32 = 10.;
 /// Rows shrink to fill the height down to this, then the grid scrolls.
 const MIN_ROW_H: f32 = 140.;
@@ -666,13 +666,7 @@ impl SeanceApp {
                     .child(div().text_color(color).child(format!("{n} {what}")));
             }
         }
-        let wide = width >= 1200.;
         let roomy = width >= 900.;
-        let shortcut = if cfg!(target_os = "macos") {
-            "⌘⇧J"
-        } else {
-            "ctrl+shift+j"
-        };
         let rename = self.render_rename_field();
         let renaming = rename.is_some();
 
@@ -716,50 +710,7 @@ impl SeanceApp {
                     })),
                 )
             })
-            .child(
-                div()
-                    .id("wall-jump")
-                    .flex_none()
-                    .w(px(if wide {
-                        240.
-                    } else if roomy {
-                        150.
-                    } else {
-                        34.
-                    }))
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .px(px(10.))
-                    .py(px(5.))
-                    .rounded_lg()
-                    .bg(SeancePalette::bg())
-                    .border_1()
-                    .border_color(SeancePalette::border())
-                    .text_xs()
-                    .text_color(SeancePalette::text_faint())
-                    .cursor_pointer()
-                    .hover(|s| s.border_color(SeancePalette::flame_dim()))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_jump(window, cx);
-                    }))
-                    .child("⌕")
-                    .when(roomy, |d| {
-                        d.child(div().flex_1().min_w_0().truncate().child("Jump anywhere"))
-                    })
-                    .when(wide, |d| {
-                        d.child(
-                            div()
-                                .flex_none()
-                                .px(px(5.))
-                                .rounded_sm()
-                                .border_1()
-                                .border_color(SeancePalette::border())
-                                .text_size(px(10.))
-                                .child(shortcut),
-                        )
-                    }),
-            )
+            .child(super::stage::render_jump_box("wall-jump", roomy, cx))
             .into_any_element()
     }
 
