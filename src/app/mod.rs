@@ -2518,10 +2518,13 @@ impl SeanceApp {
         let slug_owned = pane.slug.clone();
         let app = cx.entity().downgrade();
 
-        let bounds = gpui::Bounds::centered(None, gpui::size(px(960.), px(640.)), cx);
+        // On the screen you clicked from, not always the menu bar's.
+        let display = crate::pointer_display();
+        let bounds = gpui::Bounds::centered(display, gpui::size(px(960.), px(640.)), cx);
         let result = cx.open_window(
             gpui::WindowOptions {
                 window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
+                display_id: display,
                 titlebar: Some(gpui::TitlebarOptions {
                     title: Some(name.into()),
                     ..Default::default()
@@ -2726,10 +2729,13 @@ impl SeanceApp {
     }
 
     fn open_help_window(&mut self, cx: &mut Context<Self>) {
-        let bounds = gpui::Bounds::centered(None, gpui::size(px(880.), px(780.)), cx);
+        // On the screen you clicked from, not always the menu bar's.
+        let display = crate::pointer_display();
+        let bounds = gpui::Bounds::centered(display, gpui::size(px(880.), px(780.)), cx);
         let _ = cx.open_window(
             gpui::WindowOptions {
                 window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
+                display_id: display,
                 titlebar: Some(gpui::TitlebarOptions {
                     title: Some("grimoire ✦ seance".into()),
                     ..Default::default()

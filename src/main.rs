@@ -326,10 +326,10 @@ fn main() {
         install_app_menu(cx);
 
         match boot {
-            Boot::Local => open_main_window(cx),
+            Boot::Local => open_main_window(pointer_display(), cx),
             Boot::Remote(t) => {
                 adopt_tunnel(t);
-                open_main_window(cx);
+                open_main_window(pointer_display(), cx);
             }
             Boot::Picker(prefill, error) => open_picker_window(prefill, error, cx),
         }
@@ -377,11 +377,62 @@ fn adopt_tunnel(t: tunnel::Tunnel) {
     let _ = ACTIVE_TUNNEL.set(t);
 }
 
-fn open_main_window(cx: &mut App) {
-    let bounds = Bounds::centered(None, size(px(1480.), px(920.)), cx);
+/// The display under the mouse pointer, which is where you just opened
+/// Seance from (Spotlight, the Dock). Without it a new window always lands on
+/// the display with the menu bar, and so in that display's Space. None off
+/// macOS, or when CoreGraphics can't say.
+pub(crate) fn pointer_display() -> Option<gpui::DisplayId> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::ffi::c_void;
+        #[repr(C)]
+        struct CGPoint {
+            x: f64,
+            y: f64,
+        }
+        #[link(name = "CoreGraphics", kind = "framework")]
+        extern "C" {
+            fn CGEventCreate(source: *const c_void) -> *mut c_void;
+            fn CGEventGetLocation(event: *mut c_void) -> CGPoint;
+            fn CGGetDisplaysWithPoint(
+                point: CGPoint,
+                max: u32,
+                displays: *mut u32,
+                count: *mut u32,
+            ) -> i32;
+        }
+        #[link(name = "CoreFoundation", kind = "framework")]
+        extern "C" {
+            fn CFRelease(cf: *const c_void);
+        }
+        // SAFETY: a null-source CGEvent only reports where the pointer is;
+        // it is released before the lookup. Both use global display points.
+        unsafe {
+            let event = CGEventCreate(std::ptr::null());
+            if event.is_null() {
+                return None;
+            }
+            let at = CGEventGetLocation(event);
+            CFRelease(event);
+            let (mut id, mut count) = (0u32, 0u32);
+            if CGGetDisplaysWithPoint(at, 1, &mut id, &mut count) != 0 || count == 0 {
+                return None;
+            }
+            Some(gpui::DisplayId::new(id as u64))
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    None
+}
+
+/// `display` is where to open: the pointer's at launch, the connect
+/// picker's after it.
+fn open_main_window(display: Option<gpui::DisplayId>, cx: &mut App) {
+    let bounds = Bounds::centered(display, size(px(1480.), px(920.)), cx);
     cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
+            display_id: display,
             titlebar: Some(TitlebarOptions {
                 title: Some("seance".into()),
                 ..Default::default()
@@ -398,10 +449,12 @@ fn open_main_window(cx: &mut App) {
 }
 
 fn open_picker_window(prefill: Option<launch::LaunchPref>, error: Option<String>, cx: &mut App) {
-    let bounds = Bounds::centered(None, size(px(680.), px(360.)), cx);
+    let display = pointer_display();
+    let bounds = Bounds::centered(display, size(px(680.), px(360.)), cx);
     cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
+            display_id: display,
             titlebar: Some(TitlebarOptions {
                 title: Some("seance — connect".into()),
                 ..Default::default()
@@ -419,7 +472,9 @@ fn open_picker_window(prefill: Option<launch::LaunchPref>, error: Option<String>
                         if let picker::PickOutcome::Remote(t) = outcome {
                             adopt_tunnel(t);
                         }
-                        open_main_window(cx);
+                        // Where the picker is, though the pointer may have
+                        // moved on while it connected.
+                        open_main_window(window.display(cx).map(|d| d.id()), cx);
                         window.remove_window();
                     }),
                 )
