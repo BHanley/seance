@@ -408,7 +408,7 @@ fn shadowed(text: SharedString, color: Hsla, shadow: bool) -> gpui::AnyElement {
 }
 
 impl HudView {
-    fn render_row(&self, i: usize, row: &Row, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_row(&self, row: &Row, cx: &mut Context<Self>) -> gpui::AnyElement {
         let now = Instant::now();
         let hi = self.hovered;
         // Ink's resting state floats over the desktop, so it gets the shadow.
@@ -429,7 +429,7 @@ impl HudView {
         let (workspace, slug) = (row.now.workspace.clone(), row.now.slug.clone());
         let hover_slug = slug.clone();
         let mut el = div()
-            .id(("hud-row", i))
+            .id(SharedString::from(format!("hud-row-{slug}")))
             .flex()
             .flex_col()
             .h(px(row_h(row)))
@@ -519,12 +519,7 @@ impl HudView {
     /// from its bottom edge) or below them (Pips, which grows down), so
     /// hovering never moves a row.
     fn render_list(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let rows: Vec<_> = self
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(i, r)| self.render_row(i, r, cx))
-            .collect();
+        let rows: Vec<_> = self.rows.iter().map(|r| self.render_row(r, cx)).collect();
         let full = self.hovered.then(|| self.render_full_name());
         let (above, below) = if self.mode == HudMode::Pips {
             (None, full)
