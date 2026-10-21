@@ -442,6 +442,7 @@ pub(super) fn render_pane(
     flipped: Option<&Entity<ScratchpadDrawer>>,
     is_zoomed: bool,
     rail_hover: bool,
+    is_lead: bool,
     cx: &Context<SeanceApp>,
 ) -> impl IntoElement {
     let is_active = active == Some(pane.slug.as_str());
@@ -697,6 +698,12 @@ pub(super) fn render_pane(
                             SeancePalette::status_exited()
                         }),
                 )
+                .when(is_lead, |d| {
+                    d.child(super::sprite::render(
+                        &super::sprite::for_circle(&pane.workspace),
+                        1.5,
+                    ))
+                })
                 .child(match rename_input {
                     // Renaming this pane — the inline editor takes the title slot.
                     // Clicks stay in the editor: the frame's mouse-down

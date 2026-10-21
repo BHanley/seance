@@ -1601,6 +1601,12 @@ impl SeanceApp {
             .gap(px(9.))
             .text_sm()
             .min_w_0()
+            .when(is_lead, |d| {
+                d.child(super::sprite::render(
+                    &super::sprite::for_circle(&pane.workspace),
+                    3.,
+                ))
+            })
             .child(
                 div()
                     .flex_none()

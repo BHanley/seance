@@ -25,6 +25,7 @@
 //! | `seance-auto-sleep-idle` (e.g. `6h`), `seance-auto-sleep-skip` (circle slugs, comma separated) | daemon's auto-sleep of idle Claude panes |
 //! | `seance-done-sound`, `seance-done-sound-volume` | sound when a circle lead finishes out of sight |
 //! | `seance-hud` (`ink`/`pips`/`off`) | the Mac's floating progress HUD at launch (GUI) |
+//! | `lead-sprite.<circle-slug>` | a seed that swaps that circle's lead creature (GUI) |
 //!
 //! The two Stage paths are read through the daemon's fs bridge, so they name
 //! files on the daemon's machine and a leading `~` is the daemon's home.
@@ -99,6 +100,8 @@ pub struct TermConfig {
     /// `seance-hud`: which progress HUD the GUI opens with (`ink`, `pips`,
     /// `off`). Read by `app::hud`; None is off.
     pub seance_hud: Option<String>,
+    /// `lead-sprite.<circle-slug> = SEED`: re-seeds that circle's creature.
+    pub lead_sprites: std::collections::HashMap<String, String>,
 }
 
 impl Default for TermConfig {
@@ -124,6 +127,7 @@ impl Default for TermConfig {
             seance_auto_sleep_idle_ms: None,
             seance_auto_sleep_skip: Vec::new(),
             seance_hud: None,
+            lead_sprites: Default::default(),
         }
     }
 }
@@ -286,7 +290,14 @@ fn apply(cfg: &mut TermConfig, key: &str, value: &str) {
                 cfg.seance_done_sound_volume = v.clamp(0.0, 1.0);
             }
         }
-        _ => {}
+        _ => {
+            if let Some(circle) = key.strip_prefix("lead-sprite.").filter(|c| !c.is_empty()) {
+                match non_empty(value) {
+                    Some(seed) => cfg.lead_sprites.insert(circle.to_string(), seed),
+                    None => cfg.lead_sprites.remove(circle),
+                };
+            }
+        }
     }
 }
 
@@ -417,6 +428,22 @@ mod tests {
         assert_eq!(cfg.notify_on_command_finish_after_ms, 90_000);
         assert_eq!(cfg.seance_needs_sound, None);
         assert_eq!(cfg.seance_done_sound, None);
+    }
+
+    #[test]
+    fn reads_lead_sprite_seeds() {
+        let dir = test_dir("sprites");
+        let p = write(
+            &dir,
+            "terminal.conf",
+            "lead-sprite.l6-leveling = frog\nlead-sprite.main = x\nlead-sprite.main =\nlead-sprite. = y\n",
+        );
+        let cfg = load(&p);
+        assert_eq!(
+            cfg.lead_sprites.get("l6-leveling").map(String::as_str),
+            Some("frog")
+        );
+        assert_eq!(cfg.lead_sprites.len(), 1);
     }
 
     #[test]

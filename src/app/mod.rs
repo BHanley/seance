@@ -39,6 +39,7 @@ mod pads;
 mod palette;
 mod quicklaunch;
 mod sidebar;
+mod sprite;
 mod stage;
 mod stage_parse;
 mod tiles;

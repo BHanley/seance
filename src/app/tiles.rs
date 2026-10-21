@@ -217,6 +217,7 @@ impl SeanceApp {
                         flipped,
                         true, // is_zoomed
                         self.rail_hover_pane.as_deref() == Some(pane.slug.as_str()),
+                        self.stage_lead(&pane.workspace).as_deref() == Some(pane.slug.as_str()),
                         cx,
                     )),
             )
@@ -344,6 +345,7 @@ impl SeanceApp {
                             flipped_l,
                             false,
                             self.rail_hover_pane.as_deref() == Some(left.slug.as_str()),
+                            self.stage_lead(&left.workspace).as_deref() == Some(left.slug.as_str()),
                             cx,
                         )),
                 )
@@ -382,6 +384,8 @@ impl SeanceApp {
                             flipped_r,
                             false,
                             self.rail_hover_pane.as_deref() == Some(right.slug.as_str()),
+                            self.stage_lead(&right.workspace).as_deref()
+                                == Some(right.slug.as_str()),
                             cx,
                         )),
                 )
@@ -475,6 +479,7 @@ impl SeanceApp {
                             flipped,
                             false,
                             self.rail_hover_pane.as_deref() == Some(pane.slug.as_str()),
+                            self.stage_lead(&pane.workspace).as_deref() == Some(pane.slug.as_str()),
                             cx,
                         )),
                 );
