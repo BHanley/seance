@@ -867,9 +867,10 @@ impl SeanceApp {
             self.workspace_unread.remove(&ws);
             return;
         }
+        // Only done leaves a mark: working is read live, and a sticky one
+        // would outrank Done.
         let att = match state {
             "done" => Some(WorkspaceAttention::Done),
-            "working" | "planning" => Some(WorkspaceAttention::Working),
             _ => None,
         };
         if let Some(a) = att {
@@ -912,18 +913,12 @@ impl SeanceApp {
         if self.workspace_has_working_agent(workspace) {
             return Some(WorkspaceAttention::Working);
         }
-        // An unread `Working` is history, not work: live working was checked
-        // above, and drawing it froze a spinner on an idle row.
-        self.workspace_unread
-            .get(workspace)
-            .copied()
-            .filter(|a| !matches!(a, WorkspaceAttention::Working))
-            .or_else(|| {
-                self.panes
-                    .iter()
-                    .any(|p| p.workspace == workspace && self.subs_pref.later.contains(&p.slug))
-                    .then_some(WorkspaceAttention::Later)
-            })
+        self.workspace_unread.get(workspace).copied().or_else(|| {
+            self.panes
+                .iter()
+                .any(|p| p.workspace == workspace && self.subs_pref.later.contains(&p.slug))
+                .then_some(WorkspaceAttention::Later)
+        })
     }
 
     /// Sidebar right-edge label: relative time since the last pane output in

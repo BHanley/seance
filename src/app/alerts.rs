@@ -124,7 +124,6 @@ impl SeanceApp {
         if self.selected_workspace.as_deref() == Some(ws.as_str()) {
             return;
         }
-        // Done replaces a leftover `working` mark (which never draws).
         self.workspace_unread.insert(ws, WorkspaceAttention::Done);
     }
 
