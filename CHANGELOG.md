@@ -151,9 +151,9 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   card and health footer; they now keep what they showed until a read
   succeeds (a file that is really gone still clears).
 - `daemon-upgrade.log` filled with NULs after an upgrade; it is appended to
-  now, like `daemon.log`. While the daemon is out of reach the GUI retries
-  less often (up to every 5 s) and logs about once a minute instead of
-  every 400 ms.
+  now, like `daemon.log`. While the daemon's socket can't be reached at all
+  the GUI retries less often (up to every 5 s) and logs about once a minute
+  instead of every 400 ms.
 - Repeated status-sets no longer write the event log, save state and
   broadcast when nothing changed, and finished tasks leave saved state a
   week after they finish.

@@ -47,10 +47,13 @@ const DEFAULT_WORKSPACE: &str = "main";
 /// week, and the map was never trimmed before (it had grown past 170 KB).
 const FINISHED_TASK_TTL_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 
-/// Whether `t` is still worth keeping at `now`: done, orphaned and cancelled
-/// tasks go a week after they finished; every other status stays.
+/// Whether `t` is still worth keeping at `now`: done, failed, orphaned and
+/// cancelled tasks go a week after they finished; every other status stays.
 fn keep_task(t: &TaskRecord, now: u64) -> bool {
-    if !matches!(t.status.as_str(), "done" | "orphaned" | "cancelled") {
+    if !matches!(
+        t.status.as_str(),
+        "done" | "failed" | "orphaned" | "cancelled"
+    ) {
         return true;
     }
     let at = t.finished_ms.unwrap_or(t.created_ms);
