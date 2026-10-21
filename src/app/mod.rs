@@ -301,9 +301,6 @@ pub struct SeanceApp {
     circle_modes: std::collections::HashMap<String, Vec<String>>,
     /// Sticky attention on inactive circles until selected (done/needs).
     workspace_unread: std::collections::HashMap<String, WorkspaceAttention>,
-    /// Full-window live overview (ctrl+shift+space). On exactly while the
-    /// layout is Wall.
-    overview: bool,
     /// This window's layout (Classic / Stage / Wall).
     view: views::ViewState,
     /// Stage's leads, lead log line, health report and caches.
@@ -534,7 +531,6 @@ impl SeanceApp {
             circle_mode_defs: Vec::new(),
             circle_modes: std::collections::HashMap::new(),
             workspace_unread: std::collections::HashMap::new(),
-            overview: view.mode == views::ViewMode::Wall,
             view,
             stage: stage::StageState::default(),
             wall: wall::WallState::default(),
@@ -1478,7 +1474,7 @@ impl SeanceApp {
                 self.workspace_activity.insert(ws, now);
             }
         }
-        if !self.overview {
+        if !self.overview() {
             let ws = self.selected_workspace.as_deref();
             let visible = self.panes.iter().any(|p| {
                 p.slug == slug && p.popped.is_none() && ws.is_none_or(|w| p.workspace == w)
@@ -1819,7 +1815,7 @@ impl SeanceApp {
                 return;
             }
             // A rename open on the Wall takes esc first.
-            if self.overview && self.renaming.is_none() {
+            if self.overview() && self.renaming.is_none() {
                 self.set_overview(false, cx);
                 cx.stop_propagation();
                 return;
@@ -1922,7 +1918,7 @@ impl SeanceApp {
                     cx.stop_propagation();
                 }
                 " " | "space" => {
-                    self.set_overview(!self.overview, cx);
+                    self.set_overview(!self.overview(), cx);
                     cx.stop_propagation();
                 }
                 // Not l: macOS takes cmd+shift+l for its "Search With Google"

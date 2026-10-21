@@ -304,11 +304,6 @@ pub fn index_of(id: &str) -> Option<usize> {
     SCHEMES.iter().position(|x| x.id == s.id)
 }
 
-/// The scheme for `id`, or the default when it is unknown.
-pub fn find_or_default(id: &str) -> &'static Scheme {
-    find(id).unwrap_or(&SCHEMES[0])
-}
-
 /// `candlelit, abyssal, ...` for error messages and help.
 pub fn id_list() -> String {
     SCHEMES.iter().map(|s| s.id).collect::<Vec<_>>().join(", ")
@@ -329,7 +324,6 @@ mod tests {
         assert_eq!(find(" Ouija ").map(|s| s.id), Some("ouija"));
         assert_eq!(index_of("synth"), Some(8));
         assert!(find("nope").is_none());
-        assert_eq!(find_or_default("nope").id, DEFAULT);
     }
 
     #[test]

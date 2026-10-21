@@ -221,7 +221,8 @@ impl Engine {
     }
 
     /// Every pane in the circle is restorable (and there is at least one).
-    /// This is the gate on both the manual verb and the automatic sweep.
+    /// This is the gate on the manual verb; the automatic sweep checks each
+    /// pane on its own with [`Self::pane_restorable`].
     pub fn workspace_restorable(&self, workspace: &str) -> bool {
         let mut any = false;
         for p in self.panes.iter().filter(|p| p.workspace == workspace) {

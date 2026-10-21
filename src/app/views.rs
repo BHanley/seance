@@ -84,9 +84,15 @@ impl SeanceApp {
     /// and, on Wall, the overview stream. Queued until the first Attach.
     pub(super) fn announce_view(&self) {
         let _ = self.client.set_view(self.view.mode.id());
-        if self.overview {
+        if self.overview() {
             let _ = self.client.set_overview(true);
         }
+    }
+
+    /// Full-window live overview (ctrl+shift+space): on exactly while the
+    /// layout is Wall.
+    pub(super) fn overview(&self) -> bool {
+        self.view.mode == ViewMode::Wall
     }
 
     /// A deliberate pick (toggle, ctrl+shift+t, `ctl layout`): saved.
@@ -104,6 +110,7 @@ impl SeanceApp {
         if mode == self.view.mode {
             return;
         }
+        let was_wall = self.overview();
         if mode == ViewMode::Wall {
             self.view.before_wall = self.view.mode;
         } else if self.view.mode == ViewMode::Wall {
@@ -114,10 +121,8 @@ impl SeanceApp {
         }
         self.view.mode = mode;
         self.stage.peek = None;
-        let wall = mode == ViewMode::Wall;
-        if self.overview != wall {
-            self.overview = wall;
-            let _ = self.client.set_overview(wall);
+        if self.overview() != was_wall {
+            let _ = self.client.set_overview(!was_wall);
         }
         if persist && self.view.persist {
             save(mode);
