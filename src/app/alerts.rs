@@ -98,9 +98,6 @@ impl SeanceApp {
         if watching {
             return;
         }
-        // Every finish, like the done banner: one still unseen from before
-        // doesn't make the next one silent.
-        desktop_notify::done_sound();
         self.done_unseen.insert(pane.to_string());
         let Some(ws) = self
             .panes
@@ -110,6 +107,12 @@ impl SeanceApp {
         else {
             return;
         };
+        // Only a circle's lead dings (its crew finishing is the lead's
+        // business), and on every finish, like the done banner: one still
+        // unseen from before doesn't make the next one silent.
+        if self.stage.leads.get(&ws).map(String::as_str) == Some(pane) {
+            desktop_notify::done_sound();
+        }
         if self.selected_workspace.as_deref() == Some(ws.as_str()) {
             return;
         }

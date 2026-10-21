@@ -163,7 +163,7 @@ pub fn bell_sound() {
     play(&LAST_BELL_MS, path, cfg.bell_audio_volume);
 }
 
-/// `seance-done-sound`: a pane finished while you were looking elsewhere.
+/// `seance-done-sound`: a circle lead finished while you were looking elsewhere.
 /// Several finishing within a second play once.
 pub fn done_sound() {
     static LAST_DONE_MS: AtomicU64 = AtomicU64::new(0);

@@ -22,7 +22,7 @@
 //! | `seance-circle-map` | TSV of `circle-slug<TAB>folder` for Stage's lead log line (GUI) |
 //! | `seance-health-file` | health report Stage's footer reads (GUI) |
 //! | `seance-needs-sound` | macOS sound name for needs-you banners (`default` = the system's) |
-//! | `seance-done-sound`, `seance-done-sound-volume` | sound when a pane finishes out of sight |
+//! | `seance-done-sound`, `seance-done-sound-volume` | sound when a circle lead finishes out of sight |
 //!
 //! The two Stage paths are read through the daemon's fs bridge, so they name
 //! files on the daemon's machine and a leading `~` is the daemon's home.

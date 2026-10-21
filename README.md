@@ -322,7 +322,7 @@ see above), `theme`, `palette`, `background`, `foreground`, `cursor-color`,
 `notify-on-command-finish-after`, `seance-needs-sound` (a macOS sound name,
 `default` = the system's, for needs-you and agent-ask banners),
 `seance-done-sound` and `seance-done-sound-volume` (played when a pane
-finishes while you're looking elsewhere). A pane's BEL plays the bell sound; OSC 9 /
+finishes while you're looking elsewhere; leads only). A pane's BEL plays the bell sound; OSC 9 /
 OSC 777 and long shell commands post a desktop notification when you
 aren't looking at that pane (a command-finish notification also plays the bell sound); OSC 52
 copies reach the clipboard. Restart the daemon (`seance upgrade`) and GUI
