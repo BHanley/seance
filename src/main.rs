@@ -350,8 +350,6 @@ fn main() {
 /// that looks standard but does nothing is worse than no item. ⌘Q is the one
 /// that was actually missing.
 fn install_app_menu(cx: &mut gpui::App) {
-    use gpui::{Menu, MenuItem};
-
     cx.on_action(|_: &app::actions::ActQuit, cx| cx.quit());
     // gpui's restart: waits for this process to exit, then `open`s the bundle.
     cx.on_action(|_: &app::actions::ActRestart, cx| cx.restart());
@@ -359,10 +357,19 @@ fn install_app_menu(cx: &mut gpui::App) {
     cx.on_action(|_: &app::actions::ActHudInk, cx| set_mode(HudMode::Ink, cx));
     cx.on_action(|_: &app::actions::ActHudPips, cx| set_mode(HudMode::Pips, cx));
     cx.on_action(|_: &app::actions::ActHudOff, cx| set_mode(HudMode::Off, cx));
+    set_app_menus(HudMode::Off, cx);
+}
+
+/// The Seance menu, with a check on the progress HUD in use.
+pub(crate) fn set_app_menus(hud: app::hud::HudMode, cx: &mut gpui::App) {
+    use app::hud::HudMode;
+    use gpui::{Menu, MenuItem};
+
     cx.set_menus([Menu::new("Seance").items([
-        MenuItem::action("Progress HUD: Ink", app::actions::ActHudInk),
-        MenuItem::action("Progress HUD: Pips", app::actions::ActHudPips),
-        MenuItem::action("Progress HUD: Off", app::actions::ActHudOff),
+        MenuItem::action("Progress HUD: Ink", app::actions::ActHudInk).checked(hud == HudMode::Ink),
+        MenuItem::action("Progress HUD: Pips", app::actions::ActHudPips)
+            .checked(hud == HudMode::Pips),
+        MenuItem::action("Progress HUD: Off", app::actions::ActHudOff).checked(hud == HudMode::Off),
         MenuItem::separator(),
         MenuItem::action("Restart Seance", app::actions::ActRestart),
         MenuItem::action("Quit Seance", app::actions::ActQuit),

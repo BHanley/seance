@@ -95,16 +95,31 @@ struct Row {
     gone_at: Option<Instant>,
 }
 
-/// `N/M` in a status note ("build 3/5"): step N of M.
+/// The most steps a note's `N/M` can claim; past it, it's an id or a date.
+const MAX_STEPS: u32 = 50;
+
+/// `N/M` in a status note ("build 3/5"): step N of M. Only a standalone pair
+/// counts, so dates (10/20/2026), paths and ids don't turn into bars.
 fn parse_step(note: &str) -> Option<(u32, u32)> {
-    static STEP: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(r"(\d{1,3})\s*/\s*(\d{1,3})").expect("step pattern")
-    });
+    static STEP: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"(\d+)\s*/\s*(\d+)").expect("step pattern"));
+    let bytes = note.as_bytes();
+    let joined = |b: Option<&u8>| b.is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'/');
     STEP.captures_iter(note).find_map(|c| {
+        let whole = c.get(0)?;
+        let before = whole.start().checked_sub(1).and_then(|i| bytes.get(i));
+        if joined(before) || joined(bytes.get(whole.end())) {
+            return None;
+        }
         let n: u32 = c[1].parse().ok()?;
         let m: u32 = c[2].parse().ok()?;
-        (m > 0 && n <= m).then_some((n, m))
+        (m > 0 && m <= MAX_STEPS && n <= m).then_some((n, m))
     })
+}
+
+/// Text on one line: runs of whitespace (newlines too) become one space.
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// "45s", "4m", "1h05".
@@ -138,10 +153,17 @@ impl SeanceApp {
                 .iter()
                 .find(|a| a.answer.is_none() && a.from == p.slug);
             let needs = ask.is_some() || matches!(state, "needs-human" | "blocked" | "risky");
+            // A working or planning status alone may be stale; the pane has
+            // to be busy to count as running.
             let busy = self.busy_panes.contains(&p.slug);
-            if !needs && !busy && state != "working" {
+            if !needs && !busy {
                 continue;
             }
+            let note = if needs || matches!(state, "working" | "planning") {
+                note
+            } else {
+                None
+            };
             let circle = self.workspace_label(&p.workspace);
             let task = p.title(cx).and_then(|t| task_title(&t, &p.command));
             let text = match (ask, needs) {
@@ -161,8 +183,8 @@ impl SeanceApp {
                 slug: p.slug.clone(),
                 circle,
                 workspace: p.workspace.clone(),
-                text,
-                full,
+                text: one_line(&text),
+                full: one_line(&full),
                 needs,
                 step: if needs {
                     None
@@ -183,6 +205,11 @@ pub struct HudView {
     main: AnyWindowHandle,
     rows: Vec<Row>,
     hovered: bool,
+    /// The row under the pointer, whose full name the hover line shows.
+    hovered_row: Option<String>,
+    /// Bumped each time the window shows, so the element ids (and the hover
+    /// state gpui keeps under them) start fresh.
+    shows: usize,
     /// The window size last asked of the platform, and whether it is on screen.
     size: (f32, f32),
     shown: bool,
@@ -221,6 +248,8 @@ impl HudView {
             main,
             rows: Vec::new(),
             hovered: false,
+            hovered_row: None,
+            shows: 0,
             size,
             shown: false,
             _tick: tick,
@@ -229,20 +258,25 @@ impl HudView {
 
     /// Re-read the app's rows, age out finished ones, and fit the window.
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(app) = self.app.upgrade() else {
-            return;
+        // The main window is gone: nothing to report, so no frozen HUD.
+        let fresh = match self.app.upgrade() {
+            Some(app) => app.read(cx).hud_rows(cx),
+            None => {
+                self.rows.clear();
+                Vec::new()
+            }
         };
-        let fresh = app.read(cx).hud_rows(cx);
         merge_rows(&mut self.rows, fresh, Instant::now());
-        self.fit(window);
+        self.fit(window, cx);
         cx.notify();
     }
 
     /// Size the window to the rows (and the hover state), and hide it when
     /// there is nothing to show.
-    fn fit(&mut self, window: &mut Window) {
+    fn fit(&mut self, window: &mut Window, cx: &mut App) {
         if self.rows.is_empty() {
             self.hovered = false;
+            self.hovered_row = None;
             if self.shown {
                 native::set_visible(window, false);
                 self.shown = false;
@@ -252,11 +286,15 @@ impl HudView {
         let want = content_size(self.mode, self.hovered, &self.rows);
         if want != self.size {
             native::resize(window, want, self.mode);
+            // AppKit reports the new size while the app is borrowed, so gpui
+            // drops that resize; without this the viewport keeps the old size.
+            window.bounds_changed(cx);
             self.size = want;
         }
         if !self.shown {
             native::set_visible(window, true);
             self.shown = true;
+            self.shows += 1;
         }
     }
 
@@ -310,17 +348,18 @@ fn merge_rows(rows: &mut Vec<Row>, fresh: Vec<RowIn>, now: Instant) {
 }
 
 /// One row's height in the list (Ink, and Pips when hovered).
-fn row_h(row: &Row, hovered: bool) -> f32 {
+fn row_h(row: &Row) -> f32 {
     let track = if row.now.needs { 0. } else { TRACK_GAP + 1. };
-    let full = if hovered { FULL_H } else { 0. };
-    LINE_H + track + full
+    LINE_H + track
 }
 
 /// The window size for `rows` in `mode`.
 fn content_size(mode: HudMode, hovered: bool, rows: &[Row]) -> (f32, f32) {
-    let list_h = |hovered| {
-        rows.iter().map(|r| row_h(r, hovered)).sum::<f32>()
+    // Hovering adds one line for the full name and moves no row.
+    let list_h = |hovered: bool| {
+        rows.iter().map(row_h).sum::<f32>()
             + ROW_GAP * rows.len().saturating_sub(1) as f32
+            + if hovered { FULL_H + ROW_GAP } else { 0. }
     };
     match (mode, hovered) {
         (HudMode::Pips, false) => {
@@ -388,13 +427,22 @@ impl HudView {
         let elapsed = fmt_elapsed(now.duration_since(row.since));
         let fill = row.now.step.map(|(n, m)| n as f32 / m as f32).unwrap_or(0.);
         let (workspace, slug) = (row.now.workspace.clone(), row.now.slug.clone());
+        let hover_slug = slug.clone();
         let mut el = div()
             .id(("hud-row", i))
             .flex()
             .flex_col()
-            .h(px(row_h(row, hi)))
+            .h(px(row_h(row)))
             .opacity(alpha)
             .cursor_pointer()
+            .on_hover(cx.listener(move |this, on: &bool, _, cx| {
+                if *on {
+                    this.hovered_row = Some(hover_slug.clone());
+                } else if this.hovered_row.as_ref() == Some(&hover_slug) {
+                    this.hovered_row = None;
+                }
+                cx.notify();
+            }))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.open(workspace.clone(), slug.clone(), cx);
             }))
@@ -445,22 +493,31 @@ impl HudView {
                     .child(div().h_full().w(gpui::relative(fill)).bg(gray(0.42))),
             );
         }
-        if hi {
-            el = el.child(
-                div()
-                    .h(px(FULL_H))
-                    .text_size(px(10.))
-                    .line_height(px(FULL_H))
-                    .text_color(gray(0.45))
-                    .whitespace_nowrap()
-                    .overflow_hidden()
-                    .truncate()
-                    .child(row.now.full.clone()),
-            );
-        }
         el.into_any_element()
     }
 
+    /// The hovered row's full name, on one line of its own.
+    fn render_full_name(&self) -> gpui::AnyElement {
+        let full = self
+            .hovered_row
+            .as_ref()
+            .and_then(|slug| self.rows.iter().find(|r| &r.now.slug == slug))
+            .map(|r| r.now.full.clone())
+            .unwrap_or_default();
+        div()
+            .flex_none()
+            .h(px(FULL_H))
+            .text_size(px(10.))
+            .line_height(px(FULL_H))
+            .text_color(gray(0.55))
+            .truncate()
+            .child(full)
+            .into_any_element()
+    }
+
+    /// The rows, with the full-name line above them (Ink, which grows up
+    /// from its bottom edge) or below them (Pips, which grows down), so
+    /// hovering never moves a row.
     fn render_list(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let rows: Vec<_> = self
             .rows
@@ -468,11 +525,19 @@ impl HudView {
             .enumerate()
             .map(|(i, r)| self.render_row(i, r, cx))
             .collect();
+        let full = self.hovered.then(|| self.render_full_name());
+        let (above, below) = if self.mode == HudMode::Pips {
+            (None, full)
+        } else {
+            (full, None)
+        };
         div()
             .flex()
             .flex_col()
             .gap(px(ROW_GAP))
+            .children(above)
             .children(rows)
+            .children(below)
             .into_any_element()
     }
 
@@ -516,7 +581,7 @@ impl Render for HudView {
         let (w, h) = self.size;
         let backing = SeancePalette::bg().opacity(0.82);
         let root = div()
-            .id("hud")
+            .id(("hud", self.shows))
             .w(px(w))
             .h(px(h))
             .overflow_hidden()
@@ -524,7 +589,10 @@ impl Render for HudView {
             .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
                 if this.hovered != *hovered && !this.rows.is_empty() {
                     this.hovered = *hovered;
-                    this.fit(window);
+                    if !*hovered {
+                        this.hovered_row = None;
+                    }
+                    this.fit(window, cx);
                     cx.notify();
                 }
             }));
@@ -557,6 +625,7 @@ struct HudCtl {
     app: WeakEntity<SeanceApp>,
     main: AnyWindowHandle,
     display: Option<DisplayId>,
+    mode: HudMode,
     window: Option<WindowHandle<HudView>>,
 }
 
@@ -577,6 +646,7 @@ pub fn start(
         app,
         main,
         display,
+        mode: HudMode::Off,
         window: None,
     });
     let mode = HudMode::parse(crate::term_config::get().seance_hud.as_deref());
@@ -588,11 +658,17 @@ pub fn set_mode(mode: HudMode, cx: &mut App) {
     let Some(ctl) = cx.try_global::<HudCtl>() else {
         return;
     };
+    if ctl.mode == mode {
+        return;
+    }
     let (app, main, display, old) = (ctl.app.clone(), ctl.main, ctl.display, ctl.window);
     if let Some(old) = old {
         let _ = old.update(cx, |_, window, _| window.remove_window());
     }
-    cx.global_mut::<HudCtl>().window = None;
+    let ctl = cx.global_mut::<HudCtl>();
+    ctl.window = None;
+    ctl.mode = mode;
+    crate::set_app_menus(mode, cx);
     if mode == HudMode::Off || !cfg!(target_os = "macos") {
         return;
     }
@@ -626,6 +702,9 @@ pub fn set_mode(mode: HudMode, cx: &mut App) {
             show: true,
             kind: WindowKind::PopUp,
             is_movable: false,
+            // No titlebar to drag, and AppKit then doesn't hold a click
+            // back to tell it from a double click.
+            app_owns_titlebar_drag: true,
             is_resizable: false,
             is_minimizable: false,
             display_id: Some(display.id()),
@@ -694,8 +773,8 @@ mod native {
         let Some(w) = ns_window(window) else {
             return;
         };
-        // SAFETY: plain AppKit setters on a live NSWindow, each called with
-        // the argument types AppKit declares (NSUInteger, BOOL).
+        // SAFETY: plain AppKit getters and setters on a live NSPanel, each
+        // called with the argument types AppKit declares (NSUInteger, BOOL).
         unsafe {
             let send_id_u: unsafe extern "C" fn(Id, Sel, usize) -> Id =
                 std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
@@ -710,6 +789,19 @@ mod native {
             }
             send_bool(w, sel(c"setHasShadow:"), 0);
             send_bool(w, sel(c"setExcludedFromWindowsMenu:"), 1);
+            // A panel hides whenever its app isn't frontmost, which is
+            // exactly when the HUD is wanted.
+            send_bool(w, sel(c"setHidesOnDeactivate:"), 0);
+            // A click on it doesn't make it the key window (it has no keys
+            // to take), and cmd-` skips it.
+            send_bool(w, sel(c"setBecomesKeyOnlyIfNeeded:"), 1);
+            const IGNORES_CYCLE: usize = 1 << 6;
+            let get_u: unsafe extern "C" fn(Id, Sel) -> usize =
+                std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let set_u: unsafe extern "C" fn(Id, Sel, usize) =
+                std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let behavior = get_u(w, sel(c"collectionBehavior"));
+            set_u(w, sel(c"setCollectionBehavior:"), behavior | IGNORES_CYCLE);
         }
     }
 
@@ -828,6 +920,19 @@ mod tests {
         assert_eq!(parse_step("tests"), None);
         assert_eq!(parse_step("ratio 9/3 then 2/4"), Some((2, 4)));
         assert_eq!(parse_step("0/0"), None);
+        // Dates, ids and paths aren't steps.
+        assert_eq!(parse_step("deploy 10/20/2026"), None);
+        assert_eq!(parse_step("ship 2026/10/20"), None);
+        assert_eq!(parse_step("issue 120/300"), None);
+        assert_eq!(parse_step("open src/3/4"), None);
+        assert_eq!(parse_step("v2/3"), None);
+        assert_eq!(parse_step("deploy 10/20"), Some((10, 20)));
+        assert_eq!(parse_step("10/60 checks"), None);
+    }
+
+    #[test]
+    fn row_text_is_one_line() {
+        assert_eq!(one_line("  fix\n the   tiles\t"), "fix the tiles");
     }
 
     #[test]
@@ -880,7 +985,11 @@ mod tests {
         assert_eq!((pw, ph), (PIP_W + DOT + PIP_GAP + 2. * PILL_PAD_X, PILL_H));
         let (_, ink) = content_size(HudMode::Ink, false, &rows);
         let (_, ink_hover) = content_size(HudMode::Ink, true, &rows);
-        assert_eq!(ink_hover - ink, 2. * FULL_H);
+        assert_eq!(
+            ink_hover - ink,
+            FULL_H + ROW_GAP,
+            "one line, rows don't move"
+        );
         assert!(content_size(HudMode::Pips, true, &rows).0 > pw);
     }
 }
