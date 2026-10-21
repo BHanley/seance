@@ -73,14 +73,16 @@ fn abs_cwd(cwd_raw: &str) -> PathBuf {
     PathBuf::from(shellexpand::tilde(cwd_raw).into_owned())
 }
 
-/// `~/.claude/projects/<cwd with / and . flattened to ->/<id>.jsonl`.
+/// `<claude home>/projects/<cwd with / and . flattened to ->/<id>.jsonl`.
+/// Claude's home is `$CLAUDE_CONFIG_DIR`, else `~/.claude`.
 pub(crate) fn claude_transcript(cwd_raw: &str, session: &str) -> PathBuf {
     let encoded: String = abs_cwd(cwd_raw)
         .to_string_lossy()
         .chars()
         .map(|c| if c == '/' || c == '.' { '-' } else { c })
         .collect();
-    PathBuf::from(shellexpand::tilde("~/.claude/projects").into_owned())
+    home_dir("CLAUDE_CONFIG_DIR", "~/.claude")
+        .join("projects")
         .join(encoded)
         .join(format!("{session}.jsonl"))
 }

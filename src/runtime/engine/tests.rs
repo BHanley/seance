@@ -8,7 +8,6 @@ use std::path::PathBuf;
 pub(super) fn with_test_state_dir<T>(tag: &str, f: impl FnOnce() -> T) -> T {
     // Share lock with state::tests — both mutate SEANCE_STATE_DIR.
     let _g = crate::state::test_env_lock();
-    let prev = std::env::var("SEANCE_STATE_DIR").ok();
     let dir = std::env::temp_dir().join(format!(
         "seance-eng-state-{}-{}-{}",
         tag,
@@ -16,11 +15,26 @@ pub(super) fn with_test_state_dir<T>(tag: &str, f: impl FnOnce() -> T) -> T {
         now_ms()
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    std::env::set_var("SEANCE_STATE_DIR", &dir);
+    // Claude's home too, so transcripts a test writes never land in the
+    // real ~/.claude.
+    let vars = [
+        ("SEANCE_STATE_DIR", dir.clone()),
+        ("CLAUDE_CONFIG_DIR", dir.join("claude")),
+    ];
+    let prev: Vec<_> = vars
+        .iter()
+        .map(|(k, v)| {
+            let was = std::env::var_os(k);
+            std::env::set_var(k, v);
+            (*k, was)
+        })
+        .collect();
     let out = f();
-    match prev {
-        Some(v) => std::env::set_var("SEANCE_STATE_DIR", v),
-        None => std::env::remove_var("SEANCE_STATE_DIR"),
+    for (k, was) in prev {
+        match was {
+            Some(v) => std::env::set_var(k, v),
+            None => std::env::remove_var(k),
+        }
     }
     let _ = std::fs::remove_dir_all(&dir);
     out

@@ -862,7 +862,7 @@ fn sleeping_keeps_the_pane_and_survives_its_own_exit_event() {
         let scratch = temp_scratch("sleep-keep");
         let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
         let slug = eng.push_stub_pane("agent", "lab");
-        let transcript = fake_claude_pane(&mut eng, &slug, "sleep-keep");
+        fake_claude_pane(&mut eng, &slug, "sleep-keep");
 
         assert!(eng.pane_restorable(&slug));
         assert_eq!(eng.sleep_workspace("lab").unwrap(), 1);
@@ -883,7 +883,6 @@ fn sleeping_keeps_the_pane_and_survives_its_own_exit_event() {
         // Sleeping twice is a no-op, not an error (sweep vs right-click race).
         assert!(!eng.sleep_pane(&slug).unwrap());
 
-        let _ = std::fs::remove_file(&transcript);
         let _ = std::fs::remove_dir_all(&scratch);
     });
 }
@@ -987,10 +986,10 @@ fn auto_sleep_takes_idle_restorable_panes() {
         let busy = eng.push_stub_pane("agent", "busy-circle");
         let asking = eng.push_stub_pane("agent", "asking-circle");
         let skipped = eng.push_stub_pane("agent", "l6-leveling");
-        let t1 = fake_claude_pane(&mut eng, &idle, "sweep-1");
-        let t2 = fake_claude_pane(&mut eng, &busy, "sweep-2");
-        let t3 = fake_claude_pane(&mut eng, &asking, "sweep-3");
-        let t4 = fake_claude_pane(&mut eng, &skipped, "sweep-4");
+        fake_claude_pane(&mut eng, &idle, "sweep-1");
+        fake_claude_pane(&mut eng, &busy, "sweep-2");
+        fake_claude_pane(&mut eng, &asking, "sweep-3");
+        fake_claude_pane(&mut eng, &skipped, "sweep-4");
 
         let now = now_ms();
         let day = 24 * 60 * 60 * 1000;
@@ -1023,9 +1022,6 @@ fn auto_sleep_takes_idle_restorable_panes() {
         assert_eq!(eng.auto_sleep_sweep(idle_ms, &skip), vec![idle.clone()]);
         assert!(!eng.panes.iter().find(|p| p.slug == shell).unwrap().asleep);
 
-        for t in [t1, t2, t3, t4] {
-            let _ = std::fs::remove_file(t);
-        }
         let _ = std::fs::remove_dir_all(&scratch);
     });
 }
@@ -1051,26 +1047,23 @@ fn hosted_claude_records_titles_and_launch() {
 
 /// Give a stub pane the shape of a resumable claude pane: a claude command, a
 /// minted session id, and a transcript on disk where `--resume` would find it.
-/// Returns the transcript path so the test can clean it up.
-fn fake_claude_pane(eng: &mut Engine, slug: &str, tag: &str) -> PathBuf {
-    let cwd = std::env::temp_dir().join(format!("seance-sleep-{}-{}", tag, std::process::id()));
+/// Everything lands in the test's state dir (Claude's home included, see
+/// `with_test_state_dir`), which is removed when the test ends.
+fn fake_claude_pane(eng: &mut Engine, slug: &str, tag: &str) {
+    let cwd = crate::state::state_dir()
+        .unwrap()
+        .join(format!("cwd-{tag}"));
     std::fs::create_dir_all(&cwd).unwrap();
+    let cwd = cwd.to_string_lossy().to_string();
     let session = format!("11111111-2222-4333-a444-{:012}", std::process::id());
-    let encoded: String = cwd
-        .to_string_lossy()
-        .chars()
-        .map(|c| if c == '/' || c == '.' { '-' } else { c })
-        .collect();
-    let dir = PathBuf::from(shellexpand::tilde("~/.claude/projects").into_owned()).join(encoded);
-    std::fs::create_dir_all(&dir).unwrap();
-    let transcript = dir.join(format!("{session}.jsonl"));
+    let transcript = super::agent_session::claude_transcript(&cwd, &session);
+    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
     std::fs::write(&transcript, b"{}\n").unwrap();
 
     let p = eng.panes.iter_mut().find(|p| p.slug == slug).unwrap();
     p.command = "claude --dangerously-skip-permissions".into();
-    p.cwd = cwd.to_string_lossy().to_string();
+    p.cwd = cwd;
     p.agent_session = Some(session);
-    transcript
 }
 
 // -- per-connection framing ---------------------------------------------------
