@@ -24,6 +24,7 @@
 //! | `seance-needs-sound` | macOS sound name for needs-you banners (`default` = the system's) |
 //! | `seance-auto-sleep-idle` (e.g. `6h`), `seance-auto-sleep-skip` (circle slugs, comma separated) | daemon's auto-sleep of idle Claude panes |
 //! | `seance-done-sound`, `seance-done-sound-volume` | sound when a circle lead finishes out of sight |
+//! | `seance-hud` (`ink`/`pips`/`off`) | the Mac's floating progress HUD at launch (GUI) |
 //!
 //! The two Stage paths are read through the daemon's fs bridge, so they name
 //! files on the daemon's machine and a leading `~` is the daemon's home.
@@ -95,6 +96,9 @@ pub struct TermConfig {
     pub seance_auto_sleep_idle_ms: Option<u64>,
     /// `seance-auto-sleep-skip`: circles whose panes are never auto-slept.
     pub seance_auto_sleep_skip: Vec<String>,
+    /// `seance-hud`: which progress HUD the GUI opens with (`ink`, `pips`,
+    /// `off`). Read by `app::hud`; None is off.
+    pub seance_hud: Option<String>,
 }
 
 impl Default for TermConfig {
@@ -119,6 +123,7 @@ impl Default for TermConfig {
             seance_done_sound_volume: 0.6,
             seance_auto_sleep_idle_ms: None,
             seance_auto_sleep_skip: Vec::new(),
+            seance_hud: None,
         }
     }
 }
@@ -258,6 +263,7 @@ fn apply(cfg: &mut TermConfig, key: &str, value: &str) {
         "seance-circle-map" => cfg.seance_circle_map = non_empty(value),
         "seance-health-file" => cfg.seance_health_file = non_empty(value),
         "seance-needs-sound" => cfg.seance_needs_sound = non_empty(value),
+        "seance-hud" => cfg.seance_hud = non_empty(value),
         "seance-done-sound" => cfg.seance_done_sound = non_empty(value).map(PathBuf::from),
         // `off` (or 0) turns auto-sleep off.
         "seance-auto-sleep-idle" => {

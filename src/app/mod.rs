@@ -32,6 +32,7 @@ pub(crate) mod actions;
 mod alerts;
 mod chrome;
 mod dock;
+pub mod hud;
 mod layout;
 mod menus;
 mod pads;

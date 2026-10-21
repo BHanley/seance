@@ -5773,6 +5773,7 @@ dependencies = [
  "markdown",
  "notify 8.2.0",
  "rand 0.8.7",
+ "raw-window-handle",
  "regex",
  "seance-core",
  "serde",

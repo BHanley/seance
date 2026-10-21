@@ -345,7 +345,7 @@ fn main() {
 /// terminal to ctrl-C, and closing the window doesn't quit on macOS, so ⌘Q
 /// hitting an app with no Quit item leaves force-quit as the only way out.
 ///
-/// Quit and Restart only. Hide / Hide Others / Show All are *zed's* actions,
+/// The Progress HUD switch, Restart and Quit. Hide / Hide Others / Show All are *zed's* actions,
 /// not gpui's: each would need a real implementation here, and a menu item
 /// that looks standard but does nothing is worse than no item. ⌘Q is the one
 /// that was actually missing.
@@ -355,7 +355,15 @@ fn install_app_menu(cx: &mut gpui::App) {
     cx.on_action(|_: &app::actions::ActQuit, cx| cx.quit());
     // gpui's restart: waits for this process to exit, then `open`s the bundle.
     cx.on_action(|_: &app::actions::ActRestart, cx| cx.restart());
+    use app::hud::{set_mode, HudMode};
+    cx.on_action(|_: &app::actions::ActHudInk, cx| set_mode(HudMode::Ink, cx));
+    cx.on_action(|_: &app::actions::ActHudPips, cx| set_mode(HudMode::Pips, cx));
+    cx.on_action(|_: &app::actions::ActHudOff, cx| set_mode(HudMode::Off, cx));
     cx.set_menus([Menu::new("Seance").items([
+        MenuItem::action("Progress HUD: Ink", app::actions::ActHudInk),
+        MenuItem::action("Progress HUD: Pips", app::actions::ActHudPips),
+        MenuItem::action("Progress HUD: Off", app::actions::ActHudOff),
+        MenuItem::separator(),
         MenuItem::action("Restart Seance", app::actions::ActRestart),
         MenuItem::action("Quit Seance", app::actions::ActQuit),
     ])]);
@@ -432,23 +440,30 @@ pub(crate) fn pointer_display() -> Option<gpui::DisplayId> {
 /// picker's after it.
 fn open_main_window(display: Option<gpui::DisplayId>, cx: &mut App) {
     let bounds = Bounds::centered(display, size(px(1480.), px(920.)), cx);
-    cx.open_window(
-        WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            display_id: display,
-            titlebar: Some(TitlebarOptions {
-                title: Some("seance".into()),
+    let app_slot = std::rc::Rc::new(std::cell::Cell::new(None));
+    let slot = app_slot.clone();
+    let handle = cx
+        .open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                display_id: display,
+                titlebar: Some(TitlebarOptions {
+                    title: Some("seance".into()),
+                    ..Default::default()
+                }),
+                app_id: Some("seance".into()),
                 ..Default::default()
-            }),
-            app_id: Some("seance".into()),
-            ..Default::default()
-        },
-        |window, cx| {
-            let view = cx.new(|cx| SeanceApp::new(window, cx));
-            cx.new(|cx| Root::new(view, window, cx))
-        },
-    )
-    .expect("failed to open window");
+            },
+            |window, cx| {
+                let view = cx.new(|cx| SeanceApp::new(window, cx));
+                slot.set(Some(view.downgrade()));
+                cx.new(|cx| Root::new(view, window, cx))
+            },
+        )
+        .expect("failed to open window");
+    if let Some(app) = app_slot.take() {
+        app::hud::start(app, handle.into(), display, cx);
+    }
 }
 
 fn open_picker_window(prefill: Option<launch::LaunchPref>, error: Option<String>, cx: &mut App) {

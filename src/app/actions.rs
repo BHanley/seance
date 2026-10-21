@@ -19,6 +19,19 @@ pub struct ActQuit;
 #[action(namespace = seance, no_json)]
 pub struct ActRestart;
 
+/// The Seance menu's Progress HUD items: switch the HUD for this session.
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActHudInk;
+
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActHudPips;
+
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActHudOff;
+
 // Sidebar context-menu actions (menu items dispatch gpui actions).
 #[derive(Action, Clone, PartialEq, Deserialize)]
 #[action(namespace = seance, no_json)]

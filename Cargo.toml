@@ -55,6 +55,10 @@ rand = "0.8"
 # Replay ring segments + bundles (pure-rust gzip; decodes in wasm too).
 flate2 = { workspace = true }
 
+# The progress HUD reaches its NSWindow through gpui's raw window handle.
+[target.'cfg(target_os = "macos")'.dependencies]
+raw-window-handle = "0.6"
+
 # gpui-component declares its zed deps rev-less (tracks HEAD) and cargo ignores
 # transitive git lockfiles, so zed HEAD drift breaks the build. Cargo forbids
 # same-source [patch] pins, so we patch to a local checkout held at the rev
