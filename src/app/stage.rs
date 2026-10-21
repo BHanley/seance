@@ -1604,7 +1604,7 @@ impl SeanceApp {
             .when(is_lead, |d| {
                 d.child(super::sprite::render(
                     &super::sprite::for_circle(&pane.workspace),
-                    3.,
+                    2.5,
                 ))
             })
             .child(

@@ -1,6 +1,6 @@
 //! A tiny pixel creature per circle, drawn on the circle's lead pane (its
 //! title strip and Stage's lead card). Generated from the circle slug, so a
-//! circle keeps its creature on every machine; `lead-sprite.<slug> = SEED`
+//! circle keeps its creature on every machine; `seance-lead-sprite.<slug> = SEED`
 //! in terminal.conf swaps in another.
 //!
 //! 10x10 and mirror-symmetric like an identicon: a body silhouette, two dark
@@ -101,7 +101,7 @@ pub(super) fn generate(seed: &str) -> Sprite {
     let leg = 1 + rng.below(widths[7] as u64 - 1);
     set(8, leg, Cell::Body);
     set(9, leg, Cell::Body);
-    if rng.below(2) == 0 && leg < 4 {
+    if rng.below(2) == 0 {
         set(9, leg + 1, Cell::Body);
     }
 
@@ -112,7 +112,7 @@ pub(super) fn generate(seed: &str) -> Sprite {
 }
 
 /// The sprite as a grid of `cell`-point squares. Whole device pixels keep it
-/// crisp: 1.5 and 3 points land on 3 and 6 pixels on a Retina screen.
+/// crisp: 1.5 and 2.5 points land on 3 and 5 pixels on a 2x screen.
 pub(super) fn render(sprite: &Sprite, cell: f32) -> AnyElement {
     let body = rgb(BODY[sprite.color]);
     let ink = rgb(INK);
@@ -133,7 +133,7 @@ pub(super) fn render(sprite: &Sprite, cell: f32) -> AnyElement {
         .into_any_element()
 }
 
-/// A circle's creature, honoring its `lead-sprite.<slug>` override.
+/// A circle's creature, honoring its `seance-lead-sprite.<slug>` override.
 pub(super) fn for_circle(slug: &str) -> Sprite {
     let conf = crate::term_config::get();
     generate(conf.lead_sprites.get(slug).map_or(slug, String::as_str))

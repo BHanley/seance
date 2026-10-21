@@ -25,7 +25,7 @@
 //! | `seance-auto-sleep-idle` (e.g. `6h`), `seance-auto-sleep-skip` (circle slugs, comma separated) | daemon's auto-sleep of idle Claude panes |
 //! | `seance-done-sound`, `seance-done-sound-volume` | sound when a circle lead finishes out of sight |
 //! | `seance-hud` (`ink`/`pips`/`off`) | the Mac's floating progress HUD at launch (GUI) |
-//! | `lead-sprite.<circle-slug>` | a seed that swaps that circle's lead creature (GUI) |
+//! | `seance-lead-sprite.<circle-slug>` | a seed that swaps that circle's lead creature (GUI) |
 //!
 //! The two Stage paths are read through the daemon's fs bridge, so they name
 //! files on the daemon's machine and a leading `~` is the daemon's home.
@@ -100,7 +100,7 @@ pub struct TermConfig {
     /// `seance-hud`: which progress HUD the GUI opens with (`ink`, `pips`,
     /// `off`). Read by `app::hud`; None is off.
     pub seance_hud: Option<String>,
-    /// `lead-sprite.<circle-slug> = SEED`: re-seeds that circle's creature.
+    /// `seance-lead-sprite.<circle-slug> = SEED`: re-seeds that circle's creature.
     pub lead_sprites: std::collections::HashMap<String, String>,
 }
 
@@ -291,7 +291,10 @@ fn apply(cfg: &mut TermConfig, key: &str, value: &str) {
             }
         }
         _ => {
-            if let Some(circle) = key.strip_prefix("lead-sprite.").filter(|c| !c.is_empty()) {
+            if let Some(circle) = key
+                .strip_prefix("seance-lead-sprite.")
+                .filter(|c| !c.is_empty())
+            {
                 match non_empty(value) {
                     Some(seed) => cfg.lead_sprites.insert(circle.to_string(), seed),
                     None => cfg.lead_sprites.remove(circle),
@@ -436,7 +439,7 @@ mod tests {
         let p = write(
             &dir,
             "terminal.conf",
-            "lead-sprite.l6-leveling = frog\nlead-sprite.main = x\nlead-sprite.main =\nlead-sprite. = y\n",
+            "seance-lead-sprite.l6-leveling = frog\nseance-lead-sprite.main = x\nseance-lead-sprite.main =\nseance-lead-sprite. = y\n",
         );
         let cfg = load(&p);
         assert_eq!(

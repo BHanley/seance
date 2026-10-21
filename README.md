@@ -389,6 +389,16 @@ seance-hud = ink      # ink, pips or off (the default)
 The Seance menu's **Progress HUD: Ink / Pips / Off** switch it for the
 session; `seance-hud` picks the one it starts with.
 
+### Lead sprites
+
+Each circle's lead pane shows a small pixel creature, in its title strip
+and beside **LEAD** on Stage. It is generated from the circle's slug, so
+it stays the same everywhere. To re-roll one, give it another seed:
+
+```
+seance-lead-sprite.l6-leveling = frog
+```
+
 ## Architecture (short)
 
 | process | role |

@@ -103,6 +103,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   in `terminal.conf` (default off) picks one at launch; the Seance menu's
   **Progress HUD** items switch it for the session.
 
+- **Lead sprites.** A circle's lead pane shows a small pixel creature in
+  its title strip and beside **LEAD** on Stage, generated from the circle
+  slug. `seance-lead-sprite.<circle-slug> = SEED` in `terminal.conf`
+  re-rolls one.
+
 - **Restart Seance (macOS).** The app menu has **Restart Seance**, which
   quits and reopens the app. Panes live on the daemon, so it is the same as
   quitting and reopening by hand.
