@@ -1,6 +1,7 @@
-//! Wall: a tile per circle in the space, the selected one big with its lead
-//! live, and a Today feed of what happened across circles. Focus (the
-//! button, a double click or Enter) opens Stage on the selected circle.
+//! Wall: a tile per circle in the space (or, on the All tab, in every
+//! space), the selected one big with its lead live, and a Today feed of
+//! what happened across circles. Focus (the button, a double click or
+//! Enter) opens Stage on the selected circle, in its own space.
 //!
 //! Like Stage, the Wall takes the rail and grid's place, so no terminal
 //! view is in the frame and the keyboard parks on the window: arrows move
@@ -104,9 +105,26 @@ struct Tile {
     footer: Option<String>,
     /// The pane a needs-you tile's Open puts on stage.
     asking: Option<String>,
+    /// The circle's space name, on the All tab.
+    space: Option<String>,
 }
 
 impl SeanceApp {
+    /// The Wall is on its All tab.
+    pub(super) fn wall_all(&self) -> bool {
+        self.view.mode == super::views::ViewMode::Wall && self.view.wall_all
+    }
+
+    pub(super) fn set_wall_all(&mut self, on: bool) {
+        if self.view.wall_all == on {
+            return;
+        }
+        self.view.wall_all = on;
+        if self.view.persist {
+            super::views::save_wall_all(on);
+        }
+    }
+
     /// Keys stop at the Wall (no pane is shown to take them) unless a
     /// field drawn over it is open: the rename field or the quicklaunch
     /// editor.
@@ -362,7 +380,13 @@ impl SeanceApp {
     }
 
     /// Everything one circle's tile shows.
-    fn wall_tile(&mut self, ws: &str, asking: Option<String>, cx: &mut Context<Self>) -> Tile {
+    fn wall_tile(
+        &mut self,
+        ws: &str,
+        asking: Option<String>,
+        all: bool,
+        cx: &mut Context<Self>,
+    ) -> Tile {
         let lead = self.stage_lead(ws);
         let lead_pane = lead
             .as_deref()
@@ -418,6 +442,10 @@ impl SeanceApp {
         let fallback = (title.is_none() && doing.is_none() && result.is_empty())
             .then(|| last_real_line(&lines))
             .flatten();
+        let spaces = &self.subs_pref.spaces;
+        let space = all
+            .then(|| spaces.get(spaces.space_of(ws)).map(|s| s.name.clone()))
+            .flatten();
         Tile {
             ws: ws.to_string(),
             label: self.workspace_label(ws),
@@ -429,6 +457,7 @@ impl SeanceApp {
             fallback,
             footer,
             asking,
+            space,
         }
     }
 
@@ -461,10 +490,12 @@ impl SeanceApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let circles = self
-            .subs_pref
-            .spaces
-            .circles_in(&self.current_space(), &self.workspaces());
+        let spaces = &self.subs_pref.spaces;
+        let circles = if self.wall_all() {
+            spaces.all_circles(&self.workspaces())
+        } else {
+            spaces.circles_in(&self.current_space(), &self.workspaces())
+        };
         self.health_feed(cx);
         self.wall_feeds(&circles, cx);
         let size = window.viewport_size();
@@ -479,10 +510,12 @@ impl SeanceApp {
                 asking.entry(w.circle).or_insert(p);
             }
         }
+        // Space names only while the All tab is there to say why.
+        let all = self.wall_all() && self.space_tabs_shown();
         let mut tiles: Vec<Tile> = Vec::with_capacity(circles.len());
         for ws in &circles {
             let ask = asking.remove(ws);
-            tiles.push(self.wall_tile(ws, ask, cx));
+            tiles.push(self.wall_tile(ws, ask, all, cx));
         }
         let seen: Vec<&str> = circles.iter().map(String::as_str).collect();
         self.wall
@@ -1041,6 +1074,14 @@ impl SeanceApp {
                             })
                             .child(tile.label),
                     )
+                    .children(tile.space.map(|s| {
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .text_color(SeancePalette::text_faint())
+                            .child(s)
+                    }))
                     .child(div().ml_auto().flex_none().child(status)),
             )
             .child(

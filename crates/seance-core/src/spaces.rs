@@ -84,6 +84,14 @@ impl Spaces {
             .collect()
     }
 
+    /// `ordered` grouped by space in list order, each space's circles in
+    /// `ordered`'s order: Wall's All tab.
+    pub fn all_circles(&self, ordered: &[String]) -> Vec<String> {
+        let mut out = ordered.to_vec();
+        out.sort_by_key(|c| self.list.iter().position(|s| s.id == self.space_of(c)));
+        out
+    }
+
     /// Exact id, else a unique case-insensitive name.
     pub fn resolve(&self, key: &str) -> Option<String> {
         if self.has(key) {
@@ -259,6 +267,25 @@ mod tests {
         assert_eq!(sp.space_of("ui-1x"), w);
         assert_eq!(sp.space_of("a"), "general", "existing circles stay put");
         assert_eq!(ids(&sp), vec!["general", w.as_str()]);
+    }
+
+    #[test]
+    fn all_circles_go_by_space_then_circle_order() {
+        let names =
+            |items: &[&str]| -> Vec<String> { items.iter().map(|s| s.to_string()).collect() };
+        let mut sp = Spaces::default();
+        sp.reconcile(&c(&["a", "b", "c", "d"]), None);
+        let later = sp.create("later");
+        let work = sp.create("work");
+        sp.move_circle("a", &work);
+        sp.move_circle("b", &later);
+        sp.move_circle("d", &later);
+        let ordered = names(&["a", "b", "c", "d"]);
+        assert_eq!(sp.all_circles(&ordered), names(&["c", "b", "d", "a"]));
+        assert_eq!(
+            sp.all_circles(&names(&["d", "a", "b"])),
+            names(&["d", "b", "a"])
+        );
     }
 
     #[test]

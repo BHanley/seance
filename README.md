@@ -307,7 +307,11 @@ The Wall replaces the rail and grid with a tile for every circle of the
 current space (the rail's list, in rail order) and a Today feed down the
 right side.
 
-- **Header.** The space tabs, as on Stage, sit above it. ✦ opens the rail's
+- **Header.** The space tabs, as on Stage, sit above it, led by **All**:
+  every circle from every space in one grid, in space order, each small
+  tile with its space's name. Focus from All opens Stage in the circle's
+  own space; a space tab leaves All. The pick is kept on this machine
+  (`wall_all` in `~/.config/seance/view.json`). ✦ opens the rail's
   menu. Then a **Wall · Focus** switch (Focus opens the selected circle on stage),
   a summary such as "9 circles awake · 1 needs you · 1 down", the layout
   toggle and a jump box for the jump palette (ctrl+shift+j).

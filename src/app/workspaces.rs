@@ -543,11 +543,28 @@ impl SeanceApp {
     }
 
     /// A pick from Stage or Wall's space tabs, or ctrl+alt+page: show the
-    /// space and, on Stage, its first circle's lead.
+    /// space and, on Stage, its first circle's lead. Leaves Wall's All.
     pub(super) fn pick_space(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         // A tab can name a space deleted since it was drawn; the space on
         // show stays as it is, its circle and pane included.
-        if self.subs_pref.spaces.get(id).is_none() || self.shown_space() == id {
+        if self.subs_pref.spaces.get(id).is_none() {
+            cx.notify();
+            return;
+        }
+        if self.wall_all() {
+            self.set_wall_all(false);
+            // The selected circle stays when it lives in this space.
+            let spaces = &self.subs_pref.spaces;
+            if self
+                .selected_workspace
+                .as_deref()
+                .is_some_and(|ws| spaces.space_of(ws) == id)
+            {
+                self.rail_space = Some(id.to_string());
+                cx.notify();
+                return;
+            }
+        } else if self.shown_space() == id {
             cx.notify();
             return;
         }

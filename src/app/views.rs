@@ -2,7 +2,8 @@
 //! window keeps its own, switched from the toggle, ctrl+shift+t or
 //! `ctl layout`, and the last pick is saved on this machine
 //! (`~/.config/seance/view.json`), never in the daemon's shared layout. The
-//! same file keeps the progress HUD picked from the Seance menu (`hud`).
+//! same file keeps the progress HUD picked from the Seance menu (`hud`)
+//! and whether Wall shows every space (`wall_all`).
 //!
 //! Stage (`stage.rs`) and Wall (`wall.rs`) take the rail and grid's place:
 //! on Stage the pane on stage is the only place its terminal renders, and
@@ -23,6 +24,9 @@ use super::SeanceApp;
 pub(super) struct ViewState {
     pub(super) mode: ViewMode,
     before_wall: ViewMode,
+    /// Wall's All tab: every circle from every space. Kept while on Stage
+    /// or Classic, so the Wall comes back to it.
+    pub(super) wall_all: bool,
     /// Off for blank windows, which show nothing on Wall and, like their
     /// rail list, must not overwrite this machine's pick (or snoozes).
     pub(super) persist: bool,
@@ -32,16 +36,15 @@ impl ViewState {
     /// This machine's last pick; Classic when there is none, and always
     /// for a blank window.
     pub(super) fn restore(empty: bool) -> Self {
-        let mode = if empty {
-            ViewMode::Classic
+        let text = if empty {
+            String::new()
         } else {
-            std::fs::read_to_string(config_path())
-                .map(|s| decode(&s))
-                .unwrap_or_default()
+            std::fs::read_to_string(config_path()).unwrap_or_default()
         };
         ViewState {
-            mode,
+            mode: decode(&text),
             before_wall: ViewMode::Classic,
+            wall_all: wall_all_of(&text),
             persist: !empty,
         }
     }
@@ -84,6 +87,13 @@ fn hud_of(text: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+fn wall_all_of(text: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|v| v.get("wall_all")?.as_bool())
+        .unwrap_or(false)
+}
+
 pub(super) fn saved_hud() -> Option<String> {
     hud_of(&std::fs::read_to_string(config_path()).ok()?)
 }
@@ -106,6 +116,10 @@ fn save(mode: ViewMode) {
 
 pub(super) fn save_hud(id: &str) {
     save_key("hud", id);
+}
+
+pub(super) fn save_wall_all(on: bool) {
+    save_key("wall_all", on);
 }
 
 /// Stage's snoozed panes (slug to until, unix ms); empty when none are kept.
@@ -160,6 +174,19 @@ impl SeanceApp {
             self.view.before_wall = self.view.mode;
         } else if self.view.mode == ViewMode::Wall {
             self.wall_leave();
+            // Stage and Classic show one space: the selected circle's. An
+            // unplaced one already reads as the default's; pinning the rail
+            // there would send it to the default when it is placed.
+            if self.view.wall_all {
+                let spaces = &self.subs_pref.spaces;
+                if let Some(ws) = self
+                    .selected_workspace
+                    .as_deref()
+                    .filter(|ws| spaces.of.contains_key(*ws))
+                {
+                    self.rail_space = Some(spaces.space_of(ws).to_string());
+                }
+            }
         }
         if mode == ViewMode::Stage {
             self.stage_enter();
@@ -290,6 +317,18 @@ mod tests {
         let text = put(r#"{"hud":"ink"}"#, "snoozed", serde_json::json!(map));
         assert_eq!(snoozed_of(&text), map);
         assert_eq!(hud_of(&text).as_deref(), Some("ink"));
+    }
+
+    #[test]
+    fn wall_all_shares_the_file() {
+        assert!(!wall_all_of(r#"{"layout":"wall"}"#));
+        let text = put(r#"{"layout":"wall","hud":"ink"}"#, "wall_all", true);
+        assert!(wall_all_of(&text));
+        assert_eq!(
+            (decode(&text), hud_of(&text).as_deref()),
+            (ViewMode::Wall, Some("ink"))
+        );
+        assert!(!wall_all_of(&put(&text, "wall_all", false)));
     }
 
     #[test]

@@ -301,8 +301,9 @@ impl SeanceApp {
         self.stage.jumped = Some(ring[i].clone());
         self.stage.jump_after = ring[i + 1..].to_vec();
         if wall {
-            // The Wall shows one space: make it the circle's so its tile is
-            // there (a select only moves the rail for circles placed by hand).
+            // The Wall shows one space (All aside): make it the circle's so
+            // its tile is there (a select only moves the rail for circles
+            // placed by hand).
             self.rail_space = Some(self.subs_pref.spaces.space_of(&ws).to_string());
             if self.selected_workspace.as_deref() != Some(ws.as_str()) {
                 self.select_workspace(&ws, window, cx);
@@ -1104,8 +1105,9 @@ impl SeanceApp {
 
     /// Stage and Wall's space row: a tab per space with the mark its rail
     /// row has (needs you, working, done), the one on show underlined.
-    /// Empty spaces get no tab unless on show. Scrolls sideways when the
-    /// tabs don't fit; None when there would be fewer than two.
+    /// Empty spaces get no tab unless on show. Wall leads with an All tab.
+    /// Scrolls sideways when the tabs don't fit; None when there would be
+    /// fewer than two.
     pub(super) fn render_space_tabs(
         &mut self,
         key: &str,
@@ -1117,18 +1119,32 @@ impl SeanceApp {
         let shown = self.shown_space();
         let spaces = &self.subs_pref.spaces;
         let ordered = self.workspaces();
+        // Wall leads with All; on it, no space's tab is lit.
+        let wall = self.view.mode == ViewMode::Wall;
+        let all = self.wall_all();
+        // No space id has a `*`.
+        let mark = if all {
+            "*all".to_string()
+        } else {
+            shown.clone()
+        };
         // A new space on show scrolls its tab into view; the index counts
         // tabs, and empty spaces have none.
-        if self.stage.space_tabs_shown.as_deref() != Some(shown.as_str()) {
-            let i = spaces
-                .list
-                .iter()
-                .filter(|sp| sp.id == shown || !spaces.circles_in(&sp.id, &ordered).is_empty())
-                .position(|sp| sp.id == shown);
+        if self.stage.space_tabs_shown.as_deref() != Some(mark.as_str()) {
+            let i = if all {
+                Some(0)
+            } else {
+                spaces
+                    .list
+                    .iter()
+                    .filter(|sp| sp.id == shown || !spaces.circles_in(&sp.id, &ordered).is_empty())
+                    .position(|sp| sp.id == shown)
+                    .map(|i| i + usize::from(wall))
+            };
             if let Some(i) = i {
                 self.stage.space_tabs.scroll_to_item(i);
             }
-            self.stage.space_tabs_shown = Some(shown.clone());
+            self.stage.space_tabs_shown = Some(mark);
         }
         let steps = if cfg!(target_os = "macos") {
             "⌘⌥↑ / ⌘⌥↓ steps"
@@ -1141,6 +1157,7 @@ impl SeanceApp {
             if n == 0 && !on {
                 return None;
             }
+            let on = on && !all;
             let id = sp.id.clone();
             let id_menu = sp.id.clone();
             let is_default = spaces.default_id() == sp.id;
@@ -1200,6 +1217,35 @@ impl SeanceApp {
                     }),
             )
         });
+        let all_tab = wall.then(|| {
+            div()
+                .id(SharedString::from(format!("{key}-space-all")))
+                .tooltip(tip("All · every circle from every space"))
+                .flex_none()
+                .h_full()
+                .flex()
+                .items_center()
+                .border_b_2()
+                .border_color(if all {
+                    SeancePalette::flame()
+                } else {
+                    gpui::transparent_black()
+                })
+                .text_color(if all {
+                    SeancePalette::text()
+                } else {
+                    SeancePalette::text_dim()
+                })
+                .when(!all, |d| {
+                    d.cursor_pointer()
+                        .hover(|s| s.text_color(SeancePalette::text()))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.set_wall_all(true);
+                            cx.notify();
+                        }))
+                })
+                .child("All")
+        });
         // The ✦ mark leads the row, so the spaces sit beside it rather than
         // above it.
         Some(
@@ -1225,6 +1271,7 @@ impl SeanceApp {
                         .overflow_x_scroll()
                         .track_scroll(&self.stage.space_tabs)
                         .text_xs()
+                        .children(all_tab)
                         .children(tabs),
                 )
                 .into_any_element(),
