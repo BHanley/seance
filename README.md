@@ -178,6 +178,7 @@ attention routing free.
 | mouse back / forward | walk the circles you've been in |
 | stage chip click | focus + pad drawer |
 | stage chip double-click | zoom |
+| Stage × (crew card, on-stage header) | close that pane: click once to arm, again to close (the last pane closes its circle) |
 | ⚡ | arm agent (`ctl skill` orientation) |
 | ▤ | pad drawer |
 | sidebar right-edge drag | resize sidebar (width persists) |

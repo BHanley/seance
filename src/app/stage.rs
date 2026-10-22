@@ -30,7 +30,7 @@ use super::stage_parse::{
 };
 use super::util::{tip, tip_s, unread_menu};
 use super::views::ViewMode;
-use super::workspaces::{rel_label, WorkspaceAttention};
+use super::workspaces::{banish_arm_live, rel_label, WorkspaceAttention};
 use super::{PaletteMode, RenameTarget, SeanceApp};
 
 /// The lead log changes a few times an hour; the health check every 2.5h.
@@ -1830,6 +1830,7 @@ impl SeanceApp {
                 })),
             );
         }
+        row1 = row1.child(self.stage_kill_button(&pane.slug, is_lead, cx));
 
         // Crew that finished out of sight: one line on the lead's card,
         // the newest, until you open that pane.
@@ -2025,6 +2026,9 @@ impl SeanceApp {
             .last_lines
             .retain(|s| slugs.iter().any(|x| x == s));
         let mono = cx.theme().mono_font_family.clone();
+        let lead = on_stage
+            .and_then(|s| self.panes.iter().find(|p| p.slug == s))
+            .and_then(|p| self.stage_lead(&p.workspace));
         let mut cards = Vec::with_capacity(slugs.len());
         for slug in &slugs {
             let Some(idx) = self.panes.iter().position(|p| &p.slug == slug) else {
@@ -2041,6 +2045,7 @@ impl SeanceApp {
                 snap.and_then(|snap| self.stage.last_lines.lines(&p_slug, &snap).last().cloned());
             let quiet = state.quiet;
             let click = p_slug.clone();
+            let kill = self.stage_kill_button(&p_slug, lead.as_ref() == Some(&p_slug), cx);
             cards.push(
                 div()
                     .id(SharedString::from(format!("stage-crew-{p_slug}")))
@@ -2091,7 +2096,8 @@ impl SeanceApp {
                                     .text_xs()
                                     .text_color(state.color)
                                     .child(state.label),
-                            ),
+                            )
+                            .child(kill),
                     )
                     .children(last.map(|l| {
                         div()
@@ -2154,6 +2160,55 @@ impl SeanceApp {
                     .children(cards),
             )
             .children(files)
+            .into_any_element()
+    }
+
+    /// Stage's ×: the rail's two-click kill, always shown. Armed, its
+    /// tooltip says what a second click closes (the circle too, with its
+    /// last pane).
+    fn stage_kill_button(&self, slug: &str, is_lead: bool, cx: &Context<Self>) -> AnyElement {
+        let armed = banish_arm_live(self.pane_kill_armed.as_ref(), slug, Instant::now());
+        let last = self.panes.iter().find(|p| p.slug == slug).is_some_and(|p| {
+            self.panes
+                .iter()
+                .filter(|q| q.workspace == p.workspace)
+                .count()
+                == 1
+        });
+        let slug = slug.to_string();
+        div()
+            .id(SharedString::from(format!("stage-kill-{slug}")))
+            .flex_none()
+            .px_1()
+            .rounded_sm()
+            .text_xs()
+            .text_color(if armed {
+                SeancePalette::danger()
+            } else {
+                SeancePalette::text_faint()
+            })
+            .when(armed, |d| d.bg(SeancePalette::surface()))
+            .hover(|s| {
+                s.text_color(SeancePalette::danger())
+                    .bg(SeancePalette::surface())
+            })
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _, window, cx| {
+                // The crew card's own click would put the pane on stage.
+                cx.stop_propagation();
+                this.pane_kill_click(&slug, window, cx);
+            }))
+            .tooltip(tip(match (armed, last) {
+                (false, _) if is_lead => "close the lead pane",
+                (false, _) => "close pane",
+                (true, true) => "click again to close this pane and its circle",
+                (true, false) => "click again to close this pane",
+            }))
+            .child(match (armed, is_lead) {
+                (false, _) => "×",
+                (true, true) => "close lead?",
+                (true, false) => "close?",
+            })
             .into_any_element()
     }
 
