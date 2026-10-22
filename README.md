@@ -369,7 +369,9 @@ see above), `theme`, `palette`, `background`, `foreground`, `cursor-color`,
 `seance-done-sound` and `seance-done-sound-volume` (played when a pane
 finishes while you're looking elsewhere; leads only),
 `seance-auto-sleep-idle` and `seance-auto-sleep-skip` (see below),
-`seance-hud` (see below), `seance-new-circle-command` (Stage, see above).
+`seance-hud` (see below), `seance-new-circle-command` (Stage, see above),
+`seance-origin-gutter` (`false` hides the 2px stripe at a terminal's left
+edge that tints by who last typed).
 A pane's BEL plays the bell sound; OSC 9 /
 OSC 777 and long shell commands post a desktop notification when you
 aren't looking at that pane (a command-finish notification also plays the bell sound); OSC 52

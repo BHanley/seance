@@ -471,6 +471,8 @@ PTY stdin is tagged with origin. The GUI paints a 2px left gutter:
 - violet — agent / cli inject
 - flame — accepted ghost proposal
 
+`seance-origin-gutter = false` in terminal.conf turns the gutter off.
+
 ### Docs vs skill
 
 **Canonical agent contract is `seance ctl skill`.** This file and `ctl help`

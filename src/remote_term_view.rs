@@ -793,7 +793,7 @@ impl Render for RemoteTerminalView {
                                 ghost_text: ghost.map(|g| g.text),
                                 input_origin,
                                 selection,
-                                origin_gutter: true,
+                                origin_gutter: crate::term_config::get().seance_origin_gutter,
                             }
                         }
                     },
@@ -1468,7 +1468,6 @@ fn paint_grid(layout: &Layout, window: &mut Window, cx: &mut App) {
             },
         );
     }
-    paint_origin_gutter(layout, window);
     paint_stat(false, reshape_t0.elapsed().as_nanos() as u64);
     crate::latency_probe::record("gui paint fresh", paint_t0.elapsed().as_micros() as u64);
 }
