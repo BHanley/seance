@@ -296,7 +296,7 @@ pub struct SeanceApp {
     /// (a change to it, not sitting on it) is what clears the mark.
     later_last: Option<String>,
     /// Workspaces that currently have a live-working agent (for falling-edge
-    /// touch when work finishes → top of the non-working band).
+    /// touch when work finishes, which the palette's recency reads).
     workspace_was_working: std::collections::HashSet<String>,
     /// slug → display label, mirrored from `WorkspaceMeta.name`. A circle
     /// absent here reads as its slug — which is what every circle reads as
@@ -1281,7 +1281,7 @@ impl SeanceApp {
                     .map(|p| p.workspace.clone())
                 {
                     self.touch_workspace(&ws);
-                    cx.notify(); // re-sort sidebar by last human touch
+                    cx.notify();
                 }
                 if let Some(rt) = self
                     .panes
@@ -2865,8 +2865,7 @@ impl SeanceApp {
 
     /// Record a transient cross-pane touch ("⚡ driven by X") and schedule its
     /// fade — the visible-agency overlay the council converged on.
-    /// Does *not* bump workspace sidebar recency (only human typing / explicit
-    /// "touch" menu does that).
+    /// Does *not* bump workspace recency (only human typing does that).
     fn touch(&mut self, slug: &str, verb: &str, actor: &str, cx: &mut Context<Self>) {
         self.touches.insert(
             slug.to_string(),

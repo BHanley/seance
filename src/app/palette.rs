@@ -56,8 +56,8 @@ impl SeanceApp {
     /// included panes after the list became circles-only, so the highlighted
     /// row and the thing Enter jumped to were different entries.
     ///
-    /// Ordering is recency, not the rail's. The rail groups by band so it can
-    /// stay still while agents come and go; jumping wants the opposite — the
+    /// Ordering is recency, not the rail's. The rail keeps the order you
+    /// dragged so it stays still; jumping wants the opposite — the
     /// circle you were just in, then the one before that, so the hotkey plus
     /// arrows walks back through where you've been.
     pub(super) fn jump_items(&self, query: &str) -> Vec<(String, String)> {
@@ -74,7 +74,7 @@ impl SeanceApp {
     }
 
     /// When a circle was last live: real output, or human touch, whichever is
-    /// later. Same pair the rail's idle band sorts on.
+    /// later.
     fn jump_recency(&self, ws: &str) -> u64 {
         self.workspace_activity
             .get(ws)

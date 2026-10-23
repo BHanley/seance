@@ -56,6 +56,31 @@ pub(super) fn rel_label(delta_ms: u64) -> String {
 }
 use super::{RenameTarget, SeanceApp};
 
+/// Circle `moved` dropped onto `target` takes `target`'s place: after it when
+/// dragged right, before it when dragged left. Returns the new order and the
+/// circle the daemon should put `moved` before ("" for the end), or None when
+/// nothing moves.
+pub(super) fn drop_circle(
+    order: &[String],
+    moved: &str,
+    target: &str,
+) -> Option<(Vec<String>, String)> {
+    let from = order.iter().position(|w| w == moved)?;
+    let to = order.iter().position(|w| w == target)?;
+    if from == to {
+        return None;
+    }
+    let before = if from < to {
+        order.get(to + 1).cloned().unwrap_or_default()
+    } else {
+        target.to_string()
+    };
+    let mut out: Vec<String> = order.iter().filter(|w| *w != moved).cloned().collect();
+    let at = out.iter().position(|w| *w == before).unwrap_or(out.len());
+    out.insert(at, moved.to_string());
+    Some((out, before))
+}
+
 /// How many circles back the mouse can walk. A long day of cycling shouldn't
 /// grow a list forever, and nobody navigates back past a few dozen hops.
 const NAV_HISTORY_MAX: usize = 64;
@@ -689,25 +714,13 @@ impl SeanceApp {
         out
     }
 
-    /// Drop circle `moved` onto `target`: it takes `target`'s place, so a
-    /// circle dragged right lands after it and one dragged left before it.
+    /// Drop circle `moved` onto `target` (see [`drop_circle`]). The new
+    /// order shows at once; the daemon's State push confirms it.
     pub(super) fn reorder_circle(&mut self, moved: &str, target: &str) {
-        let order = self.workspaces();
-        let (Some(from), Some(to)) = (
-            order.iter().position(|w| w == moved),
-            order.iter().position(|w| w == target),
-        ) else {
+        let Some((order, before)) = drop_circle(&self.workspaces(), moved, target) else {
             return;
         };
-        if from == to {
-            return;
-        }
-        // The daemon places `moved` before `before`; an unknown name is the end.
-        let before = if from < to {
-            order.get(to + 1).cloned().unwrap_or_default()
-        } else {
-            target.to_string()
-        };
+        self.workspace_order = order;
         let _ = self.client.send(GuiRequest::ReorderWorkspace {
             moved: moved.to_string(),
             before,
@@ -720,9 +733,7 @@ impl SeanceApp {
     /// looks like a universal signal and is not: codex repaints its TUI on a
     /// timer, so its output clock never goes stale and every codex circle read
     /// as permanently working. codex puts no working state in its title
-    /// either, so for a non-spinner agent the honest answer is "unknown" —
-    /// which is why the idle band is ranked so that an unknown circle sits
-    /// still instead of churning (see [`recency_rank`]).
+    /// either, so for a non-spinner agent the honest answer is "unknown".
     fn workspace_has_working_agent(&self, workspace: &str) -> bool {
         self.panes
             .iter()
@@ -823,10 +834,9 @@ impl SeanceApp {
         any
     }
 
-    /// Bump this circle's recency so it sorts above idle peers (working agents
-    /// still float above everything). Sources: human typing into a terminal
-    /// here, right-click → touch, newly created circles, and the moment a
-    /// workspace *finishes* working (falls out of the live-working band).
+    /// Bump this circle's recency for the palette's jump order. Sources: human
+    /// typing into a terminal here, newly created circles, and the moment a
+    /// workspace *finishes* working.
     pub(super) fn touch_workspace(&mut self, ws: &str) {
         if ws.is_empty() {
             return;
@@ -835,8 +845,8 @@ impl SeanceApp {
     }
 
     /// Recompute live-working per workspace. When a circle stops having any
-    /// working agent, bump its touch so it lands at the top of the
-    /// non-working band (freshly finished work is what you want next).
+    /// working agent, bump its touch (freshly finished work is what the
+    /// palette offers next).
     pub(super) fn sync_workspace_working_touches(&mut self) {
         let names: Vec<String> = self.known_workspace_names().into_iter().collect();
         for ws in names {
@@ -1507,6 +1517,38 @@ mod tests {
             now + BANISH_ARM
         ));
         assert!(!banish_arm_live(None, "circle-7", now));
+    }
+
+    fn names(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// A pill dropped on another takes its place, whichever way it moved.
+    #[test]
+    fn a_dropped_circle_takes_the_targets_place() {
+        let order = names(&["a", "b", "c", "d"]);
+        let right = drop_circle(&order, "a", "c").unwrap();
+        assert_eq!(right, (names(&["b", "c", "a", "d"]), "d".to_string()));
+        let left = drop_circle(&order, "d", "b").unwrap();
+        assert_eq!(left, (names(&["a", "d", "b", "c"]), "b".to_string()));
+        let last = drop_circle(&order, "b", "d").unwrap();
+        assert_eq!(last, (names(&["a", "c", "d", "b"]), String::new()));
+        assert_eq!(drop_circle(&order, "b", "b"), None);
+        assert_eq!(drop_circle(&order, "b", "gone"), None);
+    }
+
+    /// Stage shows one space's circles; dragging right lands just after the
+    /// target there even when the next circle overall lives in another space.
+    #[test]
+    fn a_drop_keeps_its_place_among_another_spaces_circles() {
+        let order = names(&["a", "x", "b", "y", "c"]);
+        let (out, before) = drop_circle(&order, "a", "b").unwrap();
+        assert_eq!(before, "y");
+        let mine: Vec<_> = out
+            .iter()
+            .filter(|w| !["x", "y"].contains(&w.as_str()))
+            .collect();
+        assert_eq!(mine, ["b", "a", "c"]);
     }
 
     /// Monotonic across every boundary — a non-monotonic rank would reorder

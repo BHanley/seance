@@ -1106,9 +1106,8 @@ pub(super) fn render_help() -> gpui::AnyElement {
         .child(row("right-click header", "touch · rename · fork ⑂ · banish"))
         .child(row("+ (footer)", "new empty workspace"))
         .child(p(
-            "sidebar order is automatic: circles with working agents float to \
-             the top; otherwise last human touch wins (type into a terminal, or \
-             right-click → touch). selecting a circle alone does not reorder. \
+            "circles stay in the order you set by dragging Stage's pills; nothing \
+             moves on its own. \
              banish kills every pane under a workspace (PTYs shut down) and is \
              irreversible for the processes — scratchpad files on disk are kept.",
         ))
