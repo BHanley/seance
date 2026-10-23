@@ -1,10 +1,13 @@
 //! URL detection over a rendered grid — what a ctrl+click (native) or a tap
-//! (web) resolves to.
+//! (web) resolves to — plus the inline code span a double-click copies.
 //!
 //! Shared so the native GUI and the web client cannot drift, same rule as
 //! `util::title_looks_busy`.
 
-use crate::snapshot::GridSnapshot;
+use crate::snapshot::{CellSnap, GridSnapshot};
+
+/// `CellSnap::fg`/`bg` when the program set no colour.
+const DEFAULT_COLOR: u32 = 0xFFFF_FFFF;
 
 /// Rows joined either side of the hit row while each one continues. A
 /// snapshot carries no WRAPPED flag, so continuation is inferred (see
@@ -46,7 +49,7 @@ enum Wrap {
     Hard,
 }
 
-fn row_chars(snap: &GridSnapshot, r: u16) -> &[crate::snapshot::CellSnap] {
+fn row_chars(snap: &GridSnapshot, r: u16) -> &[CellSnap] {
     let cols = snap.cols as usize;
     &snap.cells[r as usize * cols..(r as usize + 1) * cols]
 }
@@ -179,6 +182,125 @@ fn logical_line(snap: &GridSnapshot, row: u16, col: u16) -> Option<(String, usiz
     Some((line.into_iter().collect(), hit))
 }
 
+/// The grid's own default colours: the most common (fg, bg) of its blank
+/// cells. A live grid never holds the 0xFFFFFFFF sentinel for plain text:
+/// every session seeds OSC 10/11 at spawn, so "default" arrives as the
+/// palette's RGB. Erased cells carry it, and most blanks are erased cells.
+fn plain_style(snap: &GridSnapshot) -> (u32, u32) {
+    let mut counts: std::collections::HashMap<(u32, u32), usize> = Default::default();
+    for c in snap.cells.iter().filter(|c| c.c == ' ') {
+        *counts.entry((c.fg, c.bg)).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .max_by_key(|&(_, n)| n)
+        .map(|(k, _)| k)
+        .unwrap_or((DEFAULT_COLOR, DEFAULT_COLOR))
+}
+
+/// The inline code span under one cell: what a double-click copies whole.
+///
+/// Claude draws `` `! sudo …` `` in its own text colour with the backticks
+/// dropped, so the grid's only trace of the span is its style. Word selection
+/// stopped at the first space or `=` and copied half a command. The span is
+/// the cells around `col` sharing its exact style, followed across rows when
+/// Claude wrapped it.
+///
+/// Only a coloured run on the plain background counts, and only when it sits
+/// in other text: on one row, something beside it; across rows, text before
+/// its start and after its end. A wholly coloured line or block (a diff row,
+/// an error, a dim tool result) keeps word selection.
+pub fn code_span_at(snap: &GridSnapshot, row: u16, col: u16) -> Option<String> {
+    let cols = snap.cols as usize;
+    if cols == 0 || snap.cells.is_empty() {
+        return None;
+    }
+    let rows = (snap.cells.len() / cols) as u16;
+    if row >= rows || col as usize >= cols {
+        return None;
+    }
+    let (plain_fg, plain_bg) = plain_style(snap);
+    let hit = row_chars(snap, row)[col as usize];
+    if hit.fg == plain_fg || hit.bg != plain_bg || hit.inverse {
+        return None;
+    }
+    let same = |c: &CellSnap| {
+        (c.fg, c.bg, c.bold, c.dim, c.italic, c.underline, c.inverse)
+            == (hit.fg, hit.bg, hit.bold, hit.dim, hit.italic, hit.underline, hit.inverse)
+    };
+    let blank = |cs: &[CellSnap]| cs.iter().all(|c| c.c == ' ');
+
+    let cells = row_chars(snap, row);
+    let (mut a, mut b) = (col as usize, col as usize);
+    while a > 0 && same(&cells[a - 1]) {
+        a -= 1;
+    }
+    while b + 1 < cols && same(&cells[b + 1]) {
+        b += 1;
+    }
+    // (row, first col, last col) of each piece, top to bottom.
+    let mut pieces = vec![(row, a, b)];
+
+    // Wrapped: the span ends its row and the next row's text opens with it.
+    while pieces.len() < STITCH_MAX as usize {
+        let (r, _, end) = *pieces.last().unwrap();
+        if r + 1 >= rows || !blank(&row_chars(snap, r)[end + 1..]) {
+            break;
+        }
+        let next = row_chars(snap, r + 1);
+        let Some(s) = next.iter().position(|c| c.c != ' ') else {
+            break;
+        };
+        if !same(&next[s]) {
+            break;
+        }
+        let mut e = s;
+        while e + 1 < cols && same(&next[e + 1]) {
+            e += 1;
+        }
+        pieces.push((r + 1, s, e));
+    }
+    while pieces.len() < STITCH_MAX as usize {
+        let (r, start, _) = pieces[0];
+        if r == 0 || !blank(&row_chars(snap, r)[..start]) {
+            break;
+        }
+        let prev = row_chars(snap, r - 1);
+        let Some(e) = prev.iter().rposition(|c| c.c != ' ') else {
+            break;
+        };
+        if !same(&prev[e]) {
+            break;
+        }
+        let mut s = e;
+        while s > 0 && same(&prev[s - 1]) {
+            s -= 1;
+        }
+        pieces.insert(0, (r - 1, s, e));
+    }
+
+    let before = |&(r, s, _): &(u16, usize, usize)| !blank(&row_chars(snap, r)[..s]);
+    let after = |&(r, _, e): &(u16, usize, usize)| !blank(&row_chars(snap, r)[e + 1..]);
+    let (first, last) = (&pieces[0], &pieces[pieces.len() - 1]);
+    let set_apart = if pieces.len() == 1 {
+        before(first) || after(first)
+    } else {
+        before(first) && after(last)
+    };
+    if !set_apart {
+        return None;
+    }
+    let text = pieces
+        .iter()
+        .map(|&(r, s, e)| {
+            let t: String = row_chars(snap, r)[s..=e].iter().map(|c| c.c).collect();
+            t.trim().to_string()
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(text).filter(|t| !t.is_empty())
+}
+
 /// The http(s) URL in `line` whose character range covers `col`.
 ///
 /// Indexes by CHAR, not byte: a row of terminal cells is one char per column,
@@ -212,7 +334,7 @@ pub fn http_url_at(line: &str, col: usize) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::snapshot::{CellSnap, HyperlinkSpan};
+    use crate::snapshot::HyperlinkSpan;
 
     /// A grid holding one line of text per row, padded to `cols`.
     fn grid_of(cols: usize, lines: &[&str]) -> GridSnapshot {
@@ -500,5 +622,104 @@ mod tests {
     fn a_line_ending_in_blank_does_not_swallow_the_next_row() {
         let snap = grid_of(20, &["see https://a.io/x", "tra text here"]);
         assert_eq!(url_at_cell(&snap, 0, 6).as_deref(), Some("https://a.io/x"));
+    }
+
+    const PLAIN_FG: u32 = 0x00D8_DEE9;
+    const PLAIN_BG: u32 = 0x002E_3440;
+    const SPAN_FG: u32 = 0x00B1_B9F9;
+
+    /// [`grid_of`] with plain cells in resolved RGB, as a live session has
+    /// them (OSC 10/11 are seeded at spawn, so no cell keeps the sentinel).
+    fn live_grid(cols: usize, lines: &[&str]) -> GridSnapshot {
+        let mut snap = grid_of(cols, lines);
+        for c in &mut snap.cells {
+            c.fg = PLAIN_FG;
+            c.bg = PLAIN_BG;
+        }
+        snap
+    }
+
+    /// Colour `len` cells of `row` from `col`, the way Claude paints a code span.
+    fn paint(snap: &mut GridSnapshot, row: usize, col: usize, len: usize, fg: u32) {
+        let cols = snap.cols as usize;
+        for c in &mut snap.cells[row * cols + col..row * cols + col + len] {
+            c.fg = fg;
+        }
+    }
+
+    /// A double-click anywhere in `! sudo pacman -Syu`, the space included,
+    /// copies all of it, not the word `sudo` (2026-10-23).
+    #[test]
+    fn a_double_click_in_a_code_span_takes_the_whole_span() {
+        let mut snap = live_grid(60, &["run ! sudo pacman -Syu in the pane"]);
+        paint(&mut snap, 0, 4, 18, SPAN_FG);
+        let want = Some("! sudo pacman -Syu");
+        assert_eq!(code_span_at(&snap, 0, 4).as_deref(), want);
+        assert_eq!(code_span_at(&snap, 0, 10).as_deref(), want);
+        assert_eq!(code_span_at(&snap, 0, 12).as_deref(), want);
+        assert_eq!(code_span_at(&snap, 0, 0), None);
+        assert_eq!(code_span_at(&snap, 0, 26), None);
+    }
+
+    /// Plain prose around a span keeps word selection: plain text is the
+    /// grid's resolved default colour, not the sentinel, and bold is still
+    /// that colour.
+    #[test]
+    fn plain_and_bold_words_beside_a_span_are_not_spans() {
+        let mut snap = live_grid(
+            40,
+            &["● Then run cargo build and", "  check the log before you go on."],
+        );
+        paint(&mut snap, 0, 11, 11, SPAN_FG);
+        snap.cells[40 + 2..40 + 7].iter_mut().for_each(|c| c.bold = true);
+        assert_eq!(code_span_at(&snap, 0, 13).as_deref(), Some("cargo build"));
+        assert_eq!(code_span_at(&snap, 0, 3), None);
+        assert_eq!(code_span_at(&snap, 0, 24), None);
+        assert_eq!(code_span_at(&snap, 1, 3), None);
+        assert_eq!(code_span_at(&snap, 1, 12), None);
+    }
+
+    /// A coloured line with nothing else on it is a diff row or a dim tool
+    /// result, not a span: double-click there still selects a word. Same for
+    /// text on a coloured background.
+    #[test]
+    fn a_wholly_coloured_line_is_not_a_span() {
+        let mut snap = live_grid(40, &["  + let x = compute(y);", "  - let x = 1;"]);
+        paint(&mut snap, 0, 2, 21, 0x0000_FF00);
+        assert_eq!(code_span_at(&snap, 0, 6), None);
+        snap.cells[40 + 2..40 + 14].iter_mut().for_each(|c| c.bg = 0x0040_0000);
+        paint(&mut snap, 1, 4, 3, SPAN_FG);
+        assert_eq!(code_span_at(&snap, 1, 5), None);
+    }
+
+    /// A red error block whose prefix sits on its first row only is a block,
+    /// not a wrapped span: its end has nothing after it.
+    #[test]
+    fn a_coloured_block_under_a_prefix_is_not_a_span() {
+        let mut snap = live_grid(
+            40,
+            &["  ⎿  error: could not compile", "     due to 2 previous errors"],
+        );
+        paint(&mut snap, 0, 5, 24, 0x00FF_5F6D);
+        paint(&mut snap, 1, 5, 24, 0x00FF_5F6D);
+        assert_eq!(code_span_at(&snap, 1, 8), None);
+    }
+
+    /// Claude wraps a long command onto an indented row; a click on either
+    /// piece copies the whole command.
+    #[test]
+    fn a_wrapped_code_span_is_joined_from_either_row() {
+        let mut snap = live_grid(
+            40,
+            &[
+                "● Then run sudo systemctl restart",
+                "  seance-daemon.service on the XPS.",
+            ],
+        );
+        paint(&mut snap, 0, 11, 22, SPAN_FG);
+        paint(&mut snap, 1, 2, 21, SPAN_FG);
+        let want = Some("sudo systemctl restart seance-daemon.service");
+        assert_eq!(code_span_at(&snap, 0, 17).as_deref(), want);
+        assert_eq!(code_span_at(&snap, 1, 5).as_deref(), want);
     }
 }

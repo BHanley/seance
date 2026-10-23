@@ -318,10 +318,11 @@ impl RemoteTerminalView {
         }
     }
 
-    /// Double-click on a link copies the whole URL, not the word under the
-    /// pointer (word expansion stops at `?`, `=`, `&` and at a wrapped row).
-    /// Returns false when no link is under `pos`, so the click selects a word.
-    fn copy_link_at(
+    /// Double-click on a link or an inline code span copies all of it, not the
+    /// word under the pointer (word expansion stops at a space, `?`, `=`, `&`
+    /// and at a wrapped row). Returns false when neither is under `pos`, so
+    /// the click selects a word.
+    fn copy_whole_at(
         &mut self,
         pos: gpui::Point<Pixels>,
         window: &mut Window,
@@ -332,14 +333,15 @@ impl RemoteTerminalView {
             return false;
         };
         // Web links only: `ls --hyperlink` and systemd wrap file names in
-        // file:// OSC-8 links, and there the word is what you want.
-        let Some(uri) = seance_core::links::url_at_cell(&snap, cell.row, cell.col)
+        // file:// OSC-8 links, and there the name is what you want.
+        let Some(text) = seance_core::links::url_at_cell(&snap, cell.row, cell.col)
             .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
+            .or_else(|| seance_core::links::code_span_at(&snap, cell.row, cell.col))
         else {
             return false;
         };
         self.clear_selection();
-        self.copy_text(uri, window, cx);
+        self.copy_text(text, window, cx);
         true
     }
 
@@ -725,7 +727,7 @@ impl Render for RemoteTerminalView {
                         return;
                     }
 
-                    if ev.click_count == 2 && this.copy_link_at(ev.position, window, cx) {
+                    if ev.click_count == 2 && this.copy_whole_at(ev.position, window, cx) {
                         cx.notify();
                         return;
                     }
