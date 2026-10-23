@@ -3370,6 +3370,9 @@ impl Render for SeanceApp {
                     )
                 }
             })
+            // gpui-component queues toasts on the Root but draws them only where
+            // a view renders this layer; without it every "copied" toast was lost.
+            .children(gpui_component::Root::render_notification_layer(window, cx))
     }
 }
 

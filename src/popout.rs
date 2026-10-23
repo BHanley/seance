@@ -18,7 +18,7 @@ pub struct PopoutView {
 }
 
 impl Render for PopoutView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let name = self.name.clone();
         div()
             .size_full()
@@ -71,5 +71,7 @@ impl Render for PopoutView {
                     ),
             )
             .child(div().flex_1().overflow_hidden().child(self.view.clone()))
+            // Copy toasts from the popped-out pane draw here (see SeanceApp::render).
+            .children(gpui_component::Root::render_notification_layer(window, cx))
     }
 }
