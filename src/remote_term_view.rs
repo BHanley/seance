@@ -313,9 +313,37 @@ impl RemoteTerminalView {
     }
 
     fn copy_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(mut text) = self.selection_text(cx) else {
-            return;
+        if let Some(text) = self.selection_text(cx) {
+            self.copy_text(text, window, cx);
+        }
+    }
+
+    /// Double-click on a link copies the whole URL, not the word under the
+    /// pointer (word expansion stops at `?`, `=`, `&` and at a wrapped row).
+    /// Returns false when no link is under `pos`, so the click selects a word.
+    fn copy_link_at(
+        &mut self,
+        pos: gpui::Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let snap = self.terminal.read(cx).snapshot.clone();
+        let Some(cell) = self.cell_at(pos, cx) else {
+            return false;
         };
+        // Web links only: `ls --hyperlink` and systemd wrap file names in
+        // file:// OSC-8 links, and there the word is what you want.
+        let Some(uri) = seance_core::links::url_at_cell(&snap, cell.row, cell.col)
+            .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
+        else {
+            return false;
+        };
+        self.clear_selection();
+        self.copy_text(uri, window, cx);
+        true
+    }
+
+    fn copy_text(&mut self, mut text: String, window: &mut Window, cx: &mut Context<Self>) {
         if text.is_empty() {
             return;
         }
@@ -694,6 +722,11 @@ impl Render for RemoteTerminalView {
                     if ev.modifiers.control || (cfg!(target_os = "macos") && ev.modifiers.platform)
                     {
                         this.open_link_at(ev.position, window, cx);
+                        return;
+                    }
+
+                    if ev.click_count == 2 && this.copy_link_at(ev.position, window, cx) {
+                        cx.notify();
                         return;
                     }
 
