@@ -146,9 +146,10 @@ impl Engine {
     /// A pane that said it needs you went back to work, so you answered it:
     /// flip it to working so Stage's "Needs you" banner clears.
     pub(super) fn clear_answered_status(&mut self, slug: &str) {
-        let waiting = self.statuses.get(slug).is_some_and(|(s, _)| {
-            matches!(s.as_str(), "needs-human" | "blocked" | "risky")
-        });
+        let waiting = self
+            .statuses
+            .get(slug)
+            .is_some_and(|(s, _)| matches!(s.as_str(), "needs-human" | "blocked" | "risky"));
         if !waiting {
             return;
         }

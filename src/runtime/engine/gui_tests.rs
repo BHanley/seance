@@ -1521,7 +1521,8 @@ fn a_new_turn_clears_a_blocked_status() {
         let finished = eng.push_stub_pane("finished", "lab");
         eng.statuses
             .insert(asked.clone(), ("blocked".into(), Some("need logs".into())));
-        eng.statuses.insert(flicker.clone(), ("needs-human".into(), None));
+        eng.statuses
+            .insert(flicker.clone(), ("needs-human".into(), None));
         eng.pane_busy_at.insert(flicker.clone(), now_ms());
         eng.statuses.insert(finished.clone(), ("done".into(), None));
 

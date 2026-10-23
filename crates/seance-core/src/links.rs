@@ -226,7 +226,15 @@ pub fn code_span_at(snap: &GridSnapshot, row: u16, col: u16) -> Option<String> {
     }
     let same = |c: &CellSnap| {
         (c.fg, c.bg, c.bold, c.dim, c.italic, c.underline, c.inverse)
-            == (hit.fg, hit.bg, hit.bold, hit.dim, hit.italic, hit.underline, hit.inverse)
+            == (
+                hit.fg,
+                hit.bg,
+                hit.bold,
+                hit.dim,
+                hit.italic,
+                hit.underline,
+                hit.inverse,
+            )
     };
     let blank = |cs: &[CellSnap]| cs.iter().all(|c| c.c == ' ');
 
@@ -668,10 +676,15 @@ mod tests {
     fn plain_and_bold_words_beside_a_span_are_not_spans() {
         let mut snap = live_grid(
             40,
-            &["● Then run cargo build and", "  check the log before you go on."],
+            &[
+                "● Then run cargo build and",
+                "  check the log before you go on.",
+            ],
         );
         paint(&mut snap, 0, 11, 11, SPAN_FG);
-        snap.cells[40 + 2..40 + 7].iter_mut().for_each(|c| c.bold = true);
+        snap.cells[40 + 2..40 + 7]
+            .iter_mut()
+            .for_each(|c| c.bold = true);
         assert_eq!(code_span_at(&snap, 0, 13).as_deref(), Some("cargo build"));
         assert_eq!(code_span_at(&snap, 0, 3), None);
         assert_eq!(code_span_at(&snap, 0, 24), None);
@@ -687,7 +700,9 @@ mod tests {
         let mut snap = live_grid(40, &["  + let x = compute(y);", "  - let x = 1;"]);
         paint(&mut snap, 0, 2, 21, 0x0000_FF00);
         assert_eq!(code_span_at(&snap, 0, 6), None);
-        snap.cells[40 + 2..40 + 14].iter_mut().for_each(|c| c.bg = 0x0040_0000);
+        snap.cells[40 + 2..40 + 14]
+            .iter_mut()
+            .for_each(|c| c.bg = 0x0040_0000);
         paint(&mut snap, 1, 4, 3, SPAN_FG);
         assert_eq!(code_span_at(&snap, 1, 5), None);
     }
@@ -698,7 +713,10 @@ mod tests {
     fn a_coloured_block_under_a_prefix_is_not_a_span() {
         let mut snap = live_grid(
             40,
-            &["  ⎿  error: could not compile", "     due to 2 previous errors"],
+            &[
+                "  ⎿  error: could not compile",
+                "     due to 2 previous errors",
+            ],
         );
         paint(&mut snap, 0, 5, 24, 0x00FF_5F6D);
         paint(&mut snap, 1, 5, 24, 0x00FF_5F6D);
