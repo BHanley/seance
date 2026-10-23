@@ -21,6 +21,11 @@ use crate::runtime::snapshot::{
     CellSnap, GridSnapshot,
 };
 
+/// How soon after your last keystroke in a pane its new turn counts as your
+/// answer. The Enter that sends it lands a moment before the spinner; a Mac
+/// pane's spinner rides ssh, so leave room.
+const ANSWER_WINDOW: Duration = Duration::from_secs(10);
+
 /// One GUI window connection.
 ///
 /// Workspaces are global and unowned (0.12): a connection holds a
@@ -143,24 +148,36 @@ impl Engine {
         self.gui_conns.retain(|c| c.out.push_event(ev.clone()));
     }
 
-    /// A pane that said it needs you went back to work, so you answered it:
-    /// flip it to working so Stage's "Needs you" banner clears.
-    pub(super) fn clear_answered_status(&mut self, slug: &str) {
+    /// A pane that said it needs you started a turn right after you typed in
+    /// it, so you answered it: flip it to working so Stage's "Needs you"
+    /// banner clears. Turns started by a pane message, a finished background
+    /// job or a wakeup have no keystrokes behind them and keep the flag.
+    fn clear_answered_status(&mut self, slug: &str) {
         let waiting = self
             .statuses
             .get(slug)
             .is_some_and(|(s, _)| matches!(s.as_str(), "needs-human" | "blocked" | "risky"));
-        if !waiting {
+        let Some(pane) = self.panes.iter().find(|p| p.slug == slug) else {
+            return;
+        };
+        let typed = pane
+            .agency
+            .last_human_input
+            .is_some_and(|t| t.elapsed() < ANSWER_WINDOW);
+        if !waiting || !typed {
             return;
         }
+        let ws = Some(pane.workspace.clone());
         let note = Some("answered".to_string());
         self.statuses
             .insert(slug.to_string(), ("working".into(), note.clone()));
-        let ws = self
-            .panes
-            .iter()
-            .find(|p| p.slug == slug)
-            .map(|p| p.workspace.clone());
+        self.record_event(
+            slug,
+            seance_core::replay::ReplayEvent::Status {
+                state: "working".into(),
+                note: note.clone(),
+            },
+        );
         events::log(
             "daemon",
             ws.as_deref(),
@@ -885,15 +902,10 @@ impl Engine {
                     .unwrap_or(false);
                 let was_busy = self.pane_busy.contains(slug);
                 if was_busy != now_busy {
-                    let idle_since = self.pane_busy_at.insert(slug.clone(), now_ms());
+                    self.pane_busy_at.insert(slug.clone(), now_ms());
                     if now_busy {
                         self.pane_busy.insert(slug.clone());
-                        // A blocked agent only starts a new turn once someone
-                        // answers it. The 2s idle floor keeps a spinner flicker
-                        // mid-turn from clearing a flag the agent just set.
-                        if idle_since.is_none_or(|t| now_ms().saturating_sub(t) >= 2_000) {
-                            self.clear_answered_status(slug);
-                        }
+                        self.clear_answered_status(slug);
                     } else {
                         self.pane_busy.remove(slug);
                     }

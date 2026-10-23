@@ -1508,25 +1508,28 @@ fn state_carries_each_circles_lead_and_ctl_lead_pushes_it() {
     });
 }
 
-/// An agent that marked itself blocked and then starts a new turn was
-/// answered, so its "needs you" clears to working. A flip within 2s of going
-/// idle is a spinner flicker and leaves the flag alone; other states never move.
+/// An agent that marked itself blocked and starts a turn right after you
+/// typed in its pane was answered, so its "needs you" clears to working. A turn
+/// nobody typed for (a pane message, a finished background job) keeps the
+/// flag, and other states never move.
 #[test]
-fn a_new_turn_clears_a_blocked_status() {
+fn a_turn_you_typed_for_clears_a_blocked_status() {
     with_test_state_dir("gui-answered", || {
         let scratch = temp_scratch("gui-answered");
         let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
         let asked = eng.push_stub_pane("asked", "lab");
-        let flicker = eng.push_stub_pane("flicker", "lab");
+        let unprompted = eng.push_stub_pane("unprompted", "lab");
         let finished = eng.push_stub_pane("finished", "lab");
         eng.statuses
             .insert(asked.clone(), ("blocked".into(), Some("need logs".into())));
         eng.statuses
-            .insert(flicker.clone(), ("needs-human".into(), None));
-        eng.pane_busy_at.insert(flicker.clone(), now_ms());
+            .insert(unprompted.clone(), ("needs-human".into(), None));
         eng.statuses.insert(finished.clone(), ("done".into(), None));
+        for p in eng.panes.iter_mut().filter(|p| p.slug != unprompted) {
+            p.agency.last_human_input = Some(std::time::Instant::now());
+        }
 
-        for slug in [&asked, &flicker, &finished] {
+        for slug in [&asked, &unprompted, &finished] {
             eng.handle_session_event(SessionEvent::Title {
                 slug: slug.clone(),
                 title: Some("\u{2809} thinking".into()),
@@ -1535,7 +1538,7 @@ fn a_new_turn_clears_a_blocked_status() {
 
         let state = |s: &String| eng.statuses.get(s).map(|(st, _)| st.clone());
         assert_eq!(state(&asked).as_deref(), Some("working"));
-        assert_eq!(state(&flicker).as_deref(), Some("needs-human"));
+        assert_eq!(state(&unprompted).as_deref(), Some("needs-human"));
         assert_eq!(state(&finished).as_deref(), Some("done"));
 
         let _ = std::fs::remove_dir_all(&scratch);
