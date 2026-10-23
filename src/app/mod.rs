@@ -1272,8 +1272,8 @@ impl SeanceApp {
             }
             GuiEvent::InputOrigin { pane, origin } => {
                 // Real input (keystroke / inject / propose) bumps workspace
-                // recency for sidebar auto-sort. Focus/select alone never
-                // emits InputOrigin.
+                // recency for the palette and quick-launch. Focus/select alone
+                // never emits InputOrigin.
                 if let Some(ws) = self
                     .panes
                     .iter()

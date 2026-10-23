@@ -184,6 +184,7 @@ attention routing free.
 | sidebar right-edge drag | resize sidebar (width persists) |
 | click a space | show it and select its first circle |
 | drag a circle onto a space | move it there (sticky) |
+| drag a Stage pill onto another | reorder circles; the rail, Stage and Wall all follow, and rows never move on their own |
 | drag a space onto another | reorder spaces (onto the divider = to the end) |
 | space right-click | rename · make default · banish all · delete |
 | space tab right-click (Stage, Wall) | rename · make default · delete |

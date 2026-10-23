@@ -1,5 +1,5 @@
-//! Left rail for the SeanceApp view: the workspace/pane sidebar (auto-sorted
-//! workspaces, pane drag-and-drop, per-row context menus, inline rename) and
+//! Left rail for the SeanceApp view: the workspace/pane sidebar (circles in
+//! your dragged order, pane drag-and-drop, per-row context menus, inline rename) and
 //! the host-bridge widget strip (claude accounts) above the summon footer.
 
 use gpui::{div, prelude::*, px, Context, SharedString, Window};

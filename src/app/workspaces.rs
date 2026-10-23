@@ -1,5 +1,5 @@
-//! Workspace state operations: sidebar auto-sort (live-working agents first,
-//! then last human touch), attention/unread bookkeeping, pane drag-reorder,
+//! Workspace state operations: circle order (the order you drag Stage's
+//! pills into), attention/unread bookkeeping, pane drag-reorder,
 //! workspace lifecycle (create / select / cycle / move / fork / kill), and the
 //! back/forward visit history the mouse's side buttons walk.
 //! Pure state — no rendering lives here (the sidebar/overview views call
@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 use gpui::{Context, Window};
 
 use super::util::now_ms;
-use seance_core::util::{rail_prefs_is_foreign, recency_rank, settle_absent};
+use crate::runtime::protocol::GuiRequest;
+use seance_core::util::{rail_prefs_is_foreign, settle_absent};
 
 /// How long the sidebar banish × stays armed after a first click. Matches the
 /// web client's `KILL_CONFIRM_MS` so both clients feel the same.
@@ -54,18 +55,6 @@ pub(super) fn rel_label(delta_ms: u64) -> String {
     }
 }
 use super::{RenameTarget, SeanceApp};
-
-/// One circle's rail position: working band first, then by the clock the row
-/// displays, name as the tiebreak.
-///
-/// A working circle drops its clock on purpose — that is what keeps the band
-/// still while agents pour out output. Rank a working circle by a live clock
-/// and every row reorders on every frame.
-pub(super) fn sort_key(working: bool, age_ms: u64, ws: &str) -> (u8, u64, String) {
-    let band = if working { 0 } else { 1 };
-    let rank = if working { 0 } else { recency_rank(age_ms) };
-    (band, rank, ws.to_lowercase())
-}
 
 /// How many circles back the mouse can walk. A long day of cycling shouldn't
 /// grow a list forever, and nobody navigates back past a few dozen hops.
@@ -688,35 +677,41 @@ impl SeanceApp {
         self.workspace_attention_cx(ws)
     }
 
-    /// All workspaces in sidebar display order.
-    ///
-    /// 1. Circles with an actively working agent float to the top.
-    /// 2. Inside the working band, **alphabetical** — a working circle's row
-    ///    must not move while you read it, and any recency clock reshuffles
-    ///    the band as agents start and stop.
-    /// 3. Outside it, by last *human touch* (typing into a terminal in the
-    ///    circle, or right-click → "touch"). Selecting a workspace alone does
-    ///    not bump touch. No manual drag-reorder.
+    /// All workspaces in display order: the order you dragged them into on
+    /// Stage (the daemon's `workspace_order`, shared by every window), then
+    /// any it doesn't list yet by name. Rows never move on their own.
     pub(super) fn workspaces(&self) -> Vec<String> {
         let mut out: Vec<String> = self.known_workspace_names().into_iter().collect();
-        out.sort_by_key(|ws| self.workspace_sort_key(ws));
+        out.sort_by_key(|ws| {
+            let at = self.workspace_order.iter().position(|w| w == ws);
+            (at.unwrap_or(usize::MAX), ws.to_lowercase())
+        });
         out
     }
 
-    fn workspace_sort_key(&self, ws: &str) -> (u8, u64, String) {
-        let at = self
-            .workspace_activity
-            .get(ws)
-            .copied()
-            .max(self.workspace_touch.get(ws).copied())
-            .unwrap_or(0);
-        // Never observed sorts last, not first.
-        let age = if at == 0 {
-            u64::MAX
-        } else {
-            now_ms().saturating_sub(at)
+    /// Drop circle `moved` onto `target`: it takes `target`'s place, so a
+    /// circle dragged right lands after it and one dragged left before it.
+    pub(super) fn reorder_circle(&mut self, moved: &str, target: &str) {
+        let order = self.workspaces();
+        let (Some(from), Some(to)) = (
+            order.iter().position(|w| w == moved),
+            order.iter().position(|w| w == target),
+        ) else {
+            return;
         };
-        sort_key(self.workspace_has_working_agent(ws), age, ws)
+        if from == to {
+            return;
+        }
+        // The daemon places `moved` before `before`; an unknown name is the end.
+        let before = if from < to {
+            order.get(to + 1).cloned().unwrap_or_default()
+        } else {
+            target.to_string()
+        };
+        let _ = self.client.send(GuiRequest::ReorderWorkspace {
+            moved: moved.to_string(),
+            before,
+        });
     }
 
     /// Is an agent working in this circle right now?
@@ -858,8 +853,7 @@ impl SeanceApp {
         }
     }
 
-    /// Track a newly known workspace name and give it a fresh touch so it
-    /// appears near the top of the non-working band.
+    /// Track a newly known workspace name at the end of the circle order.
     pub(super) fn ensure_workspace_at_bottom(&mut self, ws: &str) {
         if self.workspace_order.iter().any(|w| w == ws) {
             return;
@@ -913,8 +907,7 @@ impl SeanceApp {
         }
     }
 
-    /// Live attention with title spinners (needs `&App`) — badges only;
-    /// sidebar order uses [`Self::workspace_has_working_agent`].
+    /// Live attention with title spinners (needs `&App`), for badges.
     pub(super) fn workspace_attention_cx(&self, workspace: &str) -> Option<WorkspaceAttention> {
         // A pane asking for a human right now (live status, never sticky) is
         // the one purple the rail keeps: it drives the blinking needs-you dot.
@@ -1382,6 +1375,7 @@ impl SeanceApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use seance_core::util::recency_rank;
 
     /// Drive the history the way the app does: every selection change is
     /// folded in by the render-time observer, including the ones our own
@@ -1513,50 +1507,6 @@ mod tests {
             now + BANISH_ARM
         ));
         assert!(!banish_arm_live(None, "circle-7", now));
-    }
-
-    /// THE bug: codex repaints on a timer, so its output clock never goes
-    /// stale. Ranked on the raw clock, two such circles swap places on every
-    /// repaint, forever. Quantized to the label they display, they tie and
-    /// fall back to name order.
-    /// THE bug: codex repaints on its own timer, so its age jitters by seconds
-    /// and never settles. Any per-second ranking reshuffles the list forever;
-    /// everything inside a minute has to tie and fall back to name.
-    #[test]
-    fn circles_repainting_on_a_timer_hold_still() {
-        // Sampled live: these three sat at 1.7s / 1.8s / 1.9s, then 2.6 / 2.7 /
-        // 2.7, drifting across the old 5s edge and reshuffling every pass.
-        for (a_age, b_age) in [
-            (300u64, 2_900u64),
-            (3_100, 120),
-            (6_000, 45_000),
-            (75_000, 8_000),
-        ] {
-            assert!(
-                sort_key(false, a_age, "cadence-perf") < sort_key(false, b_age, "onboarding"),
-                "name order must survive {a_age}ms vs {b_age}ms of jitter"
-            );
-        }
-    }
-
-    /// Real staleness still orders, at minute granularity and coarser.
-    #[test]
-    fn genuinely_older_circles_sort_lower() {
-        assert!(sort_key(false, 30_000, "b") < sort_key(false, 20 * 60_000, "a"));
-        assert!(sort_key(false, 20 * 60_000, "b") < sort_key(false, 4 * 3_600_000, "a"));
-        assert!(sort_key(false, 4 * 3_600_000, "b") < sort_key(false, 3 * 86_400_000, "a"));
-    }
-
-    /// Working outranks idle no matter how fresh the idle one is.
-    #[test]
-    fn working_outranks_idle() {
-        assert!(sort_key(true, u64::MAX, "zzz") < sort_key(false, 0, "aaa"));
-    }
-
-    /// A circle nobody ever observed sorts last, not first.
-    #[test]
-    fn never_observed_sorts_last() {
-        assert!(sort_key(false, 5_000, "a") < sort_key(false, u64::MAX, "a"));
     }
 
     /// Monotonic across every boundary — a non-monotonic rank would reorder

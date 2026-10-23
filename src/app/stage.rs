@@ -28,7 +28,7 @@ use super::stage_parse::{
     next_waiting, pane_host, parse_health, parse_lead_log, pill_width, reply_repeats, CrewBand,
     Health, HealthLevel, LeadLine,
 };
-use super::util::{tip, tip_s, unread_menu};
+use super::util::{tip, tip_s, unread_menu, DragPill, DraggedCircle};
 use super::views::ViewMode;
 use super::workspaces::{banish_arm_live, rel_label, WorkspaceAttention};
 use super::{PaletteMode, RenameTarget, SeanceApp};
@@ -918,6 +918,23 @@ impl SeanceApp {
                     d.text_color(SeancePalette::text_dim())
                         .hover(|s| s.text_color(SeancePalette::text()))
                 })
+                // Drag a pill onto another to take its place in the order.
+                .on_drag(DraggedCircle { slug: ws.clone() }, {
+                    let label = format!("◈ {}", labels[i]);
+                    move |_, _, _, cx| {
+                        cx.new(|_| DragPill {
+                            label: label.clone(),
+                        })
+                    }
+                })
+                .drag_over::<DraggedCircle>(|style, _, _, _| style.bg(SeancePalette::violet_dim()))
+                .on_drop(cx.listener({
+                    let ws = ws.clone();
+                    move |this, drag: &DraggedCircle, _, cx| {
+                        this.reorder_circle(&drag.slug, &ws);
+                        cx.notify();
+                    }
+                }))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.select_workspace(&ws, window, cx);
                     this.stage.want_lead = true;
