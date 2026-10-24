@@ -54,11 +54,12 @@ pub(crate) fn cap_copy_len(text: &mut String) -> bool {
     if text.len() <= MAX_COPY_BYTES {
         return false;
     }
-    text.truncate(MAX_COPY_BYTES);
-    // Avoid cutting mid-char.
-    while !text.is_char_boundary(text.len()) {
-        text.pop();
+    // Back up to a char boundary first: truncate itself panics mid-char.
+    let mut end = MAX_COPY_BYTES;
+    while !text.is_char_boundary(end) {
+        end -= 1;
     }
+    text.truncate(end);
     text.push_str("\n… [truncated]");
     true
 }

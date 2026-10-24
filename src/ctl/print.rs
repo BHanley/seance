@@ -231,8 +231,9 @@ pub(crate) fn print_session_rows(arr: &[serde_json::Value]) {
             line.push_str(&format!(" [{ws}]"));
         }
         if !title.is_empty() {
-            let t = if title.len() > 40 {
-                format!("{}…", &title[..40])
+            // Cut at 40 characters, not bytes: a byte cut can split "·" or "✳" and panic.
+            let t = if title.chars().count() > 40 {
+                format!("{}…", title.chars().take(40).collect::<String>())
             } else {
                 title
             };
