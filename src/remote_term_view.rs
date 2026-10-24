@@ -281,14 +281,11 @@ impl RemoteTerminalView {
         self.metrics(cx)?.cell_at(pos)
     }
 
-    fn forward_click(&self, pos: Point<Pixels>, cx: &App) {
+    fn forward_click(&self, cell: CellPos, cx: &App) {
         let term = self.terminal.read(cx);
         if !term.snapshot.mouse_mode {
             return;
         }
-        let Some(cell) = self.cell_at(pos, cx) else {
-            return;
-        };
         term.write_bytes(mouse_click_bytes(&term.snapshot, cell));
     }
 
@@ -798,8 +795,12 @@ impl Render for RemoteTerminalView {
                             // A click is a click. Drop the one-cell anchor so
                             // nothing is left highlighted, and hand the click
                             // to a mouse-mode app (Claude's close buttons).
+                            // Shift keeps the click in Seance, as on the web.
+                            let pressed = this.selection.as_ref().map(|s| s.anchor);
                             this.clear_selection();
-                            this.forward_click(ev.position, cx);
+                            if let Some(cell) = pressed.filter(|_| !ev.modifiers.shift) {
+                                this.forward_click(cell, cx);
+                            }
                         }
                         cx.notify();
                     }

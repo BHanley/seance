@@ -19,6 +19,13 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **Clicks reach Claude Code and other mouse apps.** A plain click in a
+  pane whose app turned on mouse reporting is now sent to the app, so
+  Claude Code's own buttons (the X on its diff panel) work. Drag-select,
+  double-click copy and cmd+click links stay in Seance; shift+click keeps
+  a click in Seance too. The first click of a double-click also reaches
+  the app.
+
 - **Snooze 1h on Stage.** Needs-you and done chips, and the peek card, get
   a **Snooze 1h** button: that pane's chip, banners, dings and purple HUD
   row go quiet for an hour (ctrl+shift+i skips it too), then the chip comes
