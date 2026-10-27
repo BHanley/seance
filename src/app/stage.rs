@@ -1787,7 +1787,7 @@ impl SeanceApp {
                     .truncate()
                     .font_semibold()
                     .text_color(SeancePalette::text())
-                    .tooltip(tip("double-click to rename this pane"))
+                    .tooltip(tip_s(format!("{} · double-click to rename", pane.name)))
                     .on_click(cx.listener({
                         let slug = pane.slug.clone();
                         let full = pane.name.clone();
@@ -2102,7 +2102,7 @@ impl SeanceApp {
                     .context_menu({
                         let slug = p_slug.clone();
                         let later = self.subs_pref.later.contains(&p_slug);
-                        move |menu, _, _| pane_menu(menu, &slug, later)
+                        move |menu, _, _| pane_menu(menu, &slug, later, true)
                     })
                     .child(
                         div()

@@ -1225,7 +1225,7 @@ impl SeanceApp {
                     }))
                     .context_menu({
                         let slug = slug.clone();
-                        move |menu, _, _| pane_menu(menu, &slug, later)
+                        move |menu, _, _| pane_menu(menu, &slug, later, false)
                     })
                     .child(
                         div()
