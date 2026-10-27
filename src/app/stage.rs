@@ -28,7 +28,7 @@ use super::stage_parse::{
     next_waiting, pane_host, parse_health, parse_lead_log, pill_width, reply_repeats, CrewBand,
     Health, HealthLevel, LeadLine,
 };
-use super::util::{tip, tip_s, unread_menu, DragPill, DraggedCircle};
+use super::util::{pane_menu, tip, tip_s, DragPill, DraggedCircle};
 use super::views::ViewMode;
 use super::workspaces::{banish_arm_live, rel_label, WorkspaceAttention};
 use super::{PaletteMode, RenameTarget, SeanceApp};
@@ -1782,10 +1782,26 @@ impl SeanceApp {
             )
             .child(
                 div()
+                    .id("stage-title")
                     .min_w_0()
                     .truncate()
                     .font_semibold()
                     .text_color(SeancePalette::text())
+                    .tooltip(tip("double-click to rename this pane"))
+                    .on_click(cx.listener({
+                        let slug = pane.slug.clone();
+                        let full = pane.name.clone();
+                        move |this, event: &gpui::ClickEvent, window, cx| {
+                            if event.click_count() == 2 {
+                                this.start_rename(
+                                    RenameTarget::Pane(slug.clone()),
+                                    &full,
+                                    window,
+                                    cx,
+                                );
+                            }
+                        }
+                    }))
                     .child(name.to_string()),
             )
             .children(host.map(host_chip));
@@ -2086,7 +2102,7 @@ impl SeanceApp {
                     .context_menu({
                         let slug = p_slug.clone();
                         let later = self.subs_pref.later.contains(&p_slug);
-                        move |menu, _, _| unread_menu(menu, &slug, later)
+                        move |menu, _, _| pane_menu(menu, &slug, later)
                     })
                     .child(
                         div()

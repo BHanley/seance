@@ -188,7 +188,8 @@ attention routing free.
 | drag a space onto another | reorder spaces (onto the divider = to the end) |
 | space right-click | rename · make default · banish all · delete |
 | space tab right-click (Stage, Wall) | rename · make default · delete |
-| pane right-click (rail row, Stage crew card) | mark unread / mark read |
+| pane right-click (rail row, Stage crew card) | rename · mark unread / mark read |
+| double-click the Stage pane title | rename that pane |
 | chip right-click | pins: unpin all · a host mode: turn it off for every circle in it |
 | sash drag | resize 2-pane ratio or multi-pane weights |
 | macOS: cmd+backspace / cmd+←→ / option+←→ | kill to line start / line start, end / word back, forward (as in Ghostty) |

@@ -293,9 +293,10 @@ pub(super) fn rail_index_for_key(key: &str) -> Option<usize> {
     Some(digit - 1)
 }
 
-/// A pane's right-click menu: mark it unread to come back to (an "Unread"
-/// chip on Stage and a dot on its row until you open it), or clear that.
-pub(super) fn unread_menu(
+/// A pane's right-click menu: rename it, or mark it unread to come back to
+/// (an "Unread" chip on Stage and a dot on its row until you open it), or
+/// clear that.
+pub(super) fn pane_menu(
     menu: gpui_component::menu::PopupMenu,
     slug: &str,
     marked: bool,
@@ -306,6 +307,10 @@ pub(super) fn unread_menu(
         ("mark unread", true)
     };
     menu.menu(
+        "rename",
+        Box::new(super::actions::ActRenamePane(slug.to_string())),
+    )
+    .menu(
         label,
         Box::new(super::actions::ActMarkUnread(slug.to_string(), on)),
     )

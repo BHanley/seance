@@ -1051,7 +1051,7 @@ pub(super) fn render_help() -> gpui::AnyElement {
         .child(row("⚡", "arm — one-click inject seance orientation into this agent"))
         .child(row("▤", "pad drawer — task inject body + scratchpad tail"))
         .child(row("💬", "whisper — open a compose bar; Enter injects into the agent"))
-        .child(row("double-click title", "rename pane inline (Enter commits, Esc cancels)"))
+        .child(row("double-click title", "rename pane (Enter commits, Esc cancels); on Stage too, or right-click a crew card"))
         .child(row("stage chip click", "focus pane + open pad drawer (double-click zooms)"))
         .child(row("✎ notes", "flip the pane over onto its notes face"))
         .child(row("↻ face", "flip back from notes to the terminal"))
