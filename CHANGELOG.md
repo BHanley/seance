@@ -19,6 +19,9 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **Themes grouped dark and light.** The ✦ menu lists the dark themes,
+  then the light ones, each under its own heading.
+
 - **Clicks reach Claude Code and other mouse apps.** A plain click in a
   pane whose app turned on mouse reporting is now sent to the app, so
   Claude Code's own buttons (the X on its diff panel) work. Drag-select,

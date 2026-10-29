@@ -71,8 +71,8 @@ broadcasts `GuiEvent::Theme` on every switch, so the Mac thin client and the
 XPS GUI change together. At boot the saved choice wins, then `seance-theme`
 in `terminal.conf`, then candlelit; an unknown id falls back to candlelit.
 
-**Switching.** The ✦ menu at the top of the rail lists the twelve, active one
-marked; `seance ctl theme` lists them and `seance ctl theme ID` switches (an
+**Switching.** The ✦ menu at the top of the rail lists the twelve, dark ones then
+light ones under their own headings, active one marked; `seance ctl theme` lists them and `seance ctl theme ID` switches (an
 unknown ID is refused with the list). A window that hears the switch sets
 the active scheme, re-runs `theme::init` and refreshes every window.
 

@@ -149,14 +149,8 @@ impl SeanceApp {
                                 })
                         }))
                         .child(div().my_1().h(px(1.)).bg(SeancePalette::border()))
-                        .child(
-                            div()
-                                .px_1()
-                                .text_xs()
-                                .text_color(SeancePalette::text_faint())
-                                .child("theme"),
-                        )
-                        .children(self.render_theme_rows(cx))
+                        .children(self.render_theme_rows(false, cx))
+                        .children(self.render_theme_rows(true, cx))
                         .child(div().my_1().h(px(1.)).bg(SeancePalette::border()))
                         .child(
                             div()
@@ -1306,67 +1300,78 @@ impl SeanceApp {
         rows
     }
 
-    /// One row per color scheme in the ✦ menu, the active one marked. A
-    /// click asks the daemon, which saves it and repaints every window; the
-    /// menu stays open so schemes can be tried one after another.
-    fn render_theme_rows(&self, cx: &Context<Self>) -> Vec<gpui::AnyElement> {
+    /// The dark or light color schemes in the ✦ menu under their own
+    /// heading, the active one marked. A click asks the daemon, which saves
+    /// it and repaints every window; the menu stays open so schemes can be
+    /// tried one after another.
+    fn render_theme_rows(&self, light: bool, cx: &Context<Self>) -> Vec<gpui::AnyElement> {
         let active = crate::theme::active().id;
-        seance_core::schemes::SCHEMES
-            .iter()
-            .map(|s| {
-                let id = s.id;
-                let is_active = id == active;
-                let c = s.chrome;
-                div()
-                    .id(SharedString::from(format!("theme-{id}")))
-                    .px_1()
-                    .py_0p5()
-                    .rounded_md()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .cursor_pointer()
-                    .text_sm()
-                    .text_color(if is_active {
-                        SeancePalette::flame()
-                    } else {
-                        SeancePalette::text_dim()
-                    })
-                    .hover(|st| {
-                        st.text_color(SeancePalette::flame())
-                            .bg(SeancePalette::surface())
-                    })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        let _ = this.client.send(GuiRequest::Ctl {
-                            req: ControlRequest::Theme {
-                                id: Some(id.to_string()),
-                                scope: None,
-                                from: None,
-                            },
-                        });
-                        cx.notify();
-                    }))
-                    .child(
+        let heading = div()
+            .px_1()
+            .when(light, |d| d.pt_1())
+            .text_xs()
+            .text_color(SeancePalette::text_faint())
+            .child(if light { "light themes" } else { "dark themes" })
+            .into_any_element();
+        std::iter::once(heading)
+            .chain(
+                seance_core::schemes::SCHEMES
+                    .iter()
+                    .filter(|s| s.light == light)
+                    .map(|s| {
+                        let id = s.id;
+                        let is_active = id == active;
+                        let c = s.chrome;
                         div()
-                            .flex_none()
-                            .w(px(10.))
-                            .child(if is_active { "●" } else { "" }),
-                    )
-                    .child(div().flex_1().min_w_0().child(s.label))
-                    // Ground, accent, second: enough to tell them apart.
-                    .child(div().flex_none().flex().gap_0p5().children(
-                        [c.bg, c.flame, c.violet].map(|v| {
-                            div()
-                                .size(px(9.))
-                                .rounded_sm()
-                                .border_1()
-                                .border_color(SeancePalette::border())
-                                .bg(gpui::rgb(v))
-                        }),
-                    ))
-                    .into_any_element()
-            })
+                            .id(SharedString::from(format!("theme-{id}")))
+                            .px_1()
+                            .py_0p5()
+                            .rounded_md()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_2()
+                            .cursor_pointer()
+                            .text_sm()
+                            .text_color(if is_active {
+                                SeancePalette::flame()
+                            } else {
+                                SeancePalette::text_dim()
+                            })
+                            .hover(|st| {
+                                st.text_color(SeancePalette::flame())
+                                    .bg(SeancePalette::surface())
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let _ = this.client.send(GuiRequest::Ctl {
+                                    req: ControlRequest::Theme {
+                                        id: Some(id.to_string()),
+                                        scope: None,
+                                        from: None,
+                                    },
+                                });
+                                cx.notify();
+                            }))
+                            .child(div().flex_none().w(px(10.)).child(if is_active {
+                                "●"
+                            } else {
+                                ""
+                            }))
+                            .child(div().flex_1().min_w_0().child(s.label))
+                            // Ground, accent, second: enough to tell them apart.
+                            .child(div().flex_none().flex().gap_0p5().children(
+                                [c.bg, c.flame, c.violet].map(|v| {
+                                    div()
+                                        .size(px(9.))
+                                        .rounded_sm()
+                                        .border_1()
+                                        .border_color(SeancePalette::border())
+                                        .bg(gpui::rgb(v))
+                                }),
+                            ))
+                            .into_any_element()
+                    }),
+            )
             .collect()
     }
 
