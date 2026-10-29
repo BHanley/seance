@@ -1066,7 +1066,9 @@ impl Engine {
                     .collect();
                 for slug in &slugs {
                     if let Some(s) = self.session_mut(slug) {
-                        s.kick_redraw();
+                        if s.screen_blank() {
+                            s.kick_redraw();
+                        }
                     }
                 }
                 let state = self.state_for_window(window_id);

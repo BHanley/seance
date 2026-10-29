@@ -462,6 +462,18 @@ impl PtySession {
         (*self.cols.lock().unwrap(), *self.rows.lock().unwrap())
     }
 
+    /// Nothing drawn on the visible screen — what a Term adopted across a
+    /// handoff looks like until the child repaints.
+    pub fn screen_blank(&self) -> bool {
+        let term = self.term.lock();
+        let grid = term.grid();
+        let cols = grid.columns();
+        (0..grid.screen_lines() as i32).all(|l| {
+            let row = &grid[Line(l)];
+            (0..cols).all(|c| matches!(row[Column(c)].c, ' ' | '\0'))
+        })
+    }
+
     pub fn write_bytes(&self, bytes: Vec<u8>) {
         self.io_tx.send(IoMsg::Write(bytes));
     }
