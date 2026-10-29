@@ -1051,7 +1051,7 @@ pub(super) fn render_help() -> gpui::AnyElement {
         .child(row("⚡", "arm — one-click inject seance orientation into this agent"))
         .child(row("▤", "pad drawer — task inject body + scratchpad tail"))
         .child(row("💬", "whisper — open a compose bar; Enter injects into the agent"))
-        .child(row("double-click title", "rename pane inline (Enter commits, Esc cancels)"))
+        .child(row("double-click title", "rename pane (Enter commits, Esc cancels); on Stage too, or right-click a crew card"))
         .child(row("stage chip click", "focus pane + open pad drawer (double-click zooms)"))
         .child(row("✎ notes", "flip the pane over onto its notes face"))
         .child(row("↻ face", "flip back from notes to the terminal"))
@@ -1106,9 +1106,8 @@ pub(super) fn render_help() -> gpui::AnyElement {
         .child(row("right-click header", "touch · rename · fork ⑂ · banish"))
         .child(row("+ (footer)", "new empty workspace"))
         .child(p(
-            "sidebar order is automatic: circles with working agents float to \
-             the top; otherwise last human touch wins (type into a terminal, or \
-             right-click → touch). selecting a circle alone does not reorder. \
+            "circles stay in the order you set by dragging Stage's pills; nothing \
+             moves on its own. \
              banish kills every pane under a workspace (PTYs shut down) and is \
              irreversible for the processes — scratchpad files on disk are kept.",
         ))

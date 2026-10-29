@@ -167,9 +167,25 @@ const SYNTH: Chrome = chrome([
     0x0D0B1F, 0x141130, 0x1D1844, 0x2D2660, 0xF2EEFF, 0xB9B0E6, 0x8A80C2, 0xFF3DCB, 0xA62A86,
     0x2DE2FF, 0x1C8EA1, 0x5CFFB0, 0xFF7A3D,
 ]);
+// Fog, Parlor and Herbarium sit between the dark and light ends: a lifted
+// slate dark, and two dimmed (not white) light grounds. Fog's terminal sits
+// a step darker than its chrome so dim and gray text stay readable; the light
+// two keep danger crimson so it doesn't read as their brick-red flame.
+const FOG: Chrome = chrome([
+    0x3B414D, 0x434A57, 0x4C5462, 0x545B69, 0xECEFF4, 0xC5CBD6, 0x9AA3B2, 0xF2B56B, 0xB0824A,
+    0xB7A8F0, 0x7D72AE, 0xA6D38E, 0xFF8A93,
+]);
+const PARLOR: Chrome = chrome([
+    0xCDC3B2, 0xC3B8A6, 0xB8AC98, 0xAEA28D, 0x231C17, 0x4A3E33, 0x5E5145, 0x8A2419, 0xA8564A,
+    0x24527A, 0x5E7FA0, 0x2F5E22, 0x9E1449,
+]);
+const HERBARIUM: Chrome = chrome([
+    0xBDC5B3, 0xB2BBA7, 0xA7B09B, 0x9DA690, 0x1C251E, 0x3A463C, 0x4D5A4F, 0x8E3B14, 0xAE6A48,
+    0x43407F, 0x7471A6, 0x2E5A1E, 0x9A1040,
+]);
 
 /// Every scheme, in menu order.
-pub static SCHEMES: [Scheme; 9] = [
+pub static SCHEMES: [Scheme; 12] = [
     Scheme {
         id: "candlelit",
         label: "Candlelit",
@@ -289,6 +305,48 @@ pub static SCHEMES: [Scheme; 9] = [
             ]),
         )),
     },
+    Scheme {
+        id: "fog",
+        label: "Fog",
+        light: false,
+        chrome: FOG,
+        term: Some(term(
+            false,
+            &FOG,
+            spec([
+                0x30353F, 0xE3E7EE, 0xA6D38E, 0xF2D07A, 0x8CC4FF, 0xD3A8F0, 0xFF8A93, 0x7FDCD3,
+                0x9AA3B2,
+            ]),
+        )),
+    },
+    Scheme {
+        id: "parlor",
+        label: "Parlor",
+        light: true,
+        chrome: PARLOR,
+        term: Some(term(
+            true,
+            &PARLOR,
+            spec([
+                0xD2C9B9, 0x231C17, 0x2F5E22, 0x6E4E00, 0x24427A, 0x6E2462, 0x8A2419, 0x165858,
+                0x5E5145,
+            ]),
+        )),
+    },
+    Scheme {
+        id: "herbarium",
+        label: "Herbarium",
+        light: true,
+        chrome: HERBARIUM,
+        term: Some(term(
+            true,
+            &HERBARIUM,
+            spec([
+                0xC2CAB8, 0x1C251E, 0x2E5A1E, 0x6A5000, 0x2D4A85, 0x6E2E70, 0x8E2418, 0x1A5A5A,
+                0x4D5A4F,
+            ]),
+        )),
+    },
 ];
 
 /// Look a scheme up by id. Ids are lowercase; input is trimmed and
@@ -335,7 +393,7 @@ mod tests {
             assert!(id_list().contains(s.id));
         }
         let light: Vec<_> = SCHEMES.iter().filter(|s| s.light).map(|s| s.id).collect();
-        assert_eq!(light, ["ouija", "riso"]);
+        assert_eq!(light, ["ouija", "riso", "parlor", "herbarium"]);
     }
 
     #[test]

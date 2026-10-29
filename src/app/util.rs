@@ -295,15 +295,26 @@ pub(super) fn rail_index_for_key(key: &str) -> Option<usize> {
 
 /// A pane's right-click menu: mark it unread to come back to (an "Unread"
 /// chip on Stage and a dot on its row until you open it), or clear that.
-pub(super) fn unread_menu(
+/// `rename` only where the rename field will show: a classic rail row can
+/// list a pane with no tile to hold it.
+pub(super) fn pane_menu(
     menu: gpui_component::menu::PopupMenu,
     slug: &str,
     marked: bool,
+    rename: bool,
 ) -> gpui_component::menu::PopupMenu {
     let (label, on) = if marked {
         ("mark read", false)
     } else {
         ("mark unread", true)
+    };
+    let menu = if rename {
+        menu.menu(
+            "rename",
+            Box::new(super::actions::ActRenamePane(slug.to_string())),
+        )
+    } else {
+        menu
     };
     menu.menu(
         label,

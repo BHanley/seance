@@ -210,25 +210,40 @@ impl ViewMetrics {
     }
 }
 
-fn mouse_wheel_bytes(snap: &GridSnapshot, cell: CellPos, lines: i32) -> Vec<u8> {
+/// One mouse report at `cell`: SGR when the app asked for it, else X10.
+fn mouse_report(snap: &GridSnapshot, cell: CellPos, button: u8, release: bool) -> Vec<u8> {
     let col = cell.col.saturating_add(1);
     let row = cell.row.saturating_add(1);
+    if snap.sgr_mouse {
+        let end = if release { 'm' } else { 'M' };
+        format!("\x1b[<{button};{col};{row}{end}").into_bytes()
+    } else {
+        // X10 has no release per button: a release is button 3.
+        let button = if release { 3 } else { button };
+        vec![
+            0x1b,
+            b'[',
+            b'M',
+            32 + button,
+            32 + (col.min(223) as u8),
+            32 + (row.min(223) as u8),
+        ]
+    }
+}
+
+fn mouse_wheel_bytes(snap: &GridSnapshot, cell: CellPos, lines: i32) -> Vec<u8> {
     let button: u8 = if lines > 0 { 64 } else { 65 };
     let mut bytes = Vec::new();
     for _ in 0..lines.unsigned_abs() {
-        if snap.sgr_mouse {
-            bytes.extend_from_slice(format!("\x1b[<{button};{col};{row}M").as_bytes());
-        } else {
-            bytes.extend_from_slice(&[
-                0x1b,
-                b'[',
-                b'M',
-                32 + button,
-                32 + (col.min(223) as u8),
-                32 + (row.min(223) as u8),
-            ]);
-        }
+        bytes.extend(mouse_report(snap, cell, button, false));
     }
+    bytes
+}
+
+/// A left click (press, then release) for a mouse-mode app.
+fn mouse_click_bytes(snap: &GridSnapshot, cell: CellPos) -> Vec<u8> {
+    let mut bytes = mouse_report(snap, cell, 0, false);
+    bytes.extend(mouse_report(snap, cell, 0, true));
     bytes
 }
 
@@ -264,6 +279,14 @@ impl RemoteTerminalView {
 
     fn cell_at(&self, pos: Point<Pixels>, cx: &App) -> Option<CellPos> {
         self.metrics(cx)?.cell_at(pos)
+    }
+
+    fn forward_click(&self, cell: CellPos, cx: &App) {
+        let term = self.terminal.read(cx);
+        if !term.snapshot.mouse_mode {
+            return;
+        }
+        term.write_bytes(mouse_click_bytes(&term.snapshot, cell));
     }
 
     fn clear_selection(&mut self) {
@@ -732,11 +755,9 @@ impl Render for RemoteTerminalView {
                         return;
                     }
 
-                    // Always allow drag-select. We don't forward mouse button
-                    // events to the PTY yet (only wheel when mouse_mode), so
-                    // blocking selection for mouse-mode apps (Claude, vim,
-                    // etc.) just made drag a no-op. When click reporting lands,
-                    // restore: mouse_mode && !shift → forward, else select.
+                    // Always allow drag-select, even in mouse-mode apps
+                    // (Claude, vim, etc.). A bare click reaches the app on
+                    // release instead, once it's clear no drag followed.
                     let Some(cell) = this.cell_at(ev.position, cx) else {
                         return;
                     };
@@ -763,7 +784,7 @@ impl Render for RemoteTerminalView {
             }))
             .on_mouse_up(
                 gpui::MouseButton::Left,
-                cx.listener(|this, _ev, window, cx| {
+                cx.listener(|this, ev: &gpui::MouseUpEvent, window, cx| {
                     if this.selecting {
                         this.selecting = false;
                         // Ghostty / primary-selection: copy on release — but
@@ -772,8 +793,14 @@ impl Render for RemoteTerminalView {
                             this.copy_selection(window, cx);
                         } else {
                             // A click is a click. Drop the one-cell anchor so
-                            // nothing is left highlighted either.
+                            // nothing is left highlighted, and hand the click
+                            // to a mouse-mode app (Claude's close buttons).
+                            // Shift keeps the click in Seance, as on the web.
+                            let pressed = this.selection.as_ref().map(|s| s.anchor);
                             this.clear_selection();
+                            if let Some(cell) = pressed.filter(|_| !ev.modifiers.shift) {
+                                this.forward_click(cell, cx);
+                            }
                         }
                         cx.notify();
                     }
@@ -1597,6 +1624,22 @@ mod tests {
             b"\x1b[<64;11;9M\x1b[<64;11;9M"
         );
         assert_eq!(mouse_wheel_bytes(&snap, cell, -1), b"\x1b[<65;11;9M");
+    }
+
+    #[test]
+    fn a_click_reaches_a_mouse_mode_app_as_press_then_release() {
+        let mut snap = GridSnapshot::empty("claude");
+        snap.mouse_mode = true;
+        snap.sgr_mouse = true;
+        assert_eq!(
+            mouse_click_bytes(&snap, at(0, 120)),
+            b"\x1b[<0;121;1M\x1b[<0;121;1m"
+        );
+        snap.sgr_mouse = false;
+        assert_eq!(
+            mouse_click_bytes(&snap, at(4, 9)),
+            [0x1b, b'[', b'M', 32, 42, 37, 0x1b, b'[', b'M', 35, 42, 37]
+        );
     }
 
     #[test]

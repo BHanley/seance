@@ -1,5 +1,5 @@
-//! Left rail for the SeanceApp view: the workspace/pane sidebar (auto-sorted
-//! workspaces, pane drag-and-drop, per-row context menus, inline rename) and
+//! Left rail for the SeanceApp view: the workspace/pane sidebar (circles in
+//! your dragged order, pane drag-and-drop, per-row context menus, inline rename) and
 //! the host-bridge widget strip (claude accounts) above the summon footer.
 
 use gpui::{div, prelude::*, px, Context, SharedString, Window};
@@ -23,7 +23,7 @@ const TIME_W: f32 = 34.;
 
 use super::actions::*;
 use super::util::{
-    needs_dot_color, selected_row_fill, sidebar_press_no_select, tip, tip_s, ui_debug, unread_menu,
+    needs_dot_color, pane_menu, selected_row_fill, sidebar_press_no_select, tip, tip_s, ui_debug,
     working_spinner_glyph, DragPill, DraggedCircle, DraggedPane, DraggedSpace,
 };
 use super::workspaces::{banish_arm_live, RailFilter, WorkspaceAttention};
@@ -1225,7 +1225,7 @@ impl SeanceApp {
                     }))
                     .context_menu({
                         let slug = slug.clone();
-                        move |menu, _, _| unread_menu(menu, &slug, later)
+                        move |menu, _, _| pane_menu(menu, &slug, later, false)
                     })
                     .child(
                         div()

@@ -184,10 +184,12 @@ attention routing free.
 | sidebar right-edge drag | resize sidebar (width persists) |
 | click a space | show it and select its first circle |
 | drag a circle onto a space | move it there (sticky) |
+| drag a Stage pill onto another | reorder circles; the rail, Stage and Wall all follow, and rows never move on their own |
 | drag a space onto another | reorder spaces (onto the divider = to the end) |
 | space right-click | rename · make default · banish all · delete |
 | space tab right-click (Stage, Wall) | rename · make default · delete |
-| pane right-click (rail row, Stage crew card) | mark unread / mark read |
+| pane right-click (rail row, Stage crew card) | mark unread / mark read (crew card: rename too) |
+| double-click a pane title (tile, Stage) | rename that pane |
 | chip right-click | pins: unpin all · a host mode: turn it off for every circle in it |
 | sash drag | resize 2-pane ratio or multi-pane weights |
 | macOS: cmd+backspace / cmd+←→ / option+←→ | kill to line start / line start, end / word back, forward (as in Ghostty) |

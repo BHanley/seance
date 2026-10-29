@@ -28,7 +28,7 @@ use super::stage_parse::{
     next_waiting, pane_host, parse_health, parse_lead_log, pill_width, reply_repeats, CrewBand,
     Health, HealthLevel, LeadLine,
 };
-use super::util::{tip, tip_s, unread_menu};
+use super::util::{pane_menu, tip, tip_s, DragPill, DraggedCircle};
 use super::views::ViewMode;
 use super::workspaces::{banish_arm_live, rel_label, WorkspaceAttention};
 use super::{PaletteMode, RenameTarget, SeanceApp};
@@ -841,8 +841,8 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    /// ✦ mark (unless the space row holds it), circle pills, the layout
-    /// toggle and the jump box. With "+N more" open, the circles that don't
+    /// ✦ mark and AFK chip (unless the space row holds them), circle pills,
+    /// the layout toggle and the jump box. With "+N more" open, the circles that don't
     /// fit get a row of their own underneath.
     fn render_stage_top(&mut self, width: f32, cx: &Context<Self>) -> AnyElement {
         let rename = self.render_rename_field();
@@ -857,9 +857,16 @@ impl SeanceApp {
         let tabs = self.space_tabs_shown();
         let mark_w = if tabs { 0. } else { 84. + 14. };
         let add_w = 76.;
-        // Strip padding, the mark, the toggle, the jump box, "+ circle" and
-        // the gaps.
-        let avail = width - 28. - mark_w - switch_w - jump_w - 14. * 2. - add_w - 6.;
+        // The AFK chip moves up there too.
+        let afk = (!tabs).then(|| self.render_afk_chip("stage", cx)).flatten();
+        let afk_w = if afk.is_some() {
+            super::afk::AFK_W + 14.
+        } else {
+            0.
+        };
+        // Strip padding, the mark, the toggle, the jump box, "+ circle", the
+        // AFK chip and the gaps.
+        let avail = width - 28. - mark_w - switch_w - jump_w - 14. * 2. - add_w - 6. - afk_w;
         let labels: Vec<String> = circles.iter().map(|c| self.workspace_label(c)).collect();
         let widths: Vec<f32> = labels.iter().map(|l| pill_width(l)).collect();
         let sel_idx = selected
@@ -918,6 +925,23 @@ impl SeanceApp {
                     d.text_color(SeancePalette::text_dim())
                         .hover(|s| s.text_color(SeancePalette::text()))
                 })
+                // Drag a pill onto another to take its place in the order.
+                .on_drag(DraggedCircle { slug: ws.clone() }, {
+                    let label = format!("◈ {}", labels[i]);
+                    move |_, _, _, cx| {
+                        cx.new(|_| DragPill {
+                            label: label.clone(),
+                        })
+                    }
+                })
+                .drag_over::<DraggedCircle>(|style, _, _, _| style.bg(SeancePalette::violet_dim()))
+                .on_drop(cx.listener({
+                    let ws = ws.clone();
+                    move |this, drag: &DraggedCircle, _, cx| {
+                        this.reorder_circle(&drag.slug, &ws);
+                        cx.notify();
+                    }
+                }))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.select_workspace(&ws, window, cx);
                     this.stage.want_lead = true;
@@ -1042,6 +1066,8 @@ impl SeanceApp {
                     .w(px(switch_w))
                     .child(self.render_view_switch("strip", cx)),
             )
+            // Left of the jump box, which the jump palette drops down from.
+            .children(afk)
             .child(render_jump_box("stage-jump", roomy, cx));
         div()
             .flex_none()
@@ -1106,8 +1132,8 @@ impl SeanceApp {
     /// Stage and Wall's space row: a tab per space with the mark its rail
     /// row has (needs you, working, done), the one on show underlined.
     /// Empty spaces get no tab unless on show. Wall leads with an All tab.
-    /// Scrolls sideways when the tabs don't fit; None when there would be
-    /// fewer than two.
+    /// Scrolls sideways when the tabs don't fit; the AFK chip ends the row.
+    /// None when there would be fewer than two.
     pub(super) fn render_space_tabs(
         &mut self,
         key: &str,
@@ -1274,6 +1300,7 @@ impl SeanceApp {
                         .children(all_tab)
                         .children(tabs),
                 )
+                .children(self.render_afk_chip(key, cx))
                 .into_any_element(),
         )
     }
@@ -1765,10 +1792,26 @@ impl SeanceApp {
             )
             .child(
                 div()
+                    .id("stage-title")
                     .min_w_0()
                     .truncate()
                     .font_semibold()
                     .text_color(SeancePalette::text())
+                    .tooltip(tip_s(format!("{} · double-click to rename", pane.name)))
+                    .on_click(cx.listener({
+                        let slug = pane.slug.clone();
+                        let full = pane.name.clone();
+                        move |this, event: &gpui::ClickEvent, window, cx| {
+                            if event.click_count() == 2 {
+                                this.start_rename(
+                                    RenameTarget::Pane(slug.clone()),
+                                    &full,
+                                    window,
+                                    cx,
+                                );
+                            }
+                        }
+                    }))
                     .child(name.to_string()),
             )
             .children(host.map(host_chip));
@@ -2069,7 +2112,7 @@ impl SeanceApp {
                     .context_menu({
                         let slug = p_slug.clone();
                         let later = self.subs_pref.later.contains(&p_slug);
-                        move |menu, _, _| unread_menu(menu, &slug, later)
+                        move |menu, _, _| pane_menu(menu, &slug, later, true)
                     })
                     .child(
                         div()

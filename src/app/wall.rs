@@ -655,8 +655,8 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    /// ✦ mark (unless the space row holds it), Wall · Focus, the layout toggle, the summary
-    /// and the jump box.
+    /// ✦ mark and AFK chip (unless the space row holds them), Wall · Focus, the layout
+    /// toggle, the summary and the jump box.
     fn render_wall_header(
         &self,
         width: f32,
@@ -765,6 +765,10 @@ impl SeanceApp {
                         cx.notify();
                     })),
                 )
+            })
+            // Left of the jump box, which the jump palette drops down from.
+            .when(!self.space_tabs_shown(), |d| {
+                d.children(self.render_afk_chip("wall", cx))
             })
             .child(super::stage::render_jump_box("wall-jump", roomy, cx))
             .into_any_element()

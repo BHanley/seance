@@ -93,7 +93,7 @@ error (by design).
 ## Chrome parity (2026-07-31)
 
 The native chrome is replicated sincerely: auto-sorted workspace lister
-(working band + touch recency, attention badges, inline rename, banish ×,
+(working band + touch recency; the native app now keeps a dragged order instead, attention badges, inline rename, banish ×,
 spaces over the circle list, filter chips, pin / unpin and "move to → space"
 row menus), `+ space` / `+ circle`, quicklaunch strip (daemon-side json via the fs bridge,
 chips, editor modal, right-click), the claude-accounts host strip, footer
