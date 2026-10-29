@@ -857,9 +857,16 @@ impl SeanceApp {
         let tabs = self.space_tabs_shown();
         let mark_w = if tabs { 0. } else { 84. + 14. };
         let add_w = 76.;
-        // Strip padding, the mark, the toggle, the jump box, "+ circle" and
-        // the gaps.
-        let avail = width - 28. - mark_w - switch_w - jump_w - 14. * 2. - add_w - 6.;
+        // The AFK chip moves up there too.
+        let afk = (!tabs).then(|| self.render_afk_chip("stage", cx)).flatten();
+        let afk_w = if afk.is_some() {
+            super::afk::AFK_W + 14.
+        } else {
+            0.
+        };
+        // Strip padding, the mark, the toggle, the jump box, "+ circle", the
+        // AFK chip and the gaps.
+        let avail = width - 28. - mark_w - switch_w - jump_w - 14. * 2. - add_w - 6. - afk_w;
         let labels: Vec<String> = circles.iter().map(|c| self.workspace_label(c)).collect();
         let widths: Vec<f32> = labels.iter().map(|l| pill_width(l)).collect();
         let sel_idx = selected
@@ -1059,7 +1066,8 @@ impl SeanceApp {
                     .w(px(switch_w))
                     .child(self.render_view_switch("strip", cx)),
             )
-            .child(render_jump_box("stage-jump", roomy, cx));
+            .child(render_jump_box("stage-jump", roomy, cx))
+            .children(afk);
         div()
             .flex_none()
             .relative()
@@ -1291,6 +1299,7 @@ impl SeanceApp {
                         .children(all_tab)
                         .children(tabs),
                 )
+                .children(self.render_afk_chip(key, cx))
                 .into_any_element(),
         )
     }

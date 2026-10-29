@@ -29,6 +29,7 @@ use crate::{
 use std::sync::Arc;
 
 pub(crate) mod actions;
+mod afk;
 mod alerts;
 mod chrome;
 mod dock;

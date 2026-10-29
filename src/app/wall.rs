@@ -767,6 +767,9 @@ impl SeanceApp {
                 )
             })
             .child(super::stage::render_jump_box("wall-jump", roomy, cx))
+            .when(!self.space_tabs_shown(), |d| {
+                d.children(self.render_afk_chip("wall", cx))
+            })
             .into_any_element()
     }
 
