@@ -841,8 +841,8 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    /// ✦ mark (unless the space row holds it), circle pills, the layout
-    /// toggle and the jump box. With "+N more" open, the circles that don't
+    /// ✦ mark and AFK chip (unless the space row holds them), circle pills,
+    /// the layout toggle and the jump box. With "+N more" open, the circles that don't
     /// fit get a row of their own underneath.
     fn render_stage_top(&mut self, width: f32, cx: &Context<Self>) -> AnyElement {
         let rename = self.render_rename_field();
@@ -1066,8 +1066,9 @@ impl SeanceApp {
                     .w(px(switch_w))
                     .child(self.render_view_switch("strip", cx)),
             )
-            .child(render_jump_box("stage-jump", roomy, cx))
-            .children(afk);
+            // Left of the jump box, which the jump palette drops down from.
+            .children(afk)
+            .child(render_jump_box("stage-jump", roomy, cx));
         div()
             .flex_none()
             .relative()
@@ -1131,8 +1132,8 @@ impl SeanceApp {
     /// Stage and Wall's space row: a tab per space with the mark its rail
     /// row has (needs you, working, done), the one on show underlined.
     /// Empty spaces get no tab unless on show. Wall leads with an All tab.
-    /// Scrolls sideways when the tabs don't fit; None when there would be
-    /// fewer than two.
+    /// Scrolls sideways when the tabs don't fit; the AFK chip ends the row.
+    /// None when there would be fewer than two.
     pub(super) fn render_space_tabs(
         &mut self,
         key: &str,

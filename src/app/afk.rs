@@ -3,7 +3,7 @@
 //! (Invoke); this chip shows its mark and flips it, the same chip as
 //! Invoke's. Nothing shows where that script isn't installed.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -20,6 +20,8 @@ pub(super) const AFK_W: f32 = 96.;
 const RECHECK: Duration = Duration::from_secs(2);
 /// An older mark is stale, as in the prompt gate and Invoke.
 const STALE_SECS: u64 = 12 * 3600;
+/// Its ssh calls time out in seconds; past this, give up so the chip comes back.
+const RUN_LIMIT: Duration = Duration::from_secs(60);
 
 struct Seen {
     at: Option<Instant>,
@@ -39,7 +41,7 @@ fn seen() -> std::sync::MutexGuard<'static, Seen> {
     SEEN.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn mark_on(home: &PathBuf) -> bool {
+fn mark_on(home: &Path) -> bool {
     let Ok(text) = std::fs::read_to_string(home.join(".local/state/afk/on")) else {
         return false;
     };
@@ -55,22 +57,25 @@ fn mark_on(home: &PathBuf) -> bool {
 /// (script, on, busy), rereading the mark when it's due.
 fn state() -> (Option<PathBuf>, bool, bool) {
     let mut s = seen();
-    if s.at.map_or(true, |t| t.elapsed() >= RECHECK) {
+    if s.at.is_none_or(|t| t.elapsed() >= RECHECK) {
         let home = std::env::var_os("HOME").map(PathBuf::from);
         s.script = home
             .as_ref()
             .map(|h| h.join("Claude/bin/afk"))
             .filter(|p| p.exists());
-        s.on = home.as_ref().is_some_and(mark_on);
+        s.on = home.as_deref().is_some_and(mark_on);
         s.at = Some(Instant::now());
     }
     (s.script.clone(), s.on, s.busy)
 }
 
 impl SeanceApp {
+    /// The chip itself, or None where the script isn't installed.
     pub(super) fn render_afk_chip(&self, key: &str, cx: &Context<Self>) -> Option<AnyElement> {
         let (script, on, busy) = state();
-        script.as_ref()?;
+        if script.is_none() {
+            return None;
+        }
         let label = match (busy, on) {
             (true, true) => "Turning off…",
             (true, false) => "Turning on…",
@@ -84,7 +89,7 @@ impl SeanceApp {
                 .w(px(AFK_W))
                 .flex()
                 .justify_center()
-                .py(px(4.))
+                .py(px(2.))
                 .rounded_full()
                 .border_1()
                 .text_xs()
@@ -100,7 +105,7 @@ impl SeanceApp {
                 })
                 .when(!busy, |d| {
                     d.cursor_pointer()
-                        .hover(|s| s.text_color(SeancePalette::text()))
+                        .when(!on, |d| d.hover(|s| s.text_color(SeancePalette::text())))
                         .tooltip(tip(if on {
                             "AFK: the Mac stays awake with its lid closed and leads text you in Invoke"
                         } else {
@@ -140,10 +145,22 @@ impl SeanceApp {
             let _ = this.update(cx, |_, cx| cx.notify());
             cx.background_executor()
                 .spawn(async move {
-                    let _ = std::process::Command::new("/bin/bash")
+                    let Ok(mut run) = std::process::Command::new("/bin/bash")
                         .arg(script)
                         .arg(if on { "off" } else { "on" })
-                        .status();
+                        .spawn()
+                    else {
+                        return;
+                    };
+                    let start = Instant::now();
+                    while matches!(run.try_wait(), Ok(None)) {
+                        if start.elapsed() >= RUN_LIMIT {
+                            let _ = run.kill();
+                            let _ = run.wait();
+                            return;
+                        }
+                        std::thread::sleep(Duration::from_millis(200));
+                    }
                 })
                 .await;
             {
