@@ -8,6 +8,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use gpui::{div, prelude::*, px, AnyElement, Context, PromptLevel, SharedString, Window};
+use gpui_component::StyledExt as _;
 
 use crate::theme::SeancePalette;
 
