@@ -126,10 +126,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   quits and reopens the app. Panes live on the daemon, so it is the same as
   quitting and reopening by hand.
 
-- **Color schemes.** Nine looks for the whole app, chrome and terminal
+- **Color schemes.** Twelve looks for the whole app, chrome and terminal
   colors together: candlelit (the default, unchanged), abyssal, ectoplasm,
-  ouija (light), Monokai Seance, tarot, Mojave Dusk, riso (light) and Synth
-  Seance. Pick one from the ✦ menu at the top of the rail or with
+  ouija (light), Monokai Seance, tarot, Mojave Dusk, riso (light), Synth
+  Seance, and three in between: Fog (a lifted slate dark), Parlor and
+  Herbarium (dimmed light grounds). Pick one from the ✦ menu at the top of the rail or with
   `seance ctl theme ID` (`seance ctl theme` lists them). The daemon saves the
   choice and every attached window, thin clients included, repaints at once;
   each pane is re-sent in the new colors, idle ones too. Colors a program set

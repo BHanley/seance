@@ -1364,7 +1364,7 @@ fn theme_reaches_every_window_and_is_saved() {
                 .as_array()
                 .unwrap()
                 .len(),
-            9
+            seance_core::schemes::SCHEMES.len()
         );
 
         let bad = eng.handle_control(theme(Some("plaid")));

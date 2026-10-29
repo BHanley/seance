@@ -1,6 +1,6 @@
 //! seance theme + branding module: the active color scheme's chrome.
 //!
-//! Nine schemes live in `seance_core::schemes`; the daemon picks one and
+//! Twelve schemes live in `seance_core::schemes`; the daemon picks one and
 //! tells every window (`GuiEvent::Theme` -> [`set_scheme`]). Candlelit, the
 //! default and the one described below, is authored here in HSL.
 //!
