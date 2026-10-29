@@ -1,6 +1,6 @@
 # seance — theme & branding
 
-seance ships nine color schemes (see [Schemes](#schemes)); the default, and
+seance ships twelve color schemes (see [Schemes](#schemes)); the default, and
 the one this page's palette tables describe, is **candlelit**.
 
 Aesthetic: **candlelit**. A dark room lit by one candle — deep warm charcoal
@@ -61,6 +61,9 @@ name a scheme.
 | `mojave` | Mojave Dusk | `#1E1416` | `#FF8C42` | `#3FC1B0` |
 | `riso` | Riso (light) | `#F7F4EC` | `#E6007E` | `#00838A` |
 | `synth` | Synth Seance | `#0D0B1F` | `#FF3DCB` | `#2DE2FF` |
+| `fog` | Fog | `#3B414D` | `#F2B56B` | `#B7A8F0` |
+| `parlor` | Parlor (light) | `#CDC3B2` | `#8A2419` | `#24527A` |
+| `herbarium` | Herbarium (light) | `#BDC5B3` | `#8E3B14` | `#43407F` |
 
 **Who owns the choice.** The daemon. It saves it in the state dir
 (`theme.json`, `{"scheme": ID}`), sends it to each window on attach and
@@ -68,7 +71,7 @@ broadcasts `GuiEvent::Theme` on every switch, so the Mac thin client and the
 XPS GUI change together. At boot the saved choice wins, then `seance-theme`
 in `terminal.conf`, then candlelit; an unknown id falls back to candlelit.
 
-**Switching.** The ✦ menu at the top of the rail lists the nine, active one
+**Switching.** The ✦ menu at the top of the rail lists the twelve, active one
 marked; `seance ctl theme` lists them and `seance ctl theme ID` switches (an
 unknown ID is refused with the list). A window that hears the switch sets
 the active scheme, re-runs `theme::init` and refreshes every window.
@@ -83,7 +86,7 @@ magenta, cyan; 8 is its gray; on dark schemes 0 = `bg_elevated`, 7 =
 `text_dim`, 15 = `text`, on light schemes 0 = `text`, 7 = `surface`, 15 =
 `bg_elevated`. Cursor = accent. Candlelit keeps `terminal.conf` exactly.
 
-**Light schemes** (ouija, riso) put gpui-component in `ThemeMode::Light`
+**Light schemes** (ouija, riso, parlor, herbarium) put gpui-component in `ThemeMode::Light`
 before the palette is applied, use the light code-highlight theme in
 markdown panes, and put the ground color on top of filled red (danger). Hovers use
 `theme::lift`, which darkens instead of lightening on a light ground.

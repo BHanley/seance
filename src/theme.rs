@@ -44,7 +44,7 @@ pub fn active() -> &'static Scheme {
     &schemes::SCHEMES[ACTIVE.load(Ordering::Relaxed)]
 }
 
-/// Light ground (ouija, riso): widgets run in gpui-component's light mode.
+/// Light ground (ouija, riso, parlor, herbarium): widgets run in gpui-component's light mode.
 pub fn is_light() -> bool {
     active().light
 }
