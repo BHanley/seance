@@ -21,6 +21,7 @@
 //! | `seance-theme` | startup color scheme until one is picked (daemon; see `looks`) |
 //! | `seance-circle-map` | TSV of `circle-slug<TAB>folder` for Stage's lead log line (GUI) |
 //! | `seance-health-file` | health report Stage's footer reads (GUI) |
+//! | `seance-usage-file` | Claude plan usage JSON (`five_hour`/`seven_day`: `used`, `resets_at`) for the footer's usage bars (GUI) |
 //! | `seance-needs-sound` | macOS sound name for needs-you banners (`default` = the system's) |
 //! | `seance-auto-sleep-idle` (e.g. `6h`), `seance-auto-sleep-skip` (circle slugs, comma separated) | daemon's auto-sleep of idle Claude panes |
 //! | `seance-done-sound`, `seance-done-sound-volume` | sound when a circle lead finishes out of sight |
@@ -87,6 +88,8 @@ pub struct TermConfig {
     pub seance_circle_map: Option<String>,
     /// `seance-health-file`, kept unexpanded like the circle map.
     pub seance_health_file: Option<String>,
+    /// `seance-usage-file`, kept unexpanded like the health file.
+    pub seance_usage_file: Option<String>,
     /// `seance-needs-sound`: the macOS sound a needs-you banner plays. None
     /// keeps banners silent, as before.
     pub seance_needs_sound: Option<String>,
@@ -129,6 +132,7 @@ impl Default for TermConfig {
             seance_theme: None,
             seance_circle_map: None,
             seance_health_file: None,
+            seance_usage_file: None,
             seance_needs_sound: None,
             seance_done_sound: None,
             seance_done_sound_volume: 0.6,
@@ -276,6 +280,7 @@ fn apply(cfg: &mut TermConfig, key: &str, value: &str) {
         "seance-theme" if !value.is_empty() => cfg.seance_theme = Some(value.to_string()),
         "seance-circle-map" => cfg.seance_circle_map = non_empty(value),
         "seance-health-file" => cfg.seance_health_file = non_empty(value),
+        "seance-usage-file" => cfg.seance_usage_file = non_empty(value),
         "seance-needs-sound" => cfg.seance_needs_sound = non_empty(value),
         "seance-hud" => cfg.seance_hud = non_empty(value),
         "seance-new-circle-command" => cfg.seance_new_circle_command = non_empty(value),

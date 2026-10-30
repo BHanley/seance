@@ -1,12 +1,13 @@
 //! Stage: one circle's lead up front. A strip of circle pills on top, the
 //! needs-you bar, the live lead terminal with its Doing / Next / Waiting on
-//! line, the crew as cards, the circle's files, and a health footer.
+//! line, the crew as cards, the circle's files, and a footer of Claude plan
+//! usage and machine health.
 //!
 //! Stage replaces the rail and grid rather than drawing over them, so the
 //! pane on stage is the one place its terminal view renders: keys and esc
 //! reach it like any focused pane. The pane on stage is the window's active
 //! pane when that is a terminal in the circle, else the circle's lead.
-//! The lead log and health report are daemon-side files read through the fs
+//! The lead log, health report and usage file are daemon-side files read through the fs
 //! bridge on a background task, never from render.
 
 use std::collections::HashMap;
@@ -25,8 +26,8 @@ use super::actions::{ActDeleteSpace, ActRenameSpace, ActSpaceDefault};
 use super::stage_parse::{
     circle_folder, compacted_while_idle, crew_order, done_chips, ellipsize, filed_label, fit_pills,
     is_bare_shell, jump_ring, last_output_lines, latest_finish, latest_finish_at, lead_log_path,
-    next_waiting, pane_host, parse_health, parse_lead_log, pill_width, reply_repeats, CrewBand,
-    Health, HealthLevel, LeadLine,
+    next_waiting, pane_host, parse_health, parse_lead_log, parse_usage, pill_width, reply_repeats,
+    reset_in, usage_now, CrewBand, Health, HealthLevel, LeadLine, Usage,
 };
 use super::util::{pane_menu, tip, tip_s, DragPill, DraggedCircle};
 use super::views::ViewMode;
@@ -36,6 +37,13 @@ use super::{PaletteMode, RenameTarget, SeanceApp};
 /// The lead log changes a few times an hour; the health check every 2.5h.
 const LEAD_LOG_EVERY: Duration = Duration::from_secs(30);
 const HEALTH_EVERY: Duration = Duration::from_secs(60);
+/// Plan usage moves with every Claude reply.
+/// Under the 15 s repaint so an idle Stage doesn't skip every other tick.
+const USAGE_EVERY: Duration = Duration::from_secs(10);
+/// A reading older than this is hidden rather than trusted.
+const USAGE_STALE_SECS: u64 = 6 * 3600;
+/// Width of one usage bar in the footer.
+const USAGE_BAR_W: f32 = 64.;
 /// Below this the crew column folds behind a toggle so the terminal keeps
 /// its width.
 const CREW_FOLD_BELOW: f32 = 1000.;
@@ -73,6 +81,10 @@ pub(super) struct StageState {
     pub(super) health: Option<Health>,
     health_asked: Option<Instant>,
     health_busy: bool,
+    /// Claude plan usage: the footer's bars, and the Wall's.
+    pub(super) usage: Option<Usage>,
+    usage_asked: Option<Instant>,
+    usage_busy: bool,
     /// Narrow windows: the crew column is open.
     crew_open: bool,
     /// circle → the file tab Stage shows. Kept apart from the dock's pick
@@ -147,7 +159,7 @@ impl SeanceApp {
     }
 
     /// Repaint now and then on Stage and Wall: elapsed labels move and the
-    /// lead logs, health report and Today feed come due.
+    /// lead logs, health report, usage and Today feed come due.
     pub(super) fn start_stage_ticker(&self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| loop {
             cx.background_executor()
@@ -399,7 +411,7 @@ impl SeanceApp {
         cx.notify();
     }
 
-    /// Ask the daemon for the lead log and health report when they're due.
+    /// Ask the daemon for the lead log, health report and usage when they're due.
     /// Cheap when nothing is: a few comparisons per frame.
     fn stage_feeds(&mut self, cx: &mut Context<Self>) {
         self.health_feed(cx);
@@ -453,8 +465,8 @@ impl SeanceApp {
         }
     }
 
-    /// Re-read the health report when it's due (Stage's footer, the Wall's
-    /// feed and footer).
+    /// Re-read the health report and the usage file when they're due (Stage's
+    /// footer, the Wall's feed and footer).
     pub(super) fn health_feed(&mut self, cx: &mut Context<Self>) {
         let conf = crate::term_config::get();
         if let Some(path) = conf.seance_health_file.as_ref() {
@@ -486,6 +498,42 @@ impl SeanceApp {
                         let Some(health) = health else { return };
                         if app.stage.health != health {
                             app.stage.health = health;
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
+        }
+        if let Some(path) = conf.seance_usage_file.as_ref() {
+            let due = !self.stage.usage_busy
+                && self
+                    .stage
+                    .usage_asked
+                    .is_none_or(|at| at.elapsed() >= USAGE_EVERY);
+            if due {
+                let path = path.clone();
+                self.stage.usage_busy = true;
+                self.stage.usage_asked = Some(Instant::now());
+                let client = Arc::clone(&self.client);
+                cx.spawn(async move |this, cx| {
+                    let usage = cx
+                        .background_executor()
+                        .spawn(async move {
+                            match client.fs_read_string(&path) {
+                                Ok((text, _)) => Some(parse_usage(&text)),
+                                Err(e) if fs_not_found(&e) => Some(None),
+                                Err(_) => None,
+                            }
+                        })
+                        .await;
+                    let Some(this) = this.upgrade() else { return };
+                    this.update(cx, |app: &mut SeanceApp, cx| {
+                        app.stage.usage_busy = false;
+                        // A failed read keeps the last reading on screen.
+                        let Some(usage) = usage else { return };
+                        if app.stage.usage != usage {
+                            app.stage.usage = usage;
                             cx.notify();
                         }
                     });
@@ -2351,7 +2399,8 @@ impl SeanceApp {
     }
 
     /// The health report's facts, a dot for those that have one: XPS, Mac,
-    /// leads, plan. None when there is no report to show.
+    /// leads, and plan while there are no usage bars. None when there is no
+    /// report to show.
     pub(super) fn health_facts(&self) -> Option<Vec<(Option<Hsla>, String)>> {
         crate::term_config::get().seance_health_file.as_ref()?;
         let h = self.stage.health.as_ref()?;
@@ -2373,13 +2422,85 @@ impl SeanceApp {
         };
         let mut facts = vec![(Some(level), xps), (Some(mac_dot), mac)];
         facts.extend(h.leads.clone().map(|l| (None, l)));
-        facts.extend(h.plan.clone().map(|p| (None, p)));
+        // The usage bars say it better, and live.
+        if self.usage_fresh().is_none() {
+            facts.extend(h.plan.clone().map(|p| (None, p)));
+        }
         Some(facts)
     }
 
-    /// One line from the health report: XPS, Mac, leads, plan, report time.
+    /// The usage reading and the time now, while it is recent: only Seance's
+    /// Claude panes feed the file, so with none running it goes stale and
+    /// would claim 0% after its reset.
+    fn usage_fresh(&self) -> Option<(Usage, u64)> {
+        let u = self.stage.usage?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        (now.saturating_sub(u.at) <= USAGE_STALE_SECS).then_some((u, now))
+    }
+
+    /// Claude plan usage, one bar per limit: "5h ▓▓░░ 62% ↻52m". Stage's
+    /// footer and the Wall's.
+    pub(super) fn usage_items(&self) -> Vec<AnyElement> {
+        let Some((u, now)) = self.usage_fresh() else {
+            return Vec::new();
+        };
+        [("5h", u.five_hour), ("7d", u.seven_day)]
+            .into_iter()
+            .filter_map(|(name, w)| {
+                let (used, left) = usage_now(w?, now);
+                // The pane status line's thresholds.
+                let fill = if used >= 70 {
+                    SeancePalette::danger()
+                } else if used >= 30 {
+                    SeancePalette::flame()
+                } else {
+                    SeancePalette::success()
+                };
+                Some(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .child(name)
+                        .child(
+                            div()
+                                .flex_none()
+                                .w(px(USAGE_BAR_W))
+                                .h(px(6.))
+                                .rounded_full()
+                                .bg(SeancePalette::surface())
+                                .border_1()
+                                .border_color(SeancePalette::border())
+                                .child(
+                                    div()
+                                        .h_full()
+                                        .rounded_full()
+                                        .w(relative(used.min(100) as f32 / 100.))
+                                        .bg(fill),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_color(SeancePalette::text_dim())
+                                .child(format!("{used}%")),
+                        )
+                        .when(left > 0, |d| d.child(format!("↻{}", reset_in(left))))
+                        .into_any_element(),
+                )
+            })
+            .collect()
+    }
+
+    /// Plan usage on the left; the health report's facts and time on the right.
     fn render_stage_footer(&self) -> Option<AnyElement> {
-        let facts = self.health_facts()?;
+        let usage = self.usage_items();
+        let facts = self.health_facts().unwrap_or_default();
+        if usage.is_empty() && facts.is_empty() {
+            return None;
+        }
         let at = self.stage.health.as_ref().and_then(|h| h.at.clone());
         let item = |dot: Option<Hsla>, text: String| {
             div()
@@ -2404,13 +2525,23 @@ impl SeanceApp {
                 .bg(SeancePalette::bg_elevated())
                 .border_t_1()
                 .border_color(SeancePalette::border())
-                .children(facts.into_iter().map(|(dot, text)| item(dot, text)))
-                .children(at.map(|at| {
+                .children(usage)
+                // The health side gives way in a narrow window: it shrinks
+                // and clips from its left, keeping the report time in view.
+                .child(
                     div()
-                        .ml_auto()
-                        .flex_none()
-                        .child(format!("health report {at}"))
-                }))
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .flex()
+                        .justify_end()
+                        .items_center()
+                        .gap(px(18.))
+                        .children(facts.into_iter().map(|(dot, text)| item(dot, text)))
+                        .children(
+                            at.map(|at| div().flex_none().child(format!("health report {at}"))),
+                        ),
+                )
                 .into_any_element(),
         )
     }

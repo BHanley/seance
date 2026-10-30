@@ -1209,7 +1209,11 @@ impl SeanceApp {
                         .child(div().text_color(SeancePalette::text_dim()).child(text)),
                 )
         });
-        let facts = self.health_facts();
+        let usage = self.usage_items();
+        let facts = match self.health_facts() {
+            None if usage.is_empty() => None,
+            f => Some(f.unwrap_or_default()),
+        };
         let at = self.stage.health.as_ref().and_then(|h| h.at.clone());
         div()
             .w(px(FEED_W))
@@ -1262,6 +1266,7 @@ impl SeanceApp {
                     .gap(px(4.))
                     .text_xs()
                     .text_color(SeancePalette::text_faint())
+                    .children(usage)
                     .children(facts.into_iter().map(|(dot, text)| {
                         div()
                             .flex()

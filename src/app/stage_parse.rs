@@ -557,9 +557,96 @@ pub(super) fn compacted_while_idle(lines: &[String]) -> bool {
     })
 }
 
+/// One Claude plan limit from the usage file: percent used and when it resets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct UsageWindow {
+    pub used: u32,
+    /// Unix seconds.
+    pub resets_at: u64,
+}
+
+/// The footer's usage bars: the 5 hour and weekly limits.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Usage {
+    pub five_hour: Option<UsageWindow>,
+    pub seven_day: Option<UsageWindow>,
+    /// Unix seconds of the newest reading.
+    pub at: u64,
+}
+
+/// Read `seance-usage-file`: `{"five_hour": {"used": 9, "resets_at": 1793403000}, ...}`.
+/// None for a file with neither window.
+pub(super) fn parse_usage(text: &str) -> Option<Usage> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    let window = |k: &str| {
+        let w = v.get(k)?;
+        Some(UsageWindow {
+            used: u32::try_from(w.get("used")?.as_u64()?).ok()?,
+            resets_at: w.get("resets_at")?.as_u64()?,
+        })
+    };
+    let u = Usage {
+        five_hour: window("five_hour"),
+        seven_day: window("seven_day"),
+        at: v.get("at").and_then(|a| a.as_u64()).unwrap_or(0),
+    };
+    (u.five_hour.is_some() || u.seven_day.is_some()).then_some(u)
+}
+
+/// What a window shows at `now`: a reset that has passed reads as 0% used.
+pub(super) fn usage_now(w: UsageWindow, now: u64) -> (u32, u64) {
+    if now >= w.resets_at {
+        (0, 0)
+    } else {
+        (w.used, w.resets_at - now)
+    }
+}
+
+/// Time to a reset, like the pane status line: "6d14h", "2h5m", "52m".
+pub(super) fn reset_in(secs: u64) -> String {
+    if secs >= 86_400 {
+        format!("{}d{}h", secs / 86_400, secs % 86_400 / 3_600)
+    } else if secs >= 3_600 {
+        format!("{}h{}m", secs / 3_600, secs % 3_600 / 60)
+    } else {
+        format!("{}m", secs / 60)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn usage_reads_both_windows_and_skips_junk() {
+        let u = parse_usage(
+            r#"{"five_hour":{"used":9,"resets_at":1000},"seven_day":{"used":13,"resets_at":5000},"at":1}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            u.five_hour,
+            Some(UsageWindow {
+                used: 9,
+                resets_at: 1000
+            })
+        );
+        assert_eq!(u.seven_day.map(|w| w.used), Some(13));
+        assert_eq!(parse_usage(r#"{"five_hour":{"used":9}}"#), None);
+        assert_eq!(parse_usage("not json"), None);
+    }
+
+    #[test]
+    fn usage_after_its_reset_reads_empty() {
+        let w = UsageWindow {
+            used: 62,
+            resets_at: 1000,
+        };
+        assert_eq!(usage_now(w, 400), (62, 600));
+        assert_eq!(usage_now(w, 1000), (0, 0));
+        assert_eq!(reset_in(600), "10m");
+        assert_eq!(reset_in(2 * 3600 + 5 * 60), "2h5m");
+        assert_eq!(reset_in(6 * 86_400 + 14 * 3600), "6d14h");
+    }
 
     const MAP: &str = "# circle slug<TAB>project folder under Projects/.\n\
 main\tProduct Management\n\
