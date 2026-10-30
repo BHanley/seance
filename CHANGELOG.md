@@ -19,6 +19,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **Claude plan usage in the footer.** Stage's footer (and the Wall's
+  feed) shows a bar per Claude limit, 5 hour and weekly, with percent used
+  and time to reset, read from `seance-usage-file` every 15 s. The health
+  report's facts move to the right, next to its time.
+
 - **Themes grouped dark and light.** The ✦ menu lists the dark themes,
   then the light ones, each under its own heading.
 

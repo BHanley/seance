@@ -25,8 +25,8 @@ use super::actions::{ActDeleteSpace, ActRenameSpace, ActSpaceDefault};
 use super::stage_parse::{
     circle_folder, compacted_while_idle, crew_order, done_chips, ellipsize, filed_label, fit_pills,
     is_bare_shell, jump_ring, last_output_lines, latest_finish, latest_finish_at, lead_log_path,
-    next_waiting, pane_host, parse_health, parse_lead_log, pill_width, reply_repeats, CrewBand,
-    Health, HealthLevel, LeadLine,
+    next_waiting, pane_host, parse_health, parse_lead_log, parse_usage, pill_width, reply_repeats,
+    reset_in, usage_now, CrewBand, Health, HealthLevel, LeadLine, Usage,
 };
 use super::util::{pane_menu, tip, tip_s, DragPill, DraggedCircle};
 use super::views::ViewMode;
@@ -36,6 +36,10 @@ use super::{PaletteMode, RenameTarget, SeanceApp};
 /// The lead log changes a few times an hour; the health check every 2.5h.
 const LEAD_LOG_EVERY: Duration = Duration::from_secs(30);
 const HEALTH_EVERY: Duration = Duration::from_secs(60);
+/// Plan usage moves with every Claude reply.
+const USAGE_EVERY: Duration = Duration::from_secs(15);
+/// Width of one usage bar in the footer.
+const USAGE_BAR_W: f32 = 64.;
 /// Below this the crew column folds behind a toggle so the terminal keeps
 /// its width.
 const CREW_FOLD_BELOW: f32 = 1000.;
@@ -73,6 +77,10 @@ pub(super) struct StageState {
     pub(super) health: Option<Health>,
     health_asked: Option<Instant>,
     health_busy: bool,
+    /// Claude plan usage: the footer's bars, and the Wall's.
+    pub(super) usage: Option<Usage>,
+    usage_asked: Option<Instant>,
+    usage_busy: bool,
     /// Narrow windows: the crew column is open.
     crew_open: bool,
     /// circle → the file tab Stage shows. Kept apart from the dock's pick
@@ -486,6 +494,41 @@ impl SeanceApp {
                         let Some(health) = health else { return };
                         if app.stage.health != health {
                             app.stage.health = health;
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
+        }
+        if let Some(path) = conf.seance_usage_file.as_ref() {
+            let due = !self.stage.usage_busy
+                && self
+                    .stage
+                    .usage_asked
+                    .is_none_or(|at| at.elapsed() >= USAGE_EVERY);
+            if due {
+                let path = path.clone();
+                self.stage.usage_busy = true;
+                self.stage.usage_asked = Some(Instant::now());
+                let client = Arc::clone(&self.client);
+                cx.spawn(async move |this, cx| {
+                    let usage = cx
+                        .background_executor()
+                        .spawn(async move {
+                            match client.fs_read_string(&path) {
+                                Ok((text, _)) => Some(parse_usage(&text)),
+                                Err(e) if fs_not_found(&e) => Some(None),
+                                Err(_) => None,
+                            }
+                        })
+                        .await;
+                    let Some(this) = this.upgrade() else { return };
+                    this.update(cx, |app: &mut SeanceApp, cx| {
+                        app.stage.usage_busy = false;
+                        let Some(usage) = usage else { return };
+                        if app.stage.usage != usage {
+                            app.stage.usage = usage;
                             cx.notify();
                         }
                     });
@@ -2373,13 +2416,76 @@ impl SeanceApp {
         };
         let mut facts = vec![(Some(level), xps), (Some(mac_dot), mac)];
         facts.extend(h.leads.clone().map(|l| (None, l)));
-        facts.extend(h.plan.clone().map(|p| (None, p)));
+        // The usage bars say it better, and live.
+        if self.stage.usage.is_none() {
+            facts.extend(h.plan.clone().map(|p| (None, p)));
+        }
         Some(facts)
     }
 
-    /// One line from the health report: XPS, Mac, leads, plan, report time.
+    /// Claude plan usage, one bar per limit: "5h ▓▓░░ 62% ↻52m". Stage's
+    /// footer and the Wall's.
+    pub(super) fn usage_items(&self) -> Vec<AnyElement> {
+        let Some(u) = self.stage.usage else {
+            return Vec::new();
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        [("5h", u.five_hour), ("7d", u.seven_day)]
+            .into_iter()
+            .filter_map(|(name, w)| {
+                let (used, left) = usage_now(w?, now);
+                let fill = if used >= 80 {
+                    SeancePalette::danger()
+                } else if used >= 50 {
+                    SeancePalette::flame()
+                } else {
+                    SeancePalette::success()
+                };
+                Some(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .child(name)
+                        .child(
+                            div()
+                                .flex_none()
+                                .w(px(USAGE_BAR_W))
+                                .h(px(6.))
+                                .rounded_full()
+                                .bg(SeancePalette::surface())
+                                .border_1()
+                                .border_color(SeancePalette::border())
+                                .overflow_hidden()
+                                .child(
+                                    div()
+                                        .h_full()
+                                        .w(px(USAGE_BAR_W * used.min(100) as f32 / 100.))
+                                        .bg(fill),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_color(SeancePalette::text_dim())
+                                .child(format!("{used}%")),
+                        )
+                        .when(left > 0, |d| d.child(format!("↻{}", reset_in(left))))
+                        .into_any_element(),
+                )
+            })
+            .collect()
+    }
+
+    /// Plan usage on the left; the health report's facts and time on the right.
     fn render_stage_footer(&self) -> Option<AnyElement> {
-        let facts = self.health_facts()?;
+        let usage = self.usage_items();
+        let facts = self.health_facts().unwrap_or_default();
+        if usage.is_empty() && facts.is_empty() {
+            return None;
+        }
         let at = self.stage.health.as_ref().and_then(|h| h.at.clone());
         let item = |dot: Option<Hsla>, text: String| {
             div()
@@ -2404,13 +2510,10 @@ impl SeanceApp {
                 .bg(SeancePalette::bg_elevated())
                 .border_t_1()
                 .border_color(SeancePalette::border())
+                .children(usage)
+                .child(div().flex_1().min_w_0())
                 .children(facts.into_iter().map(|(dot, text)| item(dot, text)))
-                .children(at.map(|at| {
-                    div()
-                        .ml_auto()
-                        .flex_none()
-                        .child(format!("health report {at}"))
-                }))
+                .children(at.map(|at| div().flex_none().child(format!("health report {at}"))))
                 .into_any_element(),
         )
     }
