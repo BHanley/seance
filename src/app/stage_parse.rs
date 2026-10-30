@@ -570,6 +570,8 @@ pub(super) struct UsageWindow {
 pub(super) struct Usage {
     pub five_hour: Option<UsageWindow>,
     pub seven_day: Option<UsageWindow>,
+    /// Unix seconds of the newest reading.
+    pub at: u64,
 }
 
 /// Read `seance-usage-file`: `{"five_hour": {"used": 9, "resets_at": 1793403000}, ...}`.
@@ -586,6 +588,7 @@ pub(super) fn parse_usage(text: &str) -> Option<Usage> {
     let u = Usage {
         five_hour: window("five_hour"),
         seven_day: window("seven_day"),
+        at: v.get("at").and_then(|a| a.as_u64()).unwrap_or(0),
     };
     (u.five_hour.is_some() || u.seven_day.is_some()).then_some(u)
 }

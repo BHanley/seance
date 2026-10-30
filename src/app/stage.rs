@@ -1,12 +1,13 @@
 //! Stage: one circle's lead up front. A strip of circle pills on top, the
 //! needs-you bar, the live lead terminal with its Doing / Next / Waiting on
-//! line, the crew as cards, the circle's files, and a health footer.
+//! line, the crew as cards, the circle's files, and a footer of Claude plan
+//! usage and machine health.
 //!
 //! Stage replaces the rail and grid rather than drawing over them, so the
 //! pane on stage is the one place its terminal view renders: keys and esc
 //! reach it like any focused pane. The pane on stage is the window's active
 //! pane when that is a terminal in the circle, else the circle's lead.
-//! The lead log and health report are daemon-side files read through the fs
+//! The lead log, health report and usage file are daemon-side files read through the fs
 //! bridge on a background task, never from render.
 
 use std::collections::HashMap;
@@ -37,7 +38,10 @@ use super::{PaletteMode, RenameTarget, SeanceApp};
 const LEAD_LOG_EVERY: Duration = Duration::from_secs(30);
 const HEALTH_EVERY: Duration = Duration::from_secs(60);
 /// Plan usage moves with every Claude reply.
-const USAGE_EVERY: Duration = Duration::from_secs(15);
+/// Under the 15 s repaint so an idle Stage doesn't skip every other tick.
+const USAGE_EVERY: Duration = Duration::from_secs(10);
+/// A reading older than this is hidden rather than trusted.
+const USAGE_STALE_SECS: u64 = 6 * 3600;
 /// Width of one usage bar in the footer.
 const USAGE_BAR_W: f32 = 64.;
 /// Below this the crew column folds behind a toggle so the terminal keeps
@@ -155,7 +159,7 @@ impl SeanceApp {
     }
 
     /// Repaint now and then on Stage and Wall: elapsed labels move and the
-    /// lead logs, health report and Today feed come due.
+    /// lead logs, health report, usage and Today feed come due.
     pub(super) fn start_stage_ticker(&self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| loop {
             cx.background_executor()
@@ -407,7 +411,7 @@ impl SeanceApp {
         cx.notify();
     }
 
-    /// Ask the daemon for the lead log and health report when they're due.
+    /// Ask the daemon for the lead log, health report and usage when they're due.
     /// Cheap when nothing is: a few comparisons per frame.
     fn stage_feeds(&mut self, cx: &mut Context<Self>) {
         self.health_feed(cx);
@@ -461,8 +465,8 @@ impl SeanceApp {
         }
     }
 
-    /// Re-read the health report when it's due (Stage's footer, the Wall's
-    /// feed and footer).
+    /// Re-read the health report and the usage file when they're due (Stage's
+    /// footer, the Wall's feed and footer).
     pub(super) fn health_feed(&mut self, cx: &mut Context<Self>) {
         let conf = crate::term_config::get();
         if let Some(path) = conf.seance_health_file.as_ref() {
@@ -526,6 +530,7 @@ impl SeanceApp {
                     let Some(this) = this.upgrade() else { return };
                     this.update(cx, |app: &mut SeanceApp, cx| {
                         app.stage.usage_busy = false;
+                        // A failed read keeps the last reading on screen.
                         let Some(usage) = usage else { return };
                         if app.stage.usage != usage {
                             app.stage.usage = usage;
@@ -2394,7 +2399,8 @@ impl SeanceApp {
     }
 
     /// The health report's facts, a dot for those that have one: XPS, Mac,
-    /// leads, plan. None when there is no report to show.
+    /// leads, and plan while there are no usage bars. None when there is no
+    /// report to show.
     pub(super) fn health_facts(&self) -> Option<Vec<(Option<Hsla>, String)>> {
         crate::term_config::get().seance_health_file.as_ref()?;
         let h = self.stage.health.as_ref()?;
@@ -2417,28 +2423,37 @@ impl SeanceApp {
         let mut facts = vec![(Some(level), xps), (Some(mac_dot), mac)];
         facts.extend(h.leads.clone().map(|l| (None, l)));
         // The usage bars say it better, and live.
-        if self.stage.usage.is_none() {
+        if self.usage_fresh().is_none() {
             facts.extend(h.plan.clone().map(|p| (None, p)));
         }
         Some(facts)
     }
 
-    /// Claude plan usage, one bar per limit: "5h ▓▓░░ 62% ↻52m". Stage's
-    /// footer and the Wall's.
-    pub(super) fn usage_items(&self) -> Vec<AnyElement> {
-        let Some(u) = self.stage.usage else {
-            return Vec::new();
-        };
+    /// The usage reading and the time now, while it is recent: only Seance's
+    /// Claude panes feed the file, so with none running it goes stale and
+    /// would claim 0% after its reset.
+    fn usage_fresh(&self) -> Option<(Usage, u64)> {
+        let u = self.stage.usage?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
+        (now.saturating_sub(u.at) <= USAGE_STALE_SECS).then_some((u, now))
+    }
+
+    /// Claude plan usage, one bar per limit: "5h ▓▓░░ 62% ↻52m". Stage's
+    /// footer and the Wall's.
+    pub(super) fn usage_items(&self) -> Vec<AnyElement> {
+        let Some((u, now)) = self.usage_fresh() else {
+            return Vec::new();
+        };
         [("5h", u.five_hour), ("7d", u.seven_day)]
             .into_iter()
             .filter_map(|(name, w)| {
                 let (used, left) = usage_now(w?, now);
-                let fill = if used >= 80 {
+                // The pane status line's thresholds.
+                let fill = if used >= 70 {
                     SeancePalette::danger()
-                } else if used >= 50 {
+                } else if used >= 30 {
                     SeancePalette::flame()
                 } else {
                     SeancePalette::success()
@@ -2459,11 +2474,11 @@ impl SeanceApp {
                                 .bg(SeancePalette::surface())
                                 .border_1()
                                 .border_color(SeancePalette::border())
-                                .overflow_hidden()
                                 .child(
                                     div()
                                         .h_full()
-                                        .w(px(USAGE_BAR_W * used.min(100) as f32 / 100.))
+                                        .rounded_full()
+                                        .w(relative(used.min(100) as f32 / 100.))
                                         .bg(fill),
                                 ),
                         )
@@ -2511,9 +2526,22 @@ impl SeanceApp {
                 .border_t_1()
                 .border_color(SeancePalette::border())
                 .children(usage)
-                .child(div().flex_1().min_w_0())
-                .children(facts.into_iter().map(|(dot, text)| item(dot, text)))
-                .children(at.map(|at| div().flex_none().child(format!("health report {at}"))))
+                // The health side gives way in a narrow window: it shrinks
+                // and clips from its left, keeping the report time in view.
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .flex()
+                        .justify_end()
+                        .items_center()
+                        .gap(px(18.))
+                        .children(facts.into_iter().map(|(dot, text)| item(dot, text)))
+                        .children(
+                            at.map(|at| div().flex_none().child(format!("health report {at}"))),
+                        ),
+                )
                 .into_any_element(),
         )
     }
