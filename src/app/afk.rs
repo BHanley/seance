@@ -1,4 +1,4 @@
-//! AFK chip, top right on Stage and Wall. Brian's `~/Claude/bin/afk` keeps
+//! AFK chip, top right on Stage and Wall, and beside the ✦ in Chat's list. Brian's `~/Claude/bin/afk` keeps
 //! the Mac awake with its lid closed and has leads text him on his phone
 //! (Invoke); this chip shows its mark and flips it, the same chip as
 //! Invoke's. Nothing shows where that script isn't installed.
