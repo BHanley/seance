@@ -93,6 +93,9 @@ pub(super) struct ChatState {
     images: HashMap<String, (PathBuf, u32, u32)>,
     /// Videos being fetched on a click, or that failed to be.
     videos: HashMap<String, VideoState>,
+    /// Choices tapped here, by the message they answer, until Invoke's own
+    /// copy of the thread says so too.
+    tapped: HashMap<i64, String>,
     image_asked: HashSet<String>,
     error: Option<String>,
     /// Claude plan usage from the last thread answer; none hides the strip.
@@ -649,6 +652,8 @@ impl SeanceApp {
             ts: now_ms(),
             image: None,
             images: Vec::new(),
+            choices: Vec::new(),
+            picked: None,
         });
         self.chat.stick = 3;
         let thread_ws = ws.clone();
@@ -674,6 +679,59 @@ impl SeanceApp {
                     }
                     app.chat.error = Some(format!("not sent: {e}"));
                     app.chat.restore = Some(text);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Tap a choice: it goes to the lead as your message, tied to the message
+    /// it answers. The pill is filled at once and every pill goes dead; if the
+    /// send fails they come back, with the reason on top.
+    fn chat_answer(&mut self, answers: i64, choice: String, cx: &mut Context<Self>) {
+        let Some(ws) = self.chat.selected.clone() else {
+            return;
+        };
+        if ws == ALERTS_WS || self.chat.tapped.contains_key(&answers) {
+            return;
+        }
+        self.chat.tapped.insert(answers, choice.clone());
+        // Shown at once as your message, until the thread answer has the real one.
+        self.chat.next_local -= 1;
+        let local_id = self.chat.next_local;
+        let after = self.chat.last_id(&ws);
+        let thread = self.chat.threads.entry(ws.clone()).or_default();
+        thread.messages.push(Msg {
+            id: local_id,
+            from: "me".into(),
+            text: choice.clone(),
+            ts: now_ms(),
+            ..Default::default()
+        });
+        self.chat.stick = 3;
+        let thread_ws = ws.clone();
+        cx.spawn(async move |this, cx| {
+            let (to, text) = (ws.clone(), choice);
+            let sent = cx
+                .background_executor()
+                .spawn(async move { chat_api::answer(&to, &text, answers) })
+                .await;
+            let round = cx
+                .background_executor()
+                .spawn(async move { fetch_round(Some(ws), after) })
+                .await;
+            let Some(this) = this.upgrade() else { return };
+            this.update(cx, |app: &mut SeanceApp, cx| {
+                app.apply_round(round, cx);
+                if let Err(e) = sent {
+                    // Not sent: the pills are live again and the bubble goes.
+                    app.chat.tapped.remove(&answers);
+                    if let Some(t) = app.chat.threads.get_mut(&thread_ws) {
+                        t.messages.retain(|m| m.id != local_id);
+                    }
+                    app.chat.error = Some(format!("not sent: {e}"));
                 }
                 cx.notify();
             });
@@ -1282,10 +1340,74 @@ impl SeanceApp {
                     .text_color(SeancePalette::text_faint())
                     .child(stamp),
             );
+        if m.choices.is_empty() || me {
+            return div()
+                .flex()
+                .when(me, |d| d.justify_end())
+                .child(bubble)
+                .into_any_element();
+        }
+        // The lead's choices, as pills under its message.
         div()
             .flex()
-            .when(me, |d| d.justify_end())
+            .flex_col()
+            .items_start()
+            .gap_1()
             .child(bubble)
+            .child(self.choice_pills(m, cx))
+            .into_any_element()
+    }
+
+    /// Tap-to-answer pills in a wrapping row. The first is the lead's pick, so
+    /// it is tinted. Once one is tapped (here or elsewhere) all go dead, the
+    /// tapped one is filled and the rest are dimmed.
+    fn choice_pills(&self, m: &Msg, cx: &Context<Self>) -> AnyElement {
+        let picked = m
+            .picked
+            .clone()
+            .or_else(|| self.chat.tapped.get(&m.id).cloned());
+        let id = m.id;
+        div()
+            .max_w(relative(0.72))
+            .flex()
+            .flex_wrap()
+            .gap_2()
+            .children(m.choices.iter().enumerate().map(|(i, choice)| {
+                let is_picked = picked.as_deref() == Some(choice.as_str());
+                let lead_pick = i == 0 && picked.is_none();
+                let pill = div()
+                    .id(SharedString::from(format!("choice-{id}-{i}")))
+                    .px_3()
+                    .py_1()
+                    .rounded_full()
+                    .text_sm()
+                    .border_1()
+                    .border_color(if is_picked || lead_pick {
+                        SeancePalette::violet()
+                    } else {
+                        SeancePalette::border()
+                    })
+                    .text_color(if is_picked {
+                        SeancePalette::bg()
+                    } else if lead_pick {
+                        SeancePalette::violet()
+                    } else {
+                        SeancePalette::text()
+                    })
+                    .when(is_picked, |d| d.bg(SeancePalette::violet()))
+                    .when(lead_pick, |d| d.bg(SeancePalette::violet().opacity(0.14)))
+                    .when(picked.is_some() && !is_picked, |d| d.opacity(0.4))
+                    .child(choice.clone());
+                if picked.is_some() {
+                    return pill;
+                }
+                let choice = choice.clone();
+                pill.cursor_pointer()
+                    .hover(|s| s.bg(SeancePalette::violet().opacity(0.25)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.chat_answer(id, choice.clone(), cx);
+                    }))
+            }))
             .into_any_element()
     }
 }
