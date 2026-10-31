@@ -1387,7 +1387,7 @@ fn paint_grid(layout: &Layout, window: &mut Window, cx: &mut App) {
     // A shell's title means Claude isn't running (`systemctl status` prints
     // a plain `●` too).
     let claude = layout.snap.title.is_none()
-        || crate::runtime::engine::sleep::title_is_claude(layout.snap.title.as_deref());
+        || crate::runtime::engine::title_is_claude(layout.snap.title.as_deref());
     let (reply_rows, (plain_fg, plain_bg)) = if claude {
         seance_core::replies::claude_reply_rows(&layout.snap)
     } else {
