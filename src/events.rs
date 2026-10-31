@@ -496,6 +496,24 @@ pub fn fmt_time(ts_ms: u64) -> String {
     format!("{h:02}:{m:02}:{s:02}")
 }
 
+/// Local (weekday counted from Sunday, hour, minute) of `ts_ms`.
+pub fn local_clock(ts_ms: u64) -> (u32, u32, u32) {
+    let secs = (ts_ms / 1000) as i64;
+    clock_parts(secs + local_offset_secs(secs))
+}
+
+/// The weekday (0 = Sunday), hour and minute of `local` seconds since the
+/// epoch, which was a Thursday.
+fn clock_parts(local: i64) -> (u32, u32, u32) {
+    let weekday = (local.div_euclid(86_400) + 4).rem_euclid(7) as u32;
+    let day_secs = local.rem_euclid(86_400);
+    (
+        weekday,
+        (day_secs / 3600) as u32,
+        (day_secs % 3600 / 60) as u32,
+    )
+}
+
 /// This machine's UTC offset in seconds at unix time `secs`, daylight saving
 /// included. Asked of the C library every call, so a long-running daemon
 /// follows the clock change.
@@ -511,6 +529,14 @@ fn local_offset_secs(secs: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clock_parts_know_the_weekday_hour_and_minute() {
+        // 1970-01-01 was a Thursday; 1970-01-04 a Sunday.
+        assert_eq!(clock_parts(0), (4, 0, 0));
+        assert_eq!(clock_parts(3 * 86_400 + 13 * 3600 + 50 * 60), (0, 13, 50));
+        assert_eq!(clock_parts(-60), (3, 23, 59));
+    }
 
     #[test]
     fn local_offset_matches_date_now() {

@@ -61,6 +61,27 @@ pub struct Thread {
     /// Highest message id already read.
     #[serde(default)]
     pub read: i64,
+    /// Claude plan usage, which every thread answer carries.
+    #[serde(default)]
+    pub usage: Option<Usage>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct Usage {
+    #[serde(default)]
+    pub five_hour: Option<UsageWindow>,
+    #[serde(default)]
+    pub seven_day: Option<UsageWindow>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct UsageWindow {
+    /// Percent of the window used.
+    #[serde(default)]
+    pub used: f64,
+    /// When the window resets, unix ms.
+    #[serde(default)]
+    pub resets: Option<u64>,
 }
 
 /// `/api/tasks`: only what the thread header shows.
@@ -234,6 +255,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(t.read, 3);
+        assert_eq!(t.usage, Some(Usage::default()));
         assert_eq!(t.messages[0].from, "me");
         assert_eq!(t.messages[0].image, None);
     }

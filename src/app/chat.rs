@@ -15,9 +15,11 @@ use gpui::{
     SharedString, Window,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::StyledExt as _;
 use regex::Regex;
 
-use crate::chat_api::{self, CircleRow, Circles, Msg, Progress, Thread};
+use crate::chat_api::{self, CircleRow, Circles, Msg, Progress, Thread, Usage, UsageWindow};
+use crate::events;
 use crate::theme::SeancePalette;
 
 use super::lead_tasks::clock;
@@ -36,6 +38,8 @@ const LIST_W: f32 = 300.;
 const ALERTS_WS: &str = "alerts";
 /// A failed read report waits this long before the next try.
 const READ_RETRY: Duration = Duration::from_secs(30);
+/// A circle with a message newer than this is Active, as on the phone.
+const ACTIVE_MS: u64 = 2 * 3600 * 1000;
 
 #[derive(Default)]
 pub(super) struct ChatState {
@@ -67,8 +71,8 @@ pub(super) struct ChatState {
     images: HashMap<String, PathBuf>,
     image_asked: HashSet<String>,
     error: Option<String>,
-    /// The lead's to-do list is open under the header.
-    tasks_open: bool,
+    /// Claude plan usage from the last thread answer; none hides the strip.
+    usage: Option<Usage>,
 }
 
 impl ChatState {
@@ -149,6 +153,99 @@ fn preview(m: &Msg) -> String {
     } else {
         text
     }
+}
+
+/// Circles Invoke's phone list shows under Active: not alerts, with unread
+/// messages or a last message under two hours old, newest first.
+fn active_circles(circles: &[CircleRow], now: u64) -> Vec<CircleRow> {
+    let mut active: Vec<CircleRow> = circles
+        .iter()
+        .filter(|c| {
+            c.ws != ALERTS_WS
+                && (c.unread > 0
+                    || c.last
+                        .as_ref()
+                        .is_some_and(|m| now.saturating_sub(m.ts) < ACTIVE_MS))
+        })
+        .cloned()
+        .collect();
+    active.sort_by_key(|c| std::cmp::Reverse(c.last.as_ref().map_or(0, |m| m.ts)));
+    active
+}
+
+/// 12-hour clock, as the phone shows it: "12:50 PM", or with a weekday and
+/// no minutes for the weekly reset: "Thu 2 AM".
+fn reset_label(ts_ms: u64, with_day: bool) -> String {
+    const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    let (day, hour, minute) = events::local_clock(ts_ms);
+    let h12 = if hour % 12 == 0 { 12 } else { hour % 12 };
+    let ampm = if hour < 12 { "AM" } else { "PM" };
+    if with_day {
+        format!("{} {h12} {ampm}", DAYS[day as usize % 7])
+    } else {
+        format!("{h12}:{minute:02} {ampm}")
+    }
+}
+
+/// The thin usage line under the thread header, like the phone's: "5h 18% ·
+/// ⟳ 12:50 PM   7d 35% · ⟳ Thu 2 AM". Numbers go red from 80%. None when
+/// neither window is known.
+fn usage_strip(u: &Usage) -> Option<AnyElement> {
+    let part = |label: &str, w: &UsageWindow, with_day: bool| {
+        let hot = w.used >= 80.;
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(label.to_string())
+            .child(
+                div()
+                    .font_semibold()
+                    .text_color(if hot {
+                        SeancePalette::danger()
+                    } else {
+                        SeancePalette::text_faint()
+                    })
+                    .child(format!("{}%", w.used.round() as i64)),
+            )
+            .children(
+                w.resets
+                    .map(|at| format!("· ⟳ {}", reset_label(at, with_day))),
+            )
+    };
+    let parts: Vec<_> = [
+        u.five_hour.as_ref().map(|w| part("5h", w, false)),
+        u.seven_day.as_ref().map(|w| part("7d", w, true)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if parts.is_empty() {
+        return None;
+    }
+    Some(
+        div()
+            .flex_none()
+            .py_1()
+            .flex()
+            .justify_center()
+            .gap_4()
+            .text_xs()
+            .text_color(SeancePalette::text_faint())
+            .children(parts)
+            .into_any_element(),
+    )
+}
+
+/// A list heading: a space's name, or Active.
+fn list_label(text: String) -> gpui::Div {
+    div()
+        .px_3()
+        .pt_2()
+        .pb_1()
+        .text_xs()
+        .text_color(SeancePalette::text_faint())
+        .child(text)
 }
 
 impl SeanceApp {
@@ -265,6 +362,7 @@ impl SeanceApp {
                 .detach();
             }
         }
+        chat.usage = thread.usage.clone();
         chat.threads.insert(ws, thread);
     }
 
@@ -328,7 +426,7 @@ impl SeanceApp {
     fn chat_select(&mut self, ws: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.chat.selected.as_deref() != Some(ws) {
             self.chat.selected = Some(ws.to_string());
-            self.chat.tasks_open = false;
+            self.tasks_popover = None;
             self.chat.stick = 3;
         }
         // The lead's to-do poll follows the selected circle.
@@ -511,20 +609,23 @@ impl SeanceApp {
             .overflow_y_scroll()
             .flex()
             .flex_col();
+        // Active circles sit above the spaces, lifted out of theirs.
+        let active = active_circles(&self.chat.circles, now_ms());
+        if !active.is_empty() {
+            col = col.child(list_label("ACTIVE".to_string()));
+            for c in &active {
+                col = col.child(self.chat_circle_row(c, cx));
+            }
+        }
         let mut space = String::new();
         for c in self.chat_circles_in_order() {
+            if active.iter().any(|a| a.ws == c.ws) {
+                continue;
+            }
             let id = spaces.space_of(&c.ws).to_string();
             if id != space {
                 if let Some(s) = spaces.list.iter().find(|s| s.id == id) {
-                    col = col.child(
-                        div()
-                            .px_3()
-                            .pt_2()
-                            .pb_1()
-                            .text_xs()
-                            .text_color(SeancePalette::text_faint())
-                            .child(s.name.to_uppercase()),
-                    );
+                    col = col.child(list_label(s.name.to_uppercase()));
                 }
                 space = id;
             }
@@ -690,7 +791,8 @@ impl SeanceApp {
                     }),
             );
         let read_only = ws == ALERTS_WS;
-        let tasks_open = self.chat.tasks_open && !read_only;
+        let tasks_open = lead.as_deref().is_some_and(|l| self.tasks_popover_open(l));
+        let chip_lead = lead.clone();
         header = header.when(!read_only, |header| {
             header.child(
                 div()
@@ -709,9 +811,10 @@ impl SeanceApp {
                     .hover(|s| s.text_color(SeancePalette::flame()))
                     .cursor_pointer()
                     .tooltip(tip("the lead's tasks"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.chat.tasks_open = !this.chat.tasks_open;
-                        cx.notify();
+                    .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
+                        if let Some(lead) = chip_lead.as_deref() {
+                            this.toggle_tasks_popover(lead, ev.position(), cx);
+                        }
                     }))
                     .child(format!("☑ {todo}")),
             )
@@ -770,7 +873,8 @@ impl SeanceApp {
             .h_full()
             .flex()
             .flex_col()
-            .child(header);
+            .child(header)
+            .children(self.chat.usage.as_ref().and_then(usage_strip));
         if let Some(e) = &self.chat.error {
             col = col.child(
                 div()
@@ -781,21 +885,6 @@ impl SeanceApp {
                     .text_color(SeancePalette::danger())
                     .child(format!("Invoke: {e}")),
             );
-        }
-        if tasks_open {
-            if let Some(lead) = lead {
-                let empty = super::lead_tasks::LeadTasks::default();
-                let data = self.lead_tasks.get(&lead).unwrap_or(&empty);
-                col = col.child(
-                    div()
-                        .flex_none()
-                        .max_h(relative(0.4))
-                        .flex()
-                        .border_b_1()
-                        .border_color(SeancePalette::border())
-                        .child(self.render_tasks_face(&lead, data, cx)),
-                );
-            }
         }
         col.child(thread)
             .when(!read_only, |col| col.child(self.render_chat_composer(cx)))
@@ -926,6 +1015,60 @@ mod tests {
         assert_eq!(w[1].1.as_deref(), Some("https://bike.rodeo/x/"));
         assert_eq!(w[0].1, None);
         assert_eq!(w[3].1.as_deref(), Some("https://a.b/c"));
+    }
+
+    #[test]
+    fn reset_labels_use_a_12_hour_clock() {
+        // Whatever the machine's zone, the shape is fixed.
+        let short = reset_label(1_793_000_000_000, false);
+        assert!(short.ends_with("AM") || short.ends_with("PM"), "{short}");
+        assert!(short.contains(':'), "{short}");
+        let long = reset_label(1_793_000_000_000, true);
+        assert!(
+            !long.contains(':') && long.split(' ').count() == 3,
+            "{long}"
+        );
+    }
+
+    #[test]
+    fn usage_strip_hides_without_windows() {
+        assert!(usage_strip(&Usage::default()).is_none());
+        let one = Usage {
+            five_hour: Some(UsageWindow {
+                used: 18.,
+                resets: None,
+            }),
+            seven_day: None,
+        };
+        assert!(usage_strip(&one).is_some());
+    }
+
+    #[test]
+    fn active_is_unread_or_recent_newest_first_and_never_alerts() {
+        let now = 10 * ACTIVE_MS;
+        let circle = |ws: &str, unread: u32, age: Option<u64>| CircleRow {
+            ws: ws.into(),
+            unread,
+            last: age.map(|a| Msg {
+                ts: now - a,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let circles = [
+            circle("old", 0, Some(ACTIVE_MS + 1)),
+            circle("recent", 0, Some(60_000)),
+            circle("unread-old", 2, Some(5 * ACTIVE_MS)),
+            circle("alerts", 3, Some(1_000)),
+            circle("quiet", 0, None),
+            circle("newest", 0, Some(1_000)),
+            circle("unread-empty", 1, None),
+        ];
+        let got: Vec<String> = active_circles(&circles, now)
+            .into_iter()
+            .map(|c| c.ws)
+            .collect();
+        assert_eq!(got, ["newest", "recent", "unread-old", "unread-empty"]);
     }
 
     #[test]

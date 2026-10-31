@@ -19,6 +19,14 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **Claude usage in the Chat layout.** A thin centered line under the
+  thread header shows the plan usage the phone shows ("5h 18% · ⟳ 12:50 PM
+  7d 35% · ⟳ Thu 2 AM"): numbers turn red from 80%, and the line hides
+  when Invoke reports no usage.
+- **Active section in the Chat layout.** The circle list starts with an
+  "Active" heading: circles (not alerts) with unread messages or a last
+  message under two hours old, newest first, the same rule as Invoke's
+  phone list. An active circle moves up out of its space until it cools off.
 - **Chat layout.** A third layout, next to classic and stage, takes
   Wall's place in the switch (ctrl+shift+t cycles classic, stage, chat; a
   saved or `ctl layout wall` still works and opens Chat; Wall's code and
@@ -35,19 +43,22 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   to Classic on that lead. Set `SEANCE_INVOKE_URL` to point at a different
   Invoke. Not yet: builder guest bubbles, per-bubble terminal peek, photo
   upload.
-- **Lead tasks face fixes.** Focus stays on the root while the face is up,
-  the face goes away when its pane is killed, stops being the lead, or the
-  layout leaves Classic, an older daemon no longer causes a sticky error
-  bar or a slow poll, task text is capped daemon-side, and done and parked
-  times older than today carry their date.
 - **A lead's to-do list on its pane.** The lead's title strip gets a
   "☑ N" chip (open and queued tasks; parked ones are not counted). Click it
-  to flip the pane onto a tasks face: the open task with its live activity
-  line and start time, helpers working, up next, parked, and the last six
-  finished tasks with how long each took. Click a row for its full text;
-  click the chip again to flip back. Phone tasks show without their
-  Invoke header and footer. The app asks the daemon with one new fs-bridge
-  request, `lead_tasks`.
+  to open a floating card under the chip (about 420 px wide, up to 60% of
+  the window tall, with its own scroll) while the terminal stays visible and
+  live: the open task with its live activity line and start time, helpers
+  working, up next, parked, and the last six finished tasks with how long
+  each took (times older than today carry their date). Click a row for its
+  full text. The card closes when you click the chip again, click outside
+  it, or press Esc, and also when its pane is killed, stops being the lead
+  or the layout changes. Focus never moves when it opens or closes. While
+  it is open, a backdrop catches clicks, so the terminals underneath do not
+  scroll. In the Chat layout the header's chip opens the same card. Phone
+  tasks show without their Invoke header and footer. The app asks the
+  daemon with one new fs-bridge request, `lead_tasks`; task text is capped
+  daemon-side, and an older daemon without it no longer causes a sticky
+  error bar or a slow poll.
 - **Working creatures throw in random dance moves.** Every few bars a
   lead's creature swaps its basic step for a jump, shimmy, slide or bounce,
   and each circle dances on its own beat instead of in step.

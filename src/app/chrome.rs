@@ -445,15 +445,14 @@ pub(super) fn render_pane(
     is_lead: bool,
     // The circle has a pane mid-turn: the lead's creature dances.
     circle_working: bool,
-    // A lead's open task count and, when its tasks face is up, that face.
-    lead_tasks: Option<(usize, Option<gpui::AnyElement>)>,
+    // A lead's open task count and whether its tasks card is open.
+    lead_tasks: Option<(usize, bool)>,
     cx: &Context<SeanceApp>,
 ) -> impl IntoElement {
-    let (task_count, tasks_face) = match lead_tasks {
-        Some((n, face)) => (Some(n), face),
-        None => (None, None),
+    let (task_count, tasks_open) = match lead_tasks {
+        Some((n, open)) => (Some(n), open),
+        None => (None, false),
     };
-    let face_up = tasks_face.is_some();
     let is_active = active == Some(pane.slug.as_str());
     let is_flipped = flipped.is_some();
     // Inline pane rename: the editor swaps in for the title text while this
@@ -502,7 +501,7 @@ pub(super) fn render_pane(
     } else if exited {
         SeancePalette::danger()
     } else if is_active {
-        if is_flipped || face_up {
+        if is_flipped {
             SeancePalette::violet()
         } else {
             SeancePalette::flame()
@@ -516,15 +515,7 @@ pub(super) fn render_pane(
 
     // Body: notes face if flipped, otherwise the terminal/file content.
     // Soft fade when the notes face appears (cheap stand-in for a card flip).
-    let body: gpui::AnyElement = if let Some(face) = tasks_face {
-        div()
-            .flex_1()
-            .min_h_0()
-            .min_w_0()
-            .overflow_hidden()
-            .child(face)
-            .into_any_element()
-    } else if let Some(notes) = flipped {
+    let body: gpui::AnyElement = if let Some(notes) = flipped {
         div()
             .flex_1()
             .min_h_0()
@@ -849,7 +840,7 @@ pub(super) fn render_pane(
                         .tooltip(tip("pop out to its own window (ctrl+shift+o)"))
                         .child("⇱"),
                 )
-                // Lead only: open task count; flips the pane to its tasks face.
+                // Lead only: open task count; opens the tasks card under it.
                 .when_some(task_count, |d, n| {
                     d.child(
                         div()
@@ -858,14 +849,14 @@ pub(super) fn render_pane(
                             .px_1()
                             .rounded_sm()
                             .text_xs()
-                            .text_color(if face_up {
+                            .text_color(if tasks_open {
                                 SeancePalette::bg()
                             } else {
                                 SeancePalette::text_faint()
                             })
-                            .when(face_up, |d| d.bg(SeancePalette::violet()))
+                            .when(tasks_open, |d| d.bg(SeancePalette::violet()))
                             .hover(|s| {
-                                if face_up {
+                                if tasks_open {
                                     s.bg(SeancePalette::violet_dim())
                                 } else {
                                     s.text_color(SeancePalette::flame())
@@ -882,17 +873,13 @@ pub(super) fn render_pane(
                             )
                             .on_click(cx.listener({
                                 let slug = slug.clone();
-                                move |this, _, window, cx| {
-                                    this.toggle_tasks_face(&slug, window, cx);
+                                move |this, ev: &gpui::ClickEvent, _, cx| {
+                                    this.toggle_tasks_popover(&slug, ev.position(), cx);
                                     cx.stop_propagation();
                                 }
                             }))
                             .tooltip(tip("the lead's tasks"))
-                            .child(if face_up {
-                                "↻ face".to_string()
-                            } else {
-                                format!("☑ {n}")
-                            }),
+                            .child(format!("☑ {n}")),
                     )
                 })
                 // Notes flip — prominent when flipped (violet "back" affordance).

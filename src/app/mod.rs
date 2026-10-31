@@ -178,8 +178,8 @@ pub struct SeanceApp {
     whisper: Option<(String, Entity<InputState>)>,
     /// Pane currently flipped to its notes face: (slug, scratchpad entity).
     flipped: Option<(String, Entity<ScratchpadDrawer>)>,
-    /// Lead whose tasks face is up (a lead shows one face at a time).
-    tasks_face: Option<String>,
+    /// The lead's tasks card, when open.
+    tasks_popover: Option<lead_tasks::TasksPopover>,
     /// When the daemon last failed to answer `lead_tasks` (an older build):
     /// the poll stays quiet for a while after.
     lead_tasks_off: Option<std::time::Instant>,
@@ -187,7 +187,7 @@ pub struct SeanceApp {
     lead_tasks_timeouts: u8,
     /// The Chat layout's circles, threads and composer.
     chat: chat::ChatState,
-    /// Task row expanded to its full text on the tasks face.
+    /// Task row expanded to its full text on the tasks card.
     tasks_row_open: Option<String>,
     /// Last `FsOp::LeadTasks` answer per lead slug.
     lead_tasks: std::collections::HashMap<String, lead_tasks::LeadTasks>,
@@ -503,7 +503,7 @@ impl SeanceApp {
             rail_hover_pane: None,
             whisper: None,
             flipped: None,
-            tasks_face: None,
+            tasks_popover: None,
             lead_tasks_off: None,
             lead_tasks_timeouts: 0,
             chat: chat::ChatState::default(),
@@ -1603,10 +1603,6 @@ impl SeanceApp {
     /// scarcer (another circle's pane, untiled, popped, hidden by zoom) is
     /// out of the dispatch tree, where focus silently strands the keyboard.
     fn pane_content_rendered(&self, p: &Pane) -> bool {
-        // A tasks face replaces the pane's terminal.
-        if self.tasks_face_up(&p.slug) {
-            return false;
-        }
         // Stage renders one pane: the one on stage. The Wall renders none.
         match self.view.mode {
             views::ViewMode::Stage => return self.stage_pane().as_deref() == Some(p.slug.as_str()),
@@ -1839,6 +1835,11 @@ impl SeanceApp {
             if self.stage.peek.is_some() && self.view.mode == views::ViewMode::Stage {
                 self.stage.peek = None;
                 cx.notify();
+                cx.stop_propagation();
+                return;
+            }
+            if self.tasks_popover.is_some() {
+                self.close_tasks_popover(cx);
                 cx.stop_propagation();
                 return;
             }
@@ -2512,9 +2513,6 @@ impl SeanceApp {
                     let fh = drawer.read(cx).focus_handle(cx);
                     window.focus(&fh, cx);
                 }
-            } else if self.tasks_face_up(slug) {
-                // The tasks face has no terminal: keep focus on the root.
-                window.focus(&self.focus_handle, cx);
             } else if pane.focus_content(window, cx) {
                 // Eager focus for the common case + a render-time backstop:
                 // when this navigation just switched workspaces, the target
@@ -2573,8 +2571,8 @@ impl SeanceApp {
             // that simply can't SEE the pane must never clear it for everyone.
             self.set_shared_flip(None);
         }
-        if self.tasks_face.as_deref() == Some(slug) {
-            self.tasks_face = None;
+        if self.tasks_popover_open(slug) {
+            self.tasks_popover = None;
         }
         if self.whisper.as_ref().is_some_and(|(s, _)| s == slug) {
             self.whisper = None;
@@ -2777,10 +2775,6 @@ impl SeanceApp {
     /// A pane showing its notes face has no terminal in the frame, so its
     /// content handle is not a legal focus target.
     fn is_flipped(&self, slug: &str) -> bool {
-        self.is_notes_flipped(slug) || self.tasks_face_up(slug)
-    }
-
-    fn is_notes_flipped(&self, slug: &str) -> bool {
         self.flipped.as_ref().is_some_and(|(s, _)| s == slug)
     }
 
@@ -2833,7 +2827,6 @@ impl SeanceApp {
             self.whisper = None;
         }
         let pad_path = pane.scratchpad.clone();
-        self.tasks_face = None;
         let drawer =
             cx.new(|cx| ScratchpadDrawer::new(self.client.clone(), pad_path, title, window, cx));
         // Focus the notes editor. Only this path does — flipping is a
@@ -3397,6 +3390,7 @@ impl Render for SeanceApp {
             .children(self.render_palette(cx))
             .children(self.render_quicklaunch_editor(cx))
             .children(self.render_gui_menu(cx))
+            .children(self.render_tasks_popover(window, cx))
             .children(match &self.drawer {
                 // The Wall fills the window, as the overview always did.
                 _ if walled => None,
