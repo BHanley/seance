@@ -52,7 +52,7 @@ pub(super) struct LeadTasks {
     /// The daemon's busy panes; `normalized` turns them into `handed`.
     #[serde(default)]
     helpers: Vec<Helper>,
-    /// Work handed off: busy helper panes and the lead's background agents.
+    /// In progress elsewhere: busy helper panes and the lead's background agents.
     #[serde(skip)]
     handed: Vec<Handed>,
     /// The lead's own deciding screen line while it works.
@@ -86,7 +86,7 @@ struct Helper {
     evidence: Option<String>,
 }
 
-/// One line of work handed off, drawn as a row.
+/// One line of work in progress elsewhere, drawn as a row.
 #[derive(Clone, Debug, PartialEq)]
 struct Handed {
     name: Option<String>,
@@ -510,7 +510,7 @@ impl SeanceApp {
         }
 
         if !data.handed.is_empty() {
-            face = face.child(label("Handed off"));
+            face = face.child(label("In progress"));
             for (i, h) in data.handed.iter().enumerate() {
                 let row = TaskRow {
                     id: format!("handed-{i}"),
