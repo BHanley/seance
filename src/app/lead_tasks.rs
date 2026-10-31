@@ -157,7 +157,7 @@ impl SeanceApp {
                     // outright, see `GuiEvent::Error` in mod.rs.)
                     if e.to_string().contains("timed out") {
                         this.update(cx, |app: &mut SeanceApp, _| {
-                            app.lead_tasks_timeouts += 1;
+                            app.lead_tasks_timeouts = app.lead_tasks_timeouts.saturating_add(1);
                             if app.lead_tasks_timeouts >= TIMEOUTS_BEFORE_OFF {
                                 app.lead_tasks_off = Some(Instant::now());
                             }

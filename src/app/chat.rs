@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::{
     div, img, prelude::*, px, relative, AnyElement, Context, Entity, Focusable as _, ScrollHandle,
@@ -34,6 +34,8 @@ const IDLE: Duration = Duration::from_secs(1);
 const LIST_W: f32 = 300.;
 /// Invoke's alerts circle is read-only: nothing to say, no lead to open.
 const ALERTS_WS: &str = "alerts";
+/// A failed read report waits this long before the next try.
+const READ_RETRY: Duration = Duration::from_secs(30);
 
 #[derive(Default)]
 pub(super) struct ChatState {
@@ -51,6 +53,8 @@ pub(super) struct ChatState {
     read_sent: HashMap<String, i64>,
     /// Circles with a read report in flight.
     read_busy: HashSet<String>,
+    /// A failed read report is not retried before this.
+    read_retry_at: HashMap<String, Instant>,
     /// Whether this window was the active one at the last frame.
     window_active: bool,
     /// Counts down from zero: ids for bubbles shown before Invoke has them.
@@ -274,6 +278,13 @@ impl SeanceApp {
         if self.view.mode != ViewMode::Chat || !chat.window_active || chat.read_busy.contains(&ws) {
             return;
         }
+        if chat
+            .read_retry_at
+            .get(&ws)
+            .is_some_and(|at| Instant::now() < *at)
+        {
+            return;
+        }
         let Some(thread) = chat.threads.get(&ws) else {
             return;
         };
@@ -297,8 +308,17 @@ impl SeanceApp {
             this.update(cx, |app: &mut SeanceApp, _| {
                 app.chat.read_busy.remove(&ws);
                 // Only a report Invoke accepted counts; a failed one is retried.
-                if sent.is_ok() {
-                    app.chat.read_sent.insert(ws, newest);
+                match sent {
+                    Ok(()) => {
+                        app.chat.read_sent.insert(ws, newest);
+                    }
+                    // Not every render: a refusal that never clears would
+                    // otherwise run curl each frame.
+                    Err(_) => {
+                        app.chat
+                            .read_retry_at
+                            .insert(ws, Instant::now() + READ_RETRY);
+                    }
                 }
             });
         })
@@ -358,6 +378,7 @@ impl SeanceApp {
             image: None,
         });
         self.chat.stick = 3;
+        let thread_ws = ws.clone();
         cx.spawn(async move |this, cx| {
             let to = ws.clone();
             let body = text.clone();
@@ -373,7 +394,11 @@ impl SeanceApp {
             this.update(cx, |app: &mut SeanceApp, cx| {
                 app.apply_round(round, cx);
                 if let Err(e) = sent {
-                    // Not sent: the words go back where they were typed.
+                    // Not sent: the bubble goes and the words go back where
+                    // they were typed.
+                    if let Some(t) = app.chat.threads.get_mut(&thread_ws) {
+                        t.messages.retain(|m| m.id != local_id);
+                    }
                     app.chat.error = Some(format!("not sent: {e}"));
                     app.chat.restore = Some(text);
                 }
@@ -434,6 +459,13 @@ impl SeanceApp {
         self.chat.window_active = window.is_window_active();
         if let Some(input) = self.chat.input.clone() {
             if let Some(text) = self.chat.restore.take() {
+                // Whatever was typed since stays, after the failed text.
+                let typed = input.read(cx).value().trim().to_string();
+                let text = if typed.is_empty() {
+                    text
+                } else {
+                    format!("{text}\n{typed}")
+                };
                 input.update(cx, |i, cx| i.set_value(text, window, cx));
             }
             if std::mem::take(&mut self.chat.focus_input) {
@@ -657,31 +689,33 @@ impl SeanceApp {
                         )
                     }),
             );
-        let tasks_open = self.chat.tasks_open;
-        header = header.child(
-            div()
-                .id("chat-todo")
-                .flex_none()
-                .px_2()
-                .py_0p5()
-                .rounded_sm()
-                .text_xs()
-                .text_color(if tasks_open {
-                    SeancePalette::bg()
-                } else {
-                    SeancePalette::text_dim()
-                })
-                .when(tasks_open, |d| d.bg(SeancePalette::violet()))
-                .hover(|s| s.text_color(SeancePalette::flame()))
-                .cursor_pointer()
-                .tooltip(tip("the lead's tasks"))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.chat.tasks_open = !this.chat.tasks_open;
-                    cx.notify();
-                }))
-                .child(format!("☑ {todo}")),
-        );
         let read_only = ws == ALERTS_WS;
+        let tasks_open = self.chat.tasks_open && !read_only;
+        header = header.when(!read_only, |header| {
+            header.child(
+                div()
+                    .id("chat-todo")
+                    .flex_none()
+                    .px_2()
+                    .py_0p5()
+                    .rounded_sm()
+                    .text_xs()
+                    .text_color(if tasks_open {
+                        SeancePalette::bg()
+                    } else {
+                        SeancePalette::text_dim()
+                    })
+                    .when(tasks_open, |d| d.bg(SeancePalette::violet()))
+                    .hover(|s| s.text_color(SeancePalette::flame()))
+                    .cursor_pointer()
+                    .tooltip(tip("the lead's tasks"))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.chat.tasks_open = !this.chat.tasks_open;
+                        cx.notify();
+                    }))
+                    .child(format!("☑ {todo}")),
+            )
+        });
         header = header.when(!read_only, |header| {
             header.child(
                 div()
