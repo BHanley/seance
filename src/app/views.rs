@@ -193,6 +193,7 @@ impl SeanceApp {
             self.stage_enter();
         }
         self.view.mode = mode;
+        self.tasks_popover = None;
         if mode == ViewMode::Chat {
             self.chat.focus_input = true;
         }

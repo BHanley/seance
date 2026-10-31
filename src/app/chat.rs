@@ -742,9 +742,9 @@ impl SeanceApp {
                     .hover(|s| s.text_color(SeancePalette::flame()))
                     .cursor_pointer()
                     .tooltip(tip("the lead's tasks"))
-                    .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, window, cx| {
+                    .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
                         if let Some(lead) = chip_lead.as_deref() {
-                            this.toggle_tasks_popover(lead, ev.position(), window, cx);
+                            this.toggle_tasks_popover(lead, ev.position(), cx);
                         }
                     }))
                     .child(format!("☑ {todo}")),

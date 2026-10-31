@@ -1,7 +1,7 @@
-//! A circle lead's task face: the checklist behind its "☑ N" chip.
+//! A circle lead's tasks card: the checklist behind its "☑ N" chip.
 //!
 //! The data is one daemon call (`FsOp::LeadTasks`) polled for the selected
-//! circle's lead; the face is drawn from the last answer, so rendering never
+//! circle's lead; the card is drawn from the last answer, so rendering never
 //! blocks on the bridge.
 
 use std::sync::Arc;
@@ -30,7 +30,7 @@ const TIMEOUTS_BEFORE_OFF: u8 = 3;
 /// The popover card's width and its share of the window height.
 const CARD_W: f32 = 420.;
 const CARD_MAX_H: f32 = 0.6;
-/// Phone tasks open with this line (Invoke); the face leaves it out.
+/// Phone tasks open with this line (Invoke); the card leaves it out.
 const PHONE_HEADER: &str = "📱 From Brian's phone (Invoke):";
 
 /// The open tasks card: whose, and where its chip was clicked.
@@ -134,7 +134,11 @@ impl SeanceApp {
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(POLL_EVERY).await;
             let Some(this) = this.upgrade() else { break };
-            let ask = this.update(cx, |app: &mut SeanceApp, _| {
+            let ask = this.update(cx, |app: &mut SeanceApp, cx| {
+                // The card goes when its lead, pane or layout does.
+                if app.tasks_popover.is_some() && !app.tasks_popover_valid() {
+                    app.close_tasks_popover(cx);
+                }
                 if app
                     .lead_tasks_off
                     .is_some_and(|at| at.elapsed() < RETRY_OFF)
@@ -209,11 +213,10 @@ impl SeanceApp {
         &mut self,
         slug: &str,
         at: Point<Pixels>,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.tasks_popover_open(slug) {
-            self.close_tasks_popover(window, cx);
+            self.close_tasks_popover(cx);
             return;
         }
         // The lead's to-do poll follows the selected circle.
@@ -227,12 +230,28 @@ impl SeanceApp {
         cx.notify();
     }
 
-    /// Close the card; keyboard focus goes back to where it was.
-    pub(super) fn close_tasks_popover(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Close the card. Opening never moved focus, so closing leaves it be: a
+    /// composer or notes editor keeps the caret.
+    pub(super) fn close_tasks_popover(&mut self, cx: &mut Context<Self>) {
         if self.tasks_popover.take().is_some() {
-            self.restore_keyboard_focus(window, cx);
             cx.notify();
         }
+    }
+
+    /// The card only makes sense while its pane is still its circle's lead and
+    /// the layout shows the chip (Classic or Chat).
+    pub(super) fn tasks_popover_valid(&self) -> bool {
+        let Some(pop) = self.tasks_popover.as_ref() else {
+            return false;
+        };
+        matches!(
+            self.view.mode,
+            super::views::ViewMode::Classic | super::views::ViewMode::Chat
+        ) && self
+            .panes
+            .iter()
+            .find(|p| p.slug == pop.slug)
+            .is_some_and(|p| self.stage_lead(&p.workspace).as_deref() == Some(pop.slug.as_str()))
     }
 
     /// The floating card: raised, with its own scroll, over a backdrop that
@@ -242,7 +261,10 @@ impl SeanceApp {
         window: &Window,
         cx: &Context<Self>,
     ) -> Option<AnyElement> {
-        let pop = self.tasks_popover.as_ref()?;
+        let pop = self
+            .tasks_popover
+            .as_ref()
+            .filter(|_| self.tasks_popover_valid())?;
         let empty = LeadTasks::default();
         let data = self.lead_tasks.get(&pop.slug).unwrap_or(&empty);
         let card = div()
@@ -275,9 +297,7 @@ impl SeanceApp {
                     // Swallow mouse events so a click-away does not also land
                     // in the terminal underneath.
                     .occlude()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.close_tasks_popover(window, cx);
-                    }))
+                    .on_click(cx.listener(|this, _, _, cx| this.close_tasks_popover(cx)))
                     .child(
                         anchored()
                             .position(point(pop.at.x + px(16.), pop.at.y + px(14.)))

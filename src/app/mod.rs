@@ -187,7 +187,7 @@ pub struct SeanceApp {
     lead_tasks_timeouts: u8,
     /// The Chat layout's circles, threads and composer.
     chat: chat::ChatState,
-    /// Task row expanded to its full text on the tasks face.
+    /// Task row expanded to its full text on the tasks card.
     tasks_row_open: Option<String>,
     /// Last `FsOp::LeadTasks` answer per lead slug.
     lead_tasks: std::collections::HashMap<String, lead_tasks::LeadTasks>,
@@ -1839,7 +1839,7 @@ impl SeanceApp {
                 return;
             }
             if self.tasks_popover.is_some() {
-                self.close_tasks_popover(window, cx);
+                self.close_tasks_popover(cx);
                 cx.stop_propagation();
                 return;
             }

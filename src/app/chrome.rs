@@ -840,7 +840,7 @@ pub(super) fn render_pane(
                         .tooltip(tip("pop out to its own window (ctrl+shift+o)"))
                         .child("⇱"),
                 )
-                // Lead only: open task count; flips the pane to its tasks face.
+                // Lead only: open task count; opens the tasks card under it.
                 .when_some(task_count, |d, n| {
                     d.child(
                         div()
@@ -873,8 +873,8 @@ pub(super) fn render_pane(
                             )
                             .on_click(cx.listener({
                                 let slug = slug.clone();
-                                move |this, ev: &gpui::ClickEvent, window, cx| {
-                                    this.toggle_tasks_popover(&slug, ev.position(), window, cx);
+                                move |this, ev: &gpui::ClickEvent, _, cx| {
+                                    this.toggle_tasks_popover(&slug, ev.position(), cx);
                                     cx.stop_propagation();
                                 }
                             }))
