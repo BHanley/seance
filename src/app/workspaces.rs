@@ -734,7 +734,7 @@ impl SeanceApp {
     /// timer, so its output clock never goes stale and every codex circle read
     /// as permanently working. codex puts no working state in its title
     /// either, so for a non-spinner agent the honest answer is "unknown".
-    fn workspace_has_working_agent(&self, workspace: &str) -> bool {
+    pub(super) fn workspace_has_working_agent(&self, workspace: &str) -> bool {
         self.panes
             .iter()
             .any(|p| p.workspace == workspace && self.pane_is_live_working(&p.slug))

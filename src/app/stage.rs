@@ -1829,6 +1829,7 @@ impl SeanceApp {
                 d.child(super::sprite::render(
                     &super::sprite::for_circle(&pane.workspace),
                     2.5,
+                    self.workspace_has_working_agent(&pane.workspace),
                 ))
             })
             .child(
