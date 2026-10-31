@@ -25,6 +25,27 @@ pub fn open_detached(target: &str) {
     });
 }
 
+/// Show a file or folder selected in its parent folder (Finder's "Show in
+/// Finder"), off the calling thread. Linux has no portable "select this
+/// item", so it opens the parent folder.
+pub fn reveal_detached(path: &std::path::Path) {
+    let mut cmd = std::process::Command::new(opener());
+    if cfg!(target_os = "macos") {
+        cmd.arg("-R").arg(path);
+    } else {
+        cmd.arg(path.parent().unwrap_or(path));
+    }
+    std::thread::spawn(move || {
+        let spawned = cmd
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        if let Ok(mut child) = spawned {
+            let _ = child.wait();
+        }
+    });
+}
+
 /// Same, on this thread — for CLI paths that return straight into process exit
 /// and would otherwise outlive the thread doing the work.
 pub fn open_blocking(target: &str) {

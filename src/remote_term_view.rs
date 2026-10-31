@@ -341,10 +341,10 @@ impl RemoteTerminalView {
         }
     }
 
-    /// Double-click on a link or an inline code span copies all of it, not the
-    /// word under the pointer (word expansion stops at a space, `?`, `=`, `&`
-    /// and at a wrapped row). Returns false when neither is under `pos`, so
-    /// the click selects a word.
+    /// Double-click on a file path shows it in Finder; on a link or an inline
+    /// code span it copies all of it, not the word under the pointer (word
+    /// expansion stops at a space, `?`, `=`, `&` and at a wrapped row).
+    /// Returns false when none is under `pos`, so the click selects a word.
     fn copy_whole_at(
         &mut self,
         pos: gpui::Point<Pixels>,
@@ -355,6 +355,14 @@ impl RemoteTerminalView {
         let Some(cell) = self.cell_at(pos, cx) else {
             return false;
         };
+        let found = seance_core::links::path_candidates_at(&snap, cell.row, cell.col)
+            .iter()
+            .find_map(|p| existing_path(p));
+        if let Some(path) = found {
+            self.clear_selection();
+            crate::sysopen::reveal_detached(&path);
+            return true;
+        }
         // Web links only: `ls --hyperlink` and systemd wrap file names in
         // file:// OSC-8 links, and there the name is what you want.
         let Some(text) = seance_core::links::url_at_cell(&snap, cell.row, cell.col)
@@ -1060,6 +1068,27 @@ fn selection_key(
 /// ctrl+click / middle-click on a link in a terminal.
 fn open_uri(uri: &str) {
     crate::sysopen::open_detached(uri);
+}
+
+/// A printed path as it exists on this machine, if it does. Panes on the XPS
+/// print `/home/<user>/…` paths that live under the Mac's home folder too
+/// (~/Claude, ~/github), and the other way round, so a missing home path is
+/// tried again under this machine's home.
+fn existing_path(printed: &str) -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from)?;
+    let mut tries = Vec::new();
+    if let Some(rest) = printed.strip_prefix("~/") {
+        tries.push(home.join(rest));
+    } else {
+        tries.push(std::path::PathBuf::from(printed));
+        for root in ["/home/", "/Users/"] {
+            if let Some((_user, rest)) = printed.strip_prefix(root).and_then(|t| t.split_once('/'))
+            {
+                tries.push(home.join(rest));
+            }
+        }
+    }
+    tries.into_iter().find(|p| p.exists())
 }
 
 /// Drop every replayable paint, so the next frame reshapes in the current
