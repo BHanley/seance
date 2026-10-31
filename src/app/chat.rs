@@ -69,7 +69,7 @@ pub(super) struct ChatState {
     /// Focus the composer at the next frame (switching into Chat).
     pub(super) focus_input: bool,
     /// Image name to its cached file, once fetched.
-    images: HashMap<String, PathBuf>,
+    images: HashMap<String, (PathBuf, u32, u32)>,
     image_asked: HashSet<String>,
     error: Option<String>,
     /// Claude plan usage from the last thread answer; none hides the strip.
@@ -253,7 +253,7 @@ fn open_path_under_double_click(text: &str, window: &mut Window, cx: &mut gpui::
 /// One-line preview of a message for the circle list.
 fn preview(m: &Msg) -> String {
     let text = m.text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let text = if text.is_empty() && m.image.is_some() {
+    let text = if text.is_empty() && !m.image_names().is_empty() {
         "📷 photo".to_string()
     } else {
         text
@@ -357,6 +357,23 @@ fn bubble_text_style() -> TextViewStyle {
     }
 }
 
+/// A picture in a bubble is at most this wide and this tall, at its own shape;
+/// a box this tall stands in until the file has arrived.
+const IMG_MAX_W: f32 = 320.;
+const IMG_MAX_H: f32 = 420.;
+const IMG_LOADING_H: f32 = 240.;
+
+/// The box a `w` by `h` picture takes in a bubble: its own shape, shrunk to fit
+/// the limits, never enlarged. An unknown size gets the loading box.
+fn fit_image(w: u32, h: u32) -> (f32, f32) {
+    if w == 0 || h == 0 {
+        return (IMG_MAX_W, IMG_LOADING_H);
+    }
+    let (w, h) = (w as f32, h as f32);
+    let scale = (IMG_MAX_W / w).min(IMG_MAX_H / h).min(1.);
+    ((w * scale).round().max(1.), (h * scale).round().max(1.))
+}
+
 /// A list heading: a space's name, or Active.
 fn list_label(text: String) -> gpui::Div {
     div()
@@ -457,19 +474,31 @@ impl SeanceApp {
             chat.stick = 3;
         }
         // Images the thread shows: fetch each once.
-        for name in thread.messages.iter().filter_map(|m| m.image.clone()) {
+        let names: Vec<String> = thread
+            .messages
+            .iter()
+            .flat_map(|m| m.image_names().into_iter().map(str::to_string))
+            .collect();
+        for name in names {
             if chat.image_asked.insert(name.clone()) {
                 cx.spawn(async move |this, cx| {
                     let leaf = name.clone();
                     let got = cx
                         .background_executor()
-                        .spawn(async move { chat_api::file(&leaf) })
+                        .spawn(async move {
+                            // Through Invoke's /api/file, into the cache; its
+                            // size reserves the bubble's room before it paints.
+                            chat_api::file(&leaf).map(|p| {
+                                let (w, h) = chat_api::image_size(&p).unwrap_or((0, 0));
+                                (p, w, h)
+                            })
+                        })
                         .await;
                     let Some(this) = this.upgrade() else { return };
                     this.update(cx, |app: &mut SeanceApp, cx| {
                         match got {
-                            Ok(path) => {
-                                app.chat.images.insert(name, path);
+                            Ok(found) => {
+                                app.chat.images.insert(name, found);
                             }
                             // Let a later thread refresh try again.
                             Err(_) => {
@@ -594,6 +623,7 @@ impl SeanceApp {
             text: text.clone(),
             ts: now_ms(),
             image: None,
+            images: Vec::new(),
         });
         self.chat.stick = 3;
         let thread_ws = ws.clone();
@@ -1047,21 +1077,37 @@ impl SeanceApp {
         let me = m.from == "me";
         let system = !me && m.from != "lead";
         let mut body = div().flex().flex_col().gap_0p5();
-        if let Some(path) = m.image.as_ref().and_then(|n| self.chat.images.get(n)) {
-            // Click opens the cached file in its app (Preview).
-            let file = path.clone();
-            body = body.child(
-                div()
-                    .id(SharedString::from(format!("bubble-img-{}", m.id)))
-                    .cursor_pointer()
-                    .on_click(move |_, _, _| crate::sysopen::open_detached(&file.to_string_lossy()))
-                    .child(
-                        img(path.clone())
-                            .max_w(px(360.))
-                            .max_h(px(360.))
-                            .rounded_md(),
-                    ),
-            );
+        // Every picture, stacked above the text, each in a box whose size is
+        // fixed up front: the decoded size fitted to the bubble, or a plain
+        // box until the file has arrived. Nothing can paint outside it.
+        for (i, name) in m.image_names().into_iter().enumerate() {
+            let found = self.chat.images.get(name);
+            let (bw, bh) = found.map_or((IMG_MAX_W, IMG_LOADING_H), |(_, w, h)| fit_image(*w, *h));
+            let frame = div()
+                .id(SharedString::from(format!("bubble-img-{}-{i}", m.id)))
+                .flex_none()
+                .w(px(bw))
+                .h(px(bh))
+                .rounded_md()
+                .overflow_hidden()
+                .bg(SeancePalette::bg().opacity(0.4));
+            body = body.child(match found {
+                // Click opens the cached file in its app (Preview).
+                Some((path, ..)) => {
+                    let file = path.clone();
+                    frame
+                        .cursor_pointer()
+                        .on_click(move |_, _, _| {
+                            crate::sysopen::open_detached(&file.to_string_lossy())
+                        })
+                        .child(
+                            img(path.clone())
+                                .size_full()
+                                .object_fit(gpui::ObjectFit::Contain),
+                        )
+                }
+                None => frame,
+            });
         }
         if !m.text.is_empty() {
             let text = m.text.clone();
@@ -1234,6 +1280,16 @@ mod tests {
             .map(|c| c.ws)
             .collect();
         assert_eq!(got, ["newest", "recent", "unread-old", "unread-empty"]);
+    }
+
+    #[test]
+    fn pictures_fit_the_bubble_at_their_own_shape() {
+        // A portrait phone photo is held by its height, a wide screenshot by its width.
+        assert_eq!(fit_image(3000, 4000), (315., 420.));
+        assert_eq!(fit_image(1600, 800), (320., 160.));
+        // Small ones are not blown up; unknown sizes get the loading box.
+        assert_eq!(fit_image(100, 50), (100., 50.));
+        assert_eq!(fit_image(0, 0), (IMG_MAX_W, IMG_LOADING_H));
     }
 
     #[test]

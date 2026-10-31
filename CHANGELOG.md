@@ -290,6 +290,13 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Fixed
 
+- **Chat pictures fit their bubble.** A photo or screenshot in a bubble is
+  held to 320 px wide and about 420 px tall at its own shape, in a box whose
+  size is reserved from the picture's header (a plain box until the file has
+  arrived), so a tall phone photo no longer runs past the bubble, under the
+  next messages or behind a reply's text. A note with several pictures shows
+  all of them, stacked above its text. Pictures always come through Invoke's
+  `/api/file`; clicking one still opens it full size.
 - **A busy pane's progress line no longer flickers to its window title.**
   Claude's spinner drops off screen for a frame now and then, and the
   roster's `activity_evidence` fell back to the OSC title until it came

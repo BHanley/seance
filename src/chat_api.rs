@@ -49,9 +49,23 @@ pub struct Msg {
     pub text: String,
     #[serde(default)]
     pub ts: u64,
-    /// File name under `/api/file/`.
+    /// File name under `/api/file/`: the first picture of the note.
     #[serde(default)]
     pub image: Option<String>,
+    /// Every picture of a note that has more than one (`image` is the first).
+    #[serde(default)]
+    pub images: Vec<String>,
+}
+
+impl Msg {
+    /// The names of all the message's pictures, in order.
+    pub fn image_names(&self) -> Vec<&str> {
+        if self.images.is_empty() {
+            self.image.as_deref().into_iter().collect()
+        } else {
+            self.images.iter().map(String::as_str).collect()
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -333,9 +347,120 @@ pub fn file(name: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Pixel size of a picture, read from its header: PNG, JPEG, GIF, WebP and BMP.
+/// None for anything else (HEIC and the like) or a file that cannot be read.
+pub fn image_size(path: &std::path::Path) -> Option<(u32, u32)> {
+    use std::io::Read as _;
+    let mut head = Vec::new();
+    // A JPEG's size can sit behind a long EXIF block; a megabyte reaches it.
+    std::fs::File::open(path)
+        .ok()?
+        .take(1 << 20)
+        .read_to_end(&mut head)
+        .ok()?;
+    size_from_header(&head)
+}
+
+fn size_from_header(b: &[u8]) -> Option<(u32, u32)> {
+    let be32 = |at: usize| {
+        b.get(at..at + 4)
+            .map(|x| u32::from_be_bytes(x.try_into().unwrap()))
+    };
+    let le16 = |at: usize| {
+        b.get(at..at + 2)
+            .map(|x| u32::from(u16::from_le_bytes(x.try_into().unwrap())))
+    };
+    let le24 = |at: usize| {
+        b.get(at..at + 3)
+            .map(|x| u32::from(x[0]) | u32::from(x[1]) << 8 | u32::from(x[2]) << 16)
+    };
+    if b.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Some((be32(16)?, be32(20)?));
+    }
+    if b.starts_with(b"GIF8") {
+        return Some((le16(6)?, le16(8)?));
+    }
+    if b.starts_with(b"BM") {
+        let h = b
+            .get(22..26)
+            .map(|x| i32::from_le_bytes(x.try_into().unwrap()))?;
+        return Some((
+            b.get(18..22)
+                .map(|x| u32::from_le_bytes(x.try_into().unwrap()))?,
+            h.unsigned_abs(),
+        ));
+    }
+    if b.starts_with(b"RIFF") && b.get(8..12) == Some(b"WEBP") {
+        return match b.get(12..16)? {
+            b"VP8X" => Some((le24(24)? + 1, le24(27)? + 1)),
+            b"VP8 " => Some((le16(26)? & 0x3fff, le16(28)? & 0x3fff)),
+            b"VP8L" => {
+                let bits = u32::from_le_bytes(b.get(21..25)?.try_into().ok()?);
+                Some(((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1))
+            }
+            _ => None,
+        };
+    }
+    if b.starts_with(&[0xff, 0xd8]) {
+        let mut at = 2;
+        while at + 4 <= b.len() {
+            if b[at] != 0xff {
+                return None;
+            }
+            let marker = b[at + 1];
+            if marker == 0xff {
+                at += 1;
+                continue;
+            }
+            let len = usize::from(u16::from_be_bytes([b[at + 2], b[at + 3]]));
+            // The start-of-frame markers carry the size (not DHT, JPG or DAC).
+            if (0xc0..=0xcf).contains(&marker) && !matches!(marker, 0xc4 | 0xc8 | 0xcc) {
+                let h = u32::from(u16::from_be_bytes([*b.get(at + 5)?, *b.get(at + 6)?]));
+                let w = u32::from(u16::from_be_bytes([*b.get(at + 7)?, *b.get(at + 8)?]));
+                return Some((w, h));
+            }
+            at += 2 + len;
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn picture_sizes_come_from_the_header() {
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        png.extend([0, 0, 3, 0x20, 0, 0, 6, 0x40]);
+        assert_eq!(size_from_header(&png), Some((800, 1600)));
+        assert_eq!(size_from_header(b"GIF89a\x10\x00\x20\x00"), Some((16, 32)));
+        // A JPEG: SOI, an APP0 segment to skip, then SOF0 (height 1200, width 900).
+        let jpeg = [
+            0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x04,
+            0xb0, 0x03, 0x84, 0x01, 0x01, 0x11, 0x00,
+        ];
+        assert_eq!(size_from_header(&jpeg), Some((900, 1200)));
+        // WebP, extended header: 24-bit width-1 and height-1.
+        let mut webp = b"RIFF\0\0\0\0WEBPVP8X\x0a\0\0\0\0\0\0\0".to_vec();
+        webp.extend([0x1f, 0x03, 0x00, 0xff, 0x01, 0x00]);
+        assert_eq!(size_from_header(&webp), Some((800, 512)));
+        assert_eq!(size_from_header(b"not a picture"), None);
+        assert_eq!(size_from_header(b"\x89PNG"), None);
+    }
+
+    #[test]
+    fn a_note_with_several_pictures_lists_them_all() {
+        let one = Msg {
+            image: Some("a.png".into()),
+            ..Default::default()
+        };
+        assert_eq!(one.image_names(), ["a.png"]);
+        let many: Msg =
+            serde_json::from_str(r#"{"image":"a.png","images":["a.png","b.png"]}"#).unwrap();
+        assert_eq!(many.image_names(), ["a.png", "b.png"]);
+        assert!(Msg::default().image_names().is_empty());
+    }
 
     #[test]
     fn circles_parse_with_a_missing_last_message() {
