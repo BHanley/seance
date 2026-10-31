@@ -984,6 +984,37 @@ impl Engine {
     }
 
     /// Dense one-row summary for orchestrators (`list` / `brief` / `roster`).
+    /// A busy pane whose evidence fell back to its window title keeps the
+    /// spinner line it showed up to `SPINNER_HOLD_MS` ago.
+    fn steady_evidence(
+        &self,
+        slug: &str,
+        a: &mut seance_core::agent_state::AgentState,
+        title: Option<&str>,
+    ) {
+        const SPINNER_HOLD_MS: u64 = 10_000;
+        let Ok(mut seen) = self.last_spinner.lock() else {
+            return;
+        };
+        if a.activity != seance_core::agent_state::Activity::Busy {
+            seen.remove(slug);
+            return;
+        }
+        let now = now_ms();
+        match a.evidence.as_deref() {
+            Some(ev) if Some(ev) != title.map(str::trim) => {
+                seen.insert(slug.to_string(), (ev.to_string(), now));
+            }
+            _ => {
+                if let Some((ev, at)) = seen.get(slug) {
+                    if now.saturating_sub(*at) < SPINNER_HOLD_MS {
+                        a.evidence = Some(ev.clone());
+                    }
+                }
+            }
+        }
+    }
+
     pub(super) fn pane_summary_json(&self, p: &EnginePane) -> serde_json::Value {
         let w = p.agency.to_wire();
         let running = if p.kind == "file" {
@@ -1029,7 +1060,11 @@ impl Engine {
             .as_ref()
             .filter(|_| running && !p.asleep)
             .map(|s| {
-                seance_core::agent_state::classify(&s.live_screen_text(), s.title().as_deref())
+                let title = s.title();
+                let mut a =
+                    seance_core::agent_state::classify(&s.live_screen_text(), title.as_deref());
+                self.steady_evidence(&p.slug, &mut a, title.as_deref());
+                a
             });
         let activity = match &agent {
             Some(a) => a.activity.as_str(),

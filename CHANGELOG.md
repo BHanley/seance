@@ -224,6 +224,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Fixed
 
+- **A busy pane's progress line no longer flickers to its window title.**
+  Claude's spinner drops off screen for a frame now and then, and the
+  roster's `activity_evidence` fell back to the OSC title until it came
+  back. The last spinner line now holds for up to 10 seconds.
+
 - A pane that slept and woke quickly could be closed by the old session's
   late exit, cancelling its queued tasks. Only the session a pane holds can
   close it now.
