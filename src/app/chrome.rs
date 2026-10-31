@@ -445,8 +445,15 @@ pub(super) fn render_pane(
     is_lead: bool,
     // The circle has a pane mid-turn: the lead's creature dances.
     circle_working: bool,
+    // A lead's open task count and, when its tasks face is up, that face.
+    lead_tasks: Option<(usize, Option<gpui::AnyElement>)>,
     cx: &Context<SeanceApp>,
 ) -> impl IntoElement {
+    let (task_count, tasks_face) = match lead_tasks {
+        Some((n, face)) => (Some(n), face),
+        None => (None, None),
+    };
+    let face_up = tasks_face.is_some();
     let is_active = active == Some(pane.slug.as_str());
     let is_flipped = flipped.is_some();
     // Inline pane rename: the editor swaps in for the title text while this
@@ -495,7 +502,7 @@ pub(super) fn render_pane(
     } else if exited {
         SeancePalette::danger()
     } else if is_active {
-        if is_flipped {
+        if is_flipped || face_up {
             SeancePalette::violet()
         } else {
             SeancePalette::flame()
@@ -509,7 +516,15 @@ pub(super) fn render_pane(
 
     // Body: notes face if flipped, otherwise the terminal/file content.
     // Soft fade when the notes face appears (cheap stand-in for a card flip).
-    let body: gpui::AnyElement = if let Some(notes) = flipped {
+    let body: gpui::AnyElement = if let Some(face) = tasks_face {
+        div()
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .overflow_hidden()
+            .child(face)
+            .into_any_element()
+    } else if let Some(notes) = flipped {
         div()
             .flex_1()
             .min_h_0()
@@ -834,6 +849,52 @@ pub(super) fn render_pane(
                         .tooltip(tip("pop out to its own window (ctrl+shift+o)"))
                         .child("⇱"),
                 )
+                // Lead only: open task count; flips the pane to its tasks face.
+                .when_some(task_count, |d, n| {
+                    d.child(
+                        div()
+                            .id(SharedString::from(format!("tasks-{slug}")))
+                            .flex_none()
+                            .px_1()
+                            .rounded_sm()
+                            .text_xs()
+                            .text_color(if face_up {
+                                SeancePalette::bg()
+                            } else {
+                                SeancePalette::text_faint()
+                            })
+                            .when(face_up, |d| d.bg(SeancePalette::violet()))
+                            .hover(|s| {
+                                if face_up {
+                                    s.bg(SeancePalette::violet_dim())
+                                } else {
+                                    s.text_color(SeancePalette::flame())
+                                }
+                            })
+                            .cursor_pointer()
+                            .on_mouse_down(
+                                gpui::MouseButton::Left,
+                                cx.listener(|_this, _, window, cx| {
+                                    window.end_text_selection(cx);
+                                    window.clear_text_selection(cx);
+                                    cx.stop_propagation();
+                                }),
+                            )
+                            .on_click(cx.listener({
+                                let slug = slug.clone();
+                                move |this, _, window, cx| {
+                                    this.toggle_tasks_face(&slug, window, cx);
+                                    cx.stop_propagation();
+                                }
+                            }))
+                            .tooltip(tip("the lead's tasks"))
+                            .child(if face_up {
+                                "↻ face".to_string()
+                            } else {
+                                format!("☑ {n}")
+                            }),
+                    )
+                })
                 // Notes flip — prominent when flipped (violet "back" affordance).
                 .child(
                     div()

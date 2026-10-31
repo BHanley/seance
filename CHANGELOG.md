@@ -19,6 +19,14 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **A lead's to-do list on its pane.** The lead's title strip gets a
+  "☑ N" chip (open and queued tasks; parked ones are not counted). Click it
+  to flip the pane onto a tasks face: the open task with its live activity
+  line and start time, helpers working, up next, parked, and the last six
+  finished tasks with how long each took. Click a row for its full text;
+  click the chip again to flip back. Phone tasks show without their
+  Invoke header and footer. The app asks the daemon with one new fs-bridge
+  request, `lead_tasks`.
 - **The lead's creature dances while its circle works.** On the lead's
   title strip and Stage card, the sprite hops left and right whenever any
   pane in the circle is mid-turn, and rests when the circle goes quiet.

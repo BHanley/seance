@@ -154,6 +154,10 @@ fn run_inner(op: FsOp, engine: &SharedEngine) -> Result<Value, String> {
             let (events, seq) = crate::events::recent(since_ms, since_seq, &kinds, limit.min(5000));
             Ok(json!({ "events": events, "seq": seq }))
         }
+        FsOp::LeadTasks { pane } => {
+            let eng = engine.lock().map_err(|_| "engine busy".to_string())?;
+            Ok(eng.lead_tasks_json(&pane))
+        }
         FsOp::HostSelect { widget, item } => {
             // Fresh load: select is rare and config may have changed on disk.
             let mut host = HostState::load();

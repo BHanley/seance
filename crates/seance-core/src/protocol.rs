@@ -428,6 +428,11 @@ pub enum FsOp {
         widget: String,
         item: String,
     },
+    /// A circle lead's task face: its open, queued, parked and recent
+    /// tasks, and the circle's other busy panes. → `{tasks, helpers, evidence}`.
+    LeadTasks {
+        pane: String,
+    },
     /// Run a shell command daemon-side (`sh -lc`). Same trust domain as the
     /// control plane (which already spawns arbitrary commands). Output is
     /// truncated to 64KiB per stream. → `{status, stdout, stderr}`.

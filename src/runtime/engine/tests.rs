@@ -1311,3 +1311,36 @@ fn busy_title_evidence_holds_the_last_spinner_line() {
         assert!(!eng.last_spinner.lock().unwrap().contains_key("lead"));
     });
 }
+
+#[test]
+fn lead_tasks_json_lists_live_tasks_and_the_newest_finished() {
+    with_test_state_dir("lead-tasks", || {
+        let scratch = temp_scratch("lead-tasks");
+        let (mut eng, _rx) = Engine::bare_for_test(scratch);
+        let lead = eng.push_stub_pane("lead", "lab");
+        let first = eng.begin_task(&lead, "first");
+        let second = eng.begin_task(&lead, "second");
+        eng.tasks.get_mut(&second).unwrap().status = "queued".into();
+        for i in 0..8u64 {
+            let mut t = eng.tasks[&first].clone();
+            t.id = format!("old-{i}");
+            t.status = "done".into();
+            t.created_ms = 1_000 + i;
+            t.finished_ms = Some(2_000 + i);
+            eng.tasks.insert(t.id.clone(), t);
+        }
+        let got = eng.lead_tasks_json(&lead);
+        let ids: Vec<&str> = got["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["id"].as_str().unwrap())
+            .collect();
+        // Live tasks first, then six finished ones, newest first.
+        assert!(ids.contains(&second.as_str()));
+        let done: Vec<&&str> = ids.iter().filter(|i| i.starts_with("old-")).collect();
+        assert_eq!(done.len(), 6);
+        assert_eq!(*done[0], "old-7");
+        assert_eq!(eng.lead_tasks_json("nope")["tasks"], serde_json::json!([]));
+    });
+}

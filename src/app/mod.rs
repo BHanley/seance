@@ -35,6 +35,7 @@ mod chrome;
 mod dock;
 pub mod hud;
 mod layout;
+mod lead_tasks;
 mod menus;
 mod pads;
 mod palette;
@@ -176,6 +177,12 @@ pub struct SeanceApp {
     whisper: Option<(String, Entity<InputState>)>,
     /// Pane currently flipped to its notes face: (slug, scratchpad entity).
     flipped: Option<(String, Entity<ScratchpadDrawer>)>,
+    /// Lead whose tasks face is up (a lead shows one face at a time).
+    tasks_face: Option<String>,
+    /// Task row expanded to its full text on the tasks face.
+    tasks_row_open: Option<String>,
+    /// Last `FsOp::LeadTasks` answer per lead slug.
+    lead_tasks: std::collections::HashMap<String, lead_tasks::LeadTasks>,
     active_slug: Option<String>,
     /// Kept by the window-activation observer; pane alerts read it to decide
     /// whether a desktop notification is needed.
@@ -488,6 +495,9 @@ impl SeanceApp {
             rail_hover_pane: None,
             whisper: None,
             flipped: None,
+            tasks_face: None,
+            tasks_row_open: None,
+            lead_tasks: std::collections::HashMap::new(),
             active_slug: None,
             window_active: true,
             selected_workspace: None,
@@ -738,6 +748,8 @@ impl SeanceApp {
             }
         })
         .detach();
+
+        Self::start_lead_tasks_poll(cx);
 
         // Live-refresh pad drawer every 2s while open (disk mtime/content).
         cx.spawn(async move |this, cx| loop {
@@ -2713,6 +2725,10 @@ impl SeanceApp {
     /// A pane showing its notes face has no terminal in the frame, so its
     /// content handle is not a legal focus target.
     fn is_flipped(&self, slug: &str) -> bool {
+        self.is_notes_flipped(slug) || self.tasks_face.as_deref() == Some(slug)
+    }
+
+    fn is_notes_flipped(&self, slug: &str) -> bool {
         self.flipped.as_ref().is_some_and(|(s, _)| s == slug)
     }
 
@@ -2765,6 +2781,7 @@ impl SeanceApp {
             self.whisper = None;
         }
         let pad_path = pane.scratchpad.clone();
+        self.tasks_face = None;
         let drawer =
             cx.new(|cx| ScratchpadDrawer::new(self.client.clone(), pad_path, title, window, cx));
         // Focus the notes editor. Only this path does — flipping is a

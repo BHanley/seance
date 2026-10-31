@@ -1014,6 +1014,46 @@ impl Engine {
         }
     }
 
+    /// A lead's task face (`FsOp::LeadTasks`): its live tasks and the newest
+    /// finished ones, its own screen evidence, and the circle's other busy
+    /// panes with theirs.
+    pub(crate) fn lead_tasks_json(&self, lead: &str) -> serde_json::Value {
+        const RECENT: usize = 6;
+        let Some(lp) = self.panes.iter().find(|p| p.slug == lead) else {
+            return json!({ "tasks": [], "helpers": [], "evidence": null });
+        };
+        let task = |t: &seance_core::protocol::TaskRecord| {
+            json!({
+                "id": t.id,
+                "status": t.status,
+                "created_ms": t.created_ms,
+                "finished_ms": t.finished_ms,
+                "body": t.body,
+            })
+        };
+        let mine = || self.tasks.values().filter(|t| t.pane == lead);
+        let mut tasks: Vec<_> = mine()
+            .filter(|t| matches!(t.status.as_str(), "open" | "queued" | "parked"))
+            .collect();
+        tasks.sort_by_key(|t| t.created_ms);
+        let mut done: Vec<_> = mine()
+            .filter(|t| matches!(t.status.as_str(), "done" | "failed"))
+            .collect();
+        done.sort_by_key(|t| std::cmp::Reverse(t.finished_ms.unwrap_or(t.created_ms)));
+        done.truncate(RECENT);
+        let tasks: Vec<_> = tasks.into_iter().chain(done).map(task).collect();
+        let helpers: Vec<_> = self
+            .panes
+            .iter()
+            .filter(|p| p.workspace == lp.workspace && p.slug != lead && p.kind != "file")
+            .map(|p| self.pane_summary_json(p))
+            .filter(|r| r["activity"] == "busy")
+            .map(|r| json!({ "slug": r["slug"], "name": r["name"], "evidence": r["activity_evidence"] }))
+            .collect();
+        let row = self.pane_summary_json(lp);
+        json!({ "tasks": tasks, "helpers": helpers, "evidence": row["activity_evidence"] })
+    }
+
     /// Dense one-row summary for orchestrators (`list` / `brief` / `roster`).
     pub(super) fn pane_summary_json(&self, p: &EnginePane) -> serde_json::Value {
         let w = p.agency.to_wire();

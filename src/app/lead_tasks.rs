@@ -1,0 +1,432 @@
+//! A circle lead's task face: the checklist behind its "☑ N" chip.
+//!
+//! The data is one daemon call (`FsOp::LeadTasks`) polled for the selected
+//! circle's lead; the face is drawn from the last answer, so rendering never
+//! blocks on the bridge.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use gpui::{div, prelude::*, AnyElement, Context, SharedString, Window};
+use gpui_component::WindowExt as _;
+use serde::Deserialize;
+
+use crate::events;
+use crate::theme::SeancePalette;
+
+use super::util::now_ms;
+use super::SeanceApp;
+
+/// How often the selected circle's lead is asked for its tasks.
+const POLL_EVERY: Duration = Duration::from_millis(2000);
+/// A row's full text stops here, like the pad inspector's task body.
+const FULL_TEXT_CAP: usize = 2500;
+/// Phone tasks open with this line (Invoke); the face leaves it out.
+const PHONE_HEADER: &str = "📱 From Brian's phone (Invoke):";
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub(super) struct LeadTasks {
+    #[serde(default)]
+    tasks: Vec<TaskRow>,
+    #[serde(default)]
+    helpers: Vec<Helper>,
+    /// The lead's own deciding screen line while it works.
+    #[serde(default)]
+    evidence: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+struct TaskRow {
+    id: String,
+    status: String,
+    #[serde(default)]
+    created_ms: u64,
+    #[serde(default)]
+    finished_ms: Option<u64>,
+    #[serde(default)]
+    body: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+struct Helper {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    evidence: Option<String>,
+}
+
+impl LeadTasks {
+    /// What the chip counts: open and queued tasks. Parked ones stay out,
+    /// since Seance rarely clears them.
+    pub(super) fn open_count(&self) -> usize {
+        self.tasks
+            .iter()
+            .filter(|t| matches!(t.status.as_str(), "open" | "queued"))
+            .count()
+    }
+
+    fn with_status<'a>(&'a self, status: &'a str) -> impl Iterator<Item = &'a TaskRow> {
+        self.tasks.iter().filter(move |t| t.status == status)
+    }
+}
+
+/// A task's text as the lead reads it: the phone header and the
+/// "---" footer a phone task carries are cut, the rest is trimmed.
+fn clean_body(body: &str) -> String {
+    let body = body.split("\n---\n").next().unwrap_or(body).trim();
+    let body = body.strip_prefix(PHONE_HEADER).unwrap_or(body);
+    body.trim().to_string()
+}
+
+fn first_line(body: &str) -> String {
+    clean_body(body).lines().next().unwrap_or("").to_string()
+}
+
+/// Screen evidence minus its leading spinner glyph ("✻ Thinking…").
+fn strip_spinner(line: &str) -> &str {
+    let line = line.trim();
+    let mut chars = line.chars();
+    match chars.next() {
+        Some(c) if !c.is_alphanumeric() && chars.as_str().starts_with(' ') => {
+            chars.as_str().trim_start()
+        }
+        _ => line,
+    }
+}
+
+fn clock(ms: u64) -> String {
+    events::fmt_time(ms)[..5].to_string()
+}
+
+fn span(ms: u64) -> String {
+    let mins = ms / 60_000;
+    match mins {
+        0 => "under a min".into(),
+        1..=59 => format!("{mins} min"),
+        _ => format!("{}h {:02}m", mins / 60, mins % 60),
+    }
+}
+
+impl SeanceApp {
+    /// Poll the daemon for the selected circle's lead tasks.
+    pub(super) fn start_lead_tasks_poll(cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(POLL_EVERY).await;
+            let Some(this) = this.upgrade() else { break };
+            let ask = this.update(cx, |app: &mut SeanceApp, _| {
+                let ws = app.selected_workspace.clone()?;
+                let lead = app.stage_lead(&ws)?;
+                Some((lead, Arc::clone(&app.client)))
+            });
+            let Some((lead, client)) = ask else { continue };
+            let got = cx
+                .background_executor()
+                .spawn({
+                    let lead = lead.clone();
+                    async move { client.lead_tasks(&lead) }
+                })
+                .await;
+            let Ok(data) = got else { continue };
+            let Ok(data) = serde_json::from_value::<LeadTasks>(data) else {
+                continue;
+            };
+            this.update(cx, |app: &mut SeanceApp, cx| {
+                if app.lead_tasks.get(&lead) != Some(&data) {
+                    app.lead_tasks.insert(lead, data);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Chip count and, when this pane shows its tasks face, the face itself.
+    /// `None` for any pane that is not its circle's lead.
+    pub(super) fn lead_tasks_arg(
+        &self,
+        pane: &super::Pane,
+        cx: &Context<Self>,
+    ) -> Option<(usize, Option<AnyElement>)> {
+        if self.stage_lead(&pane.workspace).as_deref() != Some(pane.slug.as_str()) {
+            return None;
+        }
+        let data = self.lead_tasks.get(&pane.slug).cloned().unwrap_or_default();
+        let face = (self.tasks_face.as_deref() == Some(pane.slug.as_str()))
+            .then(|| self.render_tasks_face(&pane.slug, &data, cx));
+        Some((data.open_count(), face))
+    }
+
+    /// Flip a lead onto its tasks face, or back if it is already there.
+    pub(super) fn toggle_tasks_face(
+        &mut self,
+        slug: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        window.end_text_selection(cx);
+        window.clear_text_selection(cx);
+        if self.tasks_face.as_deref() == Some(slug) {
+            self.tasks_face = None;
+            if let Some(pane) = self.panes.iter().find(|p| p.slug == slug) {
+                pane.focus_content(window, cx);
+            }
+            cx.notify();
+            return;
+        }
+        // One face at a time: notes flip back first.
+        if self.is_notes_flipped(slug) {
+            self.flip_notes_for(slug, window, cx);
+        }
+        if let Some(pane) = self.panes.iter().find(|p| p.slug == slug) {
+            self.selected_workspace = Some(pane.workspace.clone());
+        }
+        self.active_slug = Some(slug.to_string());
+        self.tasks_face = Some(slug.to_string());
+        cx.notify();
+    }
+
+    fn render_tasks_face(&self, slug: &str, data: &LeadTasks, cx: &Context<Self>) -> AnyElement {
+        let now = now_ms();
+        let label = |text: &str| {
+            div()
+                .mt_1()
+                .text_xs()
+                .text_color(SeancePalette::violet())
+                .child(SharedString::from(text.to_string()))
+        };
+        let mut face = div()
+            .id(SharedString::from(format!("tasks-face-{slug}")))
+            .size_full()
+            .overflow_y_scroll()
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .bg(SeancePalette::bg_elevated());
+
+        face = face.child(label("Now"));
+        match data.with_status("open").next() {
+            Some(t) => {
+                let mut sub = Vec::new();
+                if let Some(ev) = data.evidence.as_deref().map(strip_spinner) {
+                    if !ev.is_empty() {
+                        sub.push((ev.to_string(), SeancePalette::flame()));
+                    }
+                }
+                sub.push((
+                    format!(
+                        "started {} · {} so far",
+                        clock(t.created_ms),
+                        span(now.saturating_sub(t.created_ms))
+                    ),
+                    SeancePalette::text_faint(),
+                ));
+                face = face.child(self.task_row(slug, t, "▶", SeancePalette::flame(), sub, cx));
+            }
+            None => {
+                face = face.child(
+                    div()
+                        .text_xs()
+                        .text_color(SeancePalette::text_faint())
+                        .child("nothing open"),
+                )
+            }
+        }
+
+        if !data.helpers.is_empty() {
+            face = face.child(label("Helpers working"));
+            for h in &data.helpers {
+                let ev = h.evidence.as_deref().map(strip_spinner).unwrap_or("");
+                face = face.child(
+                    div()
+                        .text_xs()
+                        .flex()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_color(SeancePalette::text())
+                                .child(h.name.clone()),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .text_color(SeancePalette::text_dim())
+                                .child(ev.to_string()),
+                        ),
+                );
+            }
+        }
+
+        for (title, status, glyph) in [("Up next", "queued", "☐"), ("Parked", "parked", "☐")] {
+            let rows: Vec<&TaskRow> = data.with_status(status).collect();
+            if rows.is_empty() {
+                continue;
+            }
+            face = face.child(label(title));
+            for t in rows {
+                face = face.child(self.task_row(
+                    slug,
+                    t,
+                    glyph,
+                    SeancePalette::text_dim(),
+                    vec![],
+                    cx,
+                ));
+            }
+        }
+
+        let done: Vec<&TaskRow> = data
+            .tasks
+            .iter()
+            .filter(|t| matches!(t.status.as_str(), "done" | "failed"))
+            .collect();
+        if !done.is_empty() {
+            face = face.child(label("Done lately"));
+            for t in done {
+                let end = t.finished_ms.unwrap_or(t.created_ms);
+                let (glyph, colour, verb) = if t.status == "done" {
+                    ("☑", SeancePalette::success(), "done")
+                } else {
+                    ("☒", SeancePalette::danger(), "failed")
+                };
+                let sub = vec![(
+                    format!(
+                        "{verb} {} · took {}",
+                        clock(end),
+                        span(end.saturating_sub(t.created_ms))
+                    ),
+                    SeancePalette::text_faint(),
+                )];
+                face = face.child(self.task_row(slug, t, glyph, colour, sub, cx));
+            }
+        }
+        face.into_any_element()
+    }
+
+    /// One checklist row: glyph, first line, small lines under it. A click
+    /// shows the task's full text.
+    fn task_row(
+        &self,
+        slug: &str,
+        t: &TaskRow,
+        glyph: &str,
+        glyph_colour: gpui::Hsla,
+        sub: Vec<(String, gpui::Hsla)>,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let open = self.tasks_row_open.as_deref() == Some(t.id.as_str());
+        let id = t.id.clone();
+        let mut text = div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(SeancePalette::text())
+                    .child(first_line(&t.body)),
+            )
+            .children(
+                sub.into_iter()
+                    .map(|(line, colour)| div().text_xs().text_color(colour).child(line)),
+            );
+        if open {
+            let mut full = clean_body(&t.body);
+            if full.len() > FULL_TEXT_CAP {
+                let mut end = FULL_TEXT_CAP;
+                while !full.is_char_boundary(end) {
+                    end -= 1;
+                }
+                full.truncate(end);
+                full.push('…');
+            }
+            text = text.child(
+                div()
+                    .mt_1()
+                    .p_2()
+                    .rounded_md()
+                    .bg(SeancePalette::bg())
+                    .border_1()
+                    .border_color(SeancePalette::border())
+                    .text_xs()
+                    .text_color(SeancePalette::text_dim())
+                    .child(full),
+            );
+        }
+        div()
+            .id(SharedString::from(format!("task-row-{slug}-{}", t.id)))
+            .flex()
+            .gap_2()
+            .px_1()
+            .py_0p5()
+            .rounded_sm()
+            .hover(|s| s.bg(SeancePalette::surface()))
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.tasks_row_open = if this.tasks_row_open.as_deref() == Some(id.as_str()) {
+                    None
+                } else {
+                    Some(id.clone())
+                };
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .flex_none()
+                    .text_sm()
+                    .text_color(glyph_colour)
+                    .child(glyph.to_string()),
+            )
+            .child(text)
+            .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn phone_task_loses_header_and_footer() {
+        let body = "📱 From Brian's phone (Invoke):\nship the icon\nmore detail\n---\nreply with seance ctl finish";
+        assert_eq!(clean_body(body), "ship the icon\nmore detail");
+        assert_eq!(first_line(body), "ship the icon");
+    }
+
+    #[test]
+    fn plain_task_is_kept() {
+        assert_eq!(first_line("  build the thing\nsecond"), "build the thing");
+        assert_eq!(first_line(""), "");
+    }
+
+    #[test]
+    fn spinner_glyph_is_stripped_but_words_are_not() {
+        assert_eq!(strip_spinner("✻ Thinking… (12s)"), "Thinking… (12s)");
+        assert_eq!(strip_spinner("Running tests"), "Running tests");
+        assert_eq!(strip_spinner("  · Reading"), "Reading");
+    }
+
+    #[test]
+    fn spans_read_in_minutes_then_hours() {
+        assert_eq!(span(20_000), "under a min");
+        assert_eq!(span(5 * 60_000), "5 min");
+        assert_eq!(span(135 * 60_000), "2h 15m");
+    }
+
+    #[test]
+    fn chip_counts_open_and_queued_not_parked() {
+        let row = |status: &str| TaskRow {
+            id: status.into(),
+            status: status.into(),
+            created_ms: 0,
+            finished_ms: None,
+            body: String::new(),
+        };
+        let data = LeadTasks {
+            tasks: vec![row("open"), row("queued"), row("parked"), row("done")],
+            ..Default::default()
+        };
+        assert_eq!(data.open_count(), 2);
+    }
+}
