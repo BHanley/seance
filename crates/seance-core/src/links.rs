@@ -910,11 +910,13 @@ mod tests {
             .any(|p| p == "/home/b/Claude/Projects/Seance Demo/Rüdle log.md"));
         assert!(got.iter().any(|p| p == "/home/b/Claude/Projects/Seance"));
         assert!(!got.iter().any(|p| p.contains("elsewhere")));
-        // A click on "Demo" (the wrapped row) only offers readings that reach it.
+        // A click on "Demo" (the wrapped row) only offers readings that reach
+        // it, whether the wrap was a space or a token broken mid-word.
         let got = path_candidates_at(&snap, 1, 4);
-        assert!(got
-            .iter()
-            .all(|p| p.starts_with("/home/b/Claude/Projects/Seance Demo")));
+        assert!(got.iter().all(|p| {
+            p.starts_with("/home/b/Claude/Projects/Seance Demo")
+                || p.starts_with("/home/b/Claude/Projects/SeanceDemo")
+        }));
         assert!(got
             .iter()
             .any(|p| p == "/home/b/Claude/Projects/Seance Demo/Rüdle log.md"));
