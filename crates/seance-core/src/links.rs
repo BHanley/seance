@@ -423,7 +423,7 @@ fn path_line(snap: &GridSnapshot, row: u16, col: u16) -> Option<(Vec<char>, usiz
     }
     let mut line: Vec<char> = Vec::new();
     let mut hit = 0;
-    let mut how = None;
+    let mut how: Option<bool> = None;
     for r in start..rows.min(row + PATH_ROWS + 1) {
         let mut cells = text(r);
         let mut lead = 0;
