@@ -175,7 +175,7 @@ attention routing free.
 | ctrl+shift+pageup / pagedown | cycle panes in this workspace |
 | ctrl+shift+v | paste |
 | ctrl+click (macOS: cmd+click) / middle-click | open OSC-8 / URL in the default browser |
-| double-click a file path | show it in Finder (Linux: open its folder) |
+| double-click a file path | show it in Finder (Linux: open its folder); images, videos, PDFs and HTML open in their app |
 | mouse back / forward | walk the circles you've been in |
 | stage chip click | focus + pad drawer |
 | stage chip double-click | zoom |

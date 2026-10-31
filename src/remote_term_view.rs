@@ -365,7 +365,13 @@ impl RemoteTerminalView {
                 .is_some_and(|s| s.chars().count() > p.chars().count())
         };
         if let Some((printed, path)) = found.filter(|(p, _)| !in_command(p)) {
-            crate::sysopen::reveal_detached(&path);
+            // Images, videos and pages an agent hands over open in their app
+            // (Brian's ask, 2026-10-30); anything else is shown in Finder.
+            if path.is_file() && opens_in_app(&path) {
+                crate::sysopen::open_detached(&path.to_string_lossy());
+            } else {
+                crate::sysopen::reveal_detached(&path);
+            }
             // Copied too, as the word under a double-click used to be.
             self.clear_selection();
             self.copy_text(printed, window, cx);
@@ -1076,6 +1082,17 @@ fn selection_key(
 /// ctrl+click / middle-click on a link in a terminal.
 fn open_uri(uri: &str) {
     crate::sysopen::open_detached(uri);
+}
+
+/// Files a double-click opens instead of revealing: what an agent shows off.
+fn opens_in_app(path: &std::path::Path) -> bool {
+    const EXTS: &[&str] = &[
+        "png", "jpg", "jpeg", "gif", "webp", "heic", "svg", "pdf", "mp4", "mov", "m4v", "webm",
+        "html", "htm",
+    ];
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| EXTS.contains(&e.to_ascii_lowercase().as_str()))
 }
 
 /// A printed path as it exists on this machine, if it does. Panes on the XPS
