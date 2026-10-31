@@ -15,7 +15,8 @@ use gpui::{
     SharedString, Window,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::StyledExt as _;
+use gpui_component::text::{TextView, TextViewStyle};
+use gpui_component::{StyledExt as _, WindowExt as _};
 use regex::Regex;
 
 use crate::chat_api::{self, CircleRow, Circles, Msg, Progress, Thread, Usage, UsageWindow};
@@ -122,22 +123,131 @@ fn fetch_round(ws: Option<String>, after: Option<i64>) -> Round {
     round
 }
 
-/// Words of `line`, each paired with its link when it holds one (trailing
-/// punctuation stays outside the link).
-fn words(line: &str) -> Vec<(String, Option<String>)> {
+fn url_re() -> &'static Regex {
     static URL: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let url = URL.get_or_init(|| Regex::new(r"https?://[^\s<>]+").unwrap());
-    line.split(' ')
-        .map(|w| match url.find(w) {
-            Some(m) => {
-                let link = m
-                    .as_str()
-                    .trim_end_matches(['.', ',', ')', ']', ';', ':', '!', '?']);
-                (w.to_string(), Some(link.to_string()))
+    URL.get_or_init(|| Regex::new(r"https?://[^\s<>]+").unwrap())
+}
+
+/// A link's end: trailing punctuation is the sentence's, not the URL's.
+fn trim_link(url: &str) -> &str {
+    url.trim_end_matches(['.', ',', ')', ']', ';', ':', '!', '?'])
+}
+
+/// A message as markdown that reads back as the same text: every ASCII
+/// punctuation mark escaped, line breaks kept, leading spaces kept (as
+/// non-breaking ones, so indentation survives and four of them are not a code
+/// block), URLs turned into links. The selectable text view draws it, so the
+/// bubble keeps its look and gains selection, copy and clickable links.
+fn to_markdown(text: &str) -> String {
+    const NBSP: char = '\u{a0}';
+    let escape = |s: &str| -> String {
+        s.chars()
+            .flat_map(|c| {
+                let esc = c.is_ascii_punctuation().then_some('\\');
+                esc.into_iter().chain(std::iter::once(c))
+            })
+            .collect()
+    };
+    let mut lines: Vec<&str> = text.lines().collect();
+    // A message does not end in blank space.
+    while lines.last().is_some_and(|l| l.trim().is_empty()) {
+        lines.pop();
+    }
+    lines
+        .into_iter()
+        .map(|line| {
+            if line.trim().is_empty() {
+                // A blank line still takes its height.
+                return NBSP.to_string();
             }
-            None => (w.to_string(), None),
+            let body = line.trim_start_matches([' ', '\t']);
+            let indent: String = line[..line.len() - body.len()]
+                .chars()
+                .flat_map(|c| std::iter::repeat_n(NBSP, if c == '\t' { 4 } else { 1 }))
+                .collect();
+            let (mut out, mut at) = (indent, 0);
+            for m in url_re().find_iter(body) {
+                let link = trim_link(m.as_str());
+                out.push_str(&escape(&body[at..m.start()]));
+                out.push_str(&format!("[{}](<{link}>)", escape(link)));
+                at = m.start() + link.len();
+            }
+            out.push_str(&escape(&body[at..]));
+            out
         })
-        .collect()
+        .collect::<Vec<_>>()
+        .join("\\\n")
+}
+
+/// The file paths in `text` (whitespace-separated words starting `/` or
+/// `~/`, wrapping quotes and trailing punctuation left out), with where each
+/// sits in it.
+fn path_spans(text: &str) -> Vec<(std::ops::Range<usize>, &str)> {
+    let mut spans = Vec::new();
+    let mut at = 0;
+    for word in text.split_inclusive(char::is_whitespace) {
+        let start = at;
+        at += word.len();
+        let lead = word.len()
+            - word
+                .trim_start_matches(['(', '[', '<', '"', '\'', '`'])
+                .len();
+        let token = word
+            .trim_start_matches(['(', '[', '<', '"', '\'', '`'])
+            .trim_end_matches(|c: char| {
+                c.is_whitespace()
+                    || matches!(
+                        c,
+                        ')' | ']' | '>' | '"' | '\'' | '`' | '.' | ',' | ';' | ':' | '!' | '?'
+                    )
+            });
+        if (token.starts_with('/') || token.starts_with("~/")) && token.len() > 1 {
+            let from = start + lead;
+            spans.push((from..from + token.len(), token));
+        }
+    }
+    spans
+}
+
+/// The path a double-clicked `word` belongs to, if it can only be that one:
+/// the word has a letter or digit in it (gpui picks a lone "/" or "." on
+/// punctuation), every place it appears in the message is inside a path, and
+/// those places name one path. "png" in "I put the png in ~/out/a.png" is a
+/// word of the sentence, not a click on the file.
+fn path_of_word<'a>(text: &'a str, word: &str) -> Option<&'a str> {
+    if !word.chars().any(char::is_alphanumeric) {
+        return None;
+    }
+    let spans = path_spans(text);
+    let mut found: Option<&str> = None;
+    for (at, _) in text.match_indices(word) {
+        let end = at + word.len();
+        let (_, path) = spans.iter().find(|(r, _)| r.start <= at && end <= r.end)?;
+        match found {
+            Some(p) if p != *path => return None,
+            _ => found = Some(path),
+        }
+    }
+    found
+}
+
+/// Double-click in a bubble: the text view has just selected a word. If it sits
+/// in a file path of the message that exists here, open it the way the
+/// terminal does: images, videos and pages in their app, anything else shown
+/// in Finder.
+fn open_path_under_double_click(text: &str, window: &mut Window, cx: &mut gpui::App) {
+    let word = window.selected_text(cx);
+    let Some(printed) = path_of_word(text, word.trim()) else {
+        return;
+    };
+    let Some(path) = crate::remote_term_view::existing_path(printed) else {
+        return;
+    };
+    if path.is_file() && crate::remote_term_view::opens_in_app(&path) {
+        crate::sysopen::open_detached(&path.to_string_lossy());
+    } else {
+        crate::sysopen::reveal_detached(&path);
+    }
 }
 
 /// One-line preview of a message for the circle list.
@@ -235,6 +345,16 @@ fn usage_strip(u: &Usage) -> Option<AnyElement> {
             .children(parts)
             .into_any_element(),
     )
+}
+
+/// The bubble's text keeps the bubble's own look: no gap between lines and the
+/// colors and size of the bubble around it.
+fn bubble_text_style() -> TextViewStyle {
+    TextViewStyle {
+        paragraph_gap: gpui::rems(0.),
+        is_dark: !crate::theme::is_light(),
+        ..Default::default()
+    }
 }
 
 /// A list heading: a space's name, or Active.
@@ -928,42 +1048,46 @@ impl SeanceApp {
         let system = !me && m.from != "lead";
         let mut body = div().flex().flex_col().gap_0p5();
         if let Some(path) = m.image.as_ref().and_then(|n| self.chat.images.get(n)) {
-            body = body.child(
-                img(path.clone())
-                    .max_w(px(360.))
-                    .max_h(px(360.))
-                    .rounded_md(),
-            );
-        }
-        for (i, line) in m.text.lines().enumerate() {
-            // Most lines hold no link: one text node, not a div per word.
-            if !line.contains("://") {
-                body = body.child(div().min_h(px(14.)).child(line.to_string()));
-                continue;
-            }
+            // Click opens the cached file in its app (Preview).
+            let file = path.clone();
             body = body.child(
                 div()
-                    .id(SharedString::from(format!("bubble-{}-{i}", m.id)))
-                    .flex()
-                    .flex_wrap()
+                    .id(SharedString::from(format!("bubble-img-{}", m.id)))
+                    .cursor_pointer()
+                    .on_click(move |_, _, _| crate::sysopen::open_detached(&file.to_string_lossy()))
+                    .child(
+                        img(path.clone())
+                            .max_w(px(360.))
+                            .max_h(px(360.))
+                            .rounded_md(),
+                    ),
+            );
+        }
+        if !m.text.is_empty() {
+            let text = m.text.clone();
+            body = body.child(
+                div()
+                    .id(SharedString::from(format!("bubble-text-{}", m.id)))
                     .min_h(px(14.))
-                    .children(
-                        words(line)
-                            .into_iter()
-                            .enumerate()
-                            .map(|(j, (word, link))| {
-                                let part = div().child(format!("{word} "));
-                                match link {
-                                    Some(url) => part
-                                        .id(SharedString::from(format!("w-{}-{i}-{j}", m.id)))
-                                        .text_color(SeancePalette::flame())
-                                        .cursor_pointer()
-                                        .hover(|s| s.underline())
-                                        .on_click(cx.listener(move |_, _, _, cx| cx.open_url(&url)))
-                                        .into_any_element(),
-                                    None => part.into_any_element(),
-                                }
-                            }),
+                    // Capture phase, so the selection view cannot swallow it;
+                    // the selection itself lands after, hence the defer.
+                    .capture_any_mouse_up(cx.listener(
+                        move |_, ev: &gpui::MouseUpEvent, window, cx| {
+                            if ev.button == gpui::MouseButton::Left && ev.click_count == 2 {
+                                let text = text.clone();
+                                cx.defer_in(window, move |_, window, cx| {
+                                    open_path_under_double_click(&text, window, cx);
+                                });
+                            }
+                        },
+                    ))
+                    .child(
+                        TextView::markdown(
+                            SharedString::from(format!("bubble-md-{}", m.id)),
+                            to_markdown(&m.text),
+                        )
+                        .style(bubble_text_style())
+                        .selectable(true),
                     ),
             );
         }
@@ -1010,11 +1134,52 @@ mod tests {
     use super::*;
 
     #[test]
-    fn links_are_found_and_trailing_punctuation_stays_out() {
-        let w = words("see https://bike.rodeo/x/. ok (https://a.b/c)");
-        assert_eq!(w[1].1.as_deref(), Some("https://bike.rodeo/x/"));
-        assert_eq!(w[0].1, None);
-        assert_eq!(w[3].1.as_deref(), Some("https://a.b/c"));
+    fn markdown_reads_back_as_the_same_text() {
+        assert_eq!(to_markdown("a *b* _c_ #d"), "a \\*b\\* \\_c\\_ \\#d");
+        assert_eq!(to_markdown("1. one\n\ntwo"), "1\\. one\\\n\u{a0}\\\ntwo");
+    }
+
+    #[test]
+    fn urls_become_links_without_their_trailing_punctuation() {
+        assert_eq!(
+            to_markdown("see https://bike.rodeo/x/. ok"),
+            "see [https\\:\\/\\/bike\\.rodeo\\/x\\/](<https://bike.rodeo/x/>)\\. ok"
+        );
+        assert!(to_markdown("(https://a.b/c)").contains("](<https://a.b/c>)"));
+    }
+
+    #[test]
+    fn a_double_clicked_word_finds_only_its_own_path() {
+        let text = "wrote `~/Claude/out/a.png`, and /tmp/b.txt. See https://x.y/z";
+        assert_eq!(path_of_word(text, "out"), Some("~/Claude/out/a.png"));
+        assert_eq!(path_of_word(text, "b.txt"), Some("/tmp/b.txt"));
+        assert_eq!(path_of_word(text, "nope"), None);
+        // A URL is not a file path.
+        assert_eq!(path_of_word(text, "x.y"), None);
+    }
+
+    #[test]
+    fn a_word_of_the_sentence_is_not_a_click_on_the_file() {
+        let text = "I put the png in ~/Claude/out/a.png";
+        assert_eq!(path_of_word(text, "png"), None);
+        assert_eq!(path_of_word(text, "a.png"), Some("~/Claude/out/a.png"));
+        // Punctuation picked by the word select is not a path word.
+        assert_eq!(path_of_word(text, "/"), None);
+        assert_eq!(path_of_word(text, "."), None);
+        // The same word in two paths cannot say which was clicked.
+        assert_eq!(path_of_word("/a/out/x and /b/out/y", "out"), None);
+    }
+
+    #[test]
+    fn indentation_and_blank_space_survive_as_markdown() {
+        let nb = "\u{a0}";
+        assert_eq!(to_markdown("    code"), format!("{nb}{nb}{nb}{nb}code"));
+        assert_eq!(to_markdown("\tx"), format!("{nb}{nb}{nb}{nb}x"));
+        assert_eq!(to_markdown("a\n  - b"), format!("a\\\n{nb}{nb}\\- b"));
+        // Whitespace-only lines are blank lines; the tail of a message is not.
+        assert_eq!(to_markdown("a\n   \nb"), format!("a\\\n{nb}\\\nb"));
+        assert_eq!(to_markdown("a\n   "), "a");
+        assert_eq!(to_markdown("a\n\n"), "a");
     }
 
     #[test]

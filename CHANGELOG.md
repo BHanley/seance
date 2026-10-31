@@ -19,6 +19,13 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **Chat bubbles: select, copy, links, paths and photos.** Text in a bubble
+  can be selected and copied, links open on click, double-clicking a file
+  path that exists on this Mac opens it the way a terminal does (images,
+  videos and pages in their app, anything else shown in Finder), and
+  clicking a photo opens the cached file in its app. Bubbles are drawn with
+  the same selectable text view as file panes; the bubble look is unchanged
+  apart from links, which take the theme's link color.
 - **Claude usage in the Chat layout.** A thin centered line under the
   thread header shows the plan usage the phone shows ("5h 18% · ⟳ 12:50 PM
   7d 35% · ⟳ Thu 2 AM"): numbers turn red from 80%, and the line hides
@@ -245,6 +252,14 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Changed
 
+- **The tasks card reads Invoke's list.** The card behind a lead's "☑ N"
+  chip (in Classic and in the Chat header) now shows what the phone shows:
+  the lead's own name for each task as the row title, with Brian's own words
+  in faint text under it ("You: ..." from the phone, "Asked: ..." from a
+  pane), plus an "In progress" section, right under Now, for busy helper
+  panes (name, task and progress line) and the lead's background agents (what
+  each is doing and how long it has run). The daemon's own list is used only
+  while Invoke cannot be reached.
 - The progress HUD picked from the Seance menu is kept across restarts (in
   `~/.config/seance/view.json` on the GUI machine). `seance-hud` in
   `terminal.conf` is the default until you pick one.

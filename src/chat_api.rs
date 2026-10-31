@@ -94,6 +94,74 @@ pub struct Progress {
     pub doing: Option<String>,
 }
 
+/// `/api/tasks`: what the phone's to-do list shows for a circle's lead.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct Tasks {
+    /// The lead's name; none when the circle has no lead.
+    #[serde(default)]
+    pub lead: Option<String>,
+    #[serde(default)]
+    pub busy: bool,
+    #[serde(default)]
+    pub doing: Option<String>,
+    #[serde(default)]
+    pub now: Vec<TaskItem>,
+    #[serde(default)]
+    pub waiting: Vec<TaskItem>,
+    #[serde(default)]
+    pub parked: Vec<TaskItem>,
+    #[serde(default)]
+    pub done: Vec<TaskItem>,
+    /// Other panes in the circle that are working.
+    #[serde(default)]
+    pub helpers: Vec<HelperItem>,
+    /// The lead's background agents (reviews and the like).
+    #[serde(default)]
+    pub agents: Vec<AgentItem>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct TaskItem {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub status: String,
+    /// Brian's words.
+    #[serde(default)]
+    pub text: String,
+    /// Sent from the phone (else from a pane).
+    #[serde(default)]
+    pub phone: bool,
+    #[serde(default)]
+    pub start: Option<u64>,
+    #[serde(default)]
+    pub end: Option<u64>,
+    /// The lead's own name for the task.
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct HelperItem {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub doing: Option<String>,
+    #[serde(default)]
+    pub task: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct AgentItem {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub doing: Option<String>,
+    /// How long it has been running, as Invoke words it ("5 min").
+    #[serde(default, rename = "for")]
+    pub running: String,
+}
+
 #[derive(Deserialize)]
 struct Poll {
     #[serde(default)]
@@ -184,6 +252,11 @@ pub fn progress(ws: &str) -> Result<Progress> {
     get(&format!("/api/tasks?ws={}", enc(ws)), REQUEST_SECS)
 }
 
+/// The whole to-do list of a circle's lead.
+pub fn tasks(ws: &str) -> Result<Tasks> {
+    get(&format!("/api/tasks?ws={}", enc(ws)), REQUEST_SECS)
+}
+
 /// Blocks until Invoke's change counter moves past `v`, or its own wait of
 /// `wait` seconds runs out. Returns the counter either way. curl's limit sits
 /// past the server's wait, or every quiet poll would end in a timeout.
@@ -258,6 +331,24 @@ mod tests {
         assert_eq!(t.usage, Some(Usage::default()));
         assert_eq!(t.messages[0].from, "me");
         assert_eq!(t.messages[0].image, None);
+    }
+
+    #[test]
+    fn tasks_parse_names_helpers_and_agents() {
+        let t: Tasks = serde_json::from_str(
+            r#"{"lead":"L","busy":true,"doing":"✻ Working","now":[{"id":"task-1","status":"open",
+            "text":"fix it","phone":true,"start":5,"end":null,"name":"Fix the thing"}],
+            "waiting":[],"parked":[{"id":"task-2","status":"parked","text":"x"}],
+            "helpers":[{"name":"MacBuilder","doing":null,"task":"build it"}],
+            "agents":[{"name":"review","doing":"reading","for":"5 min"}],
+            "done":[{"id":"task-3","status":"done","text":"y","phone":false,"start":1,"end":2,"name":null}]}"#,
+        )
+        .unwrap();
+        assert_eq!(t.now[0].name.as_deref(), Some("Fix the thing"));
+        assert_eq!(t.agents[0].running, "5 min");
+        assert_eq!(t.helpers[0].task.as_deref(), Some("build it"));
+        assert_eq!(t.parked[0].start, None);
+        assert_eq!(t.done[0].end, Some(2));
     }
 
     #[test]

@@ -185,6 +185,8 @@ pub struct SeanceApp {
     lead_tasks_off: Option<std::time::Instant>,
     /// `lead_tasks` asks that timed out in a row.
     lead_tasks_timeouts: u8,
+    /// When Invoke's task list last failed to answer: the daemon's stands in.
+    invoke_tasks_off: Option<std::time::Instant>,
     /// The Chat layout's circles, threads and composer.
     chat: chat::ChatState,
     /// Task row expanded to its full text on the tasks card.
@@ -506,6 +508,7 @@ impl SeanceApp {
             tasks_popover: None,
             lead_tasks_off: None,
             lead_tasks_timeouts: 0,
+            invoke_tasks_off: None,
             chat: chat::ChatState::default(),
             tasks_row_open: None,
             lead_tasks: std::collections::HashMap::new(),
