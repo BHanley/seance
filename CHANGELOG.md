@@ -19,6 +19,13 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **Chat bubbles: select, copy, links, paths and photos.** Text in a bubble
+  can be selected and copied, links open on click, double-clicking a file
+  path that exists on this Mac opens it the way a terminal does (images,
+  videos and pages in their app, anything else shown in Finder), and
+  clicking a photo opens the cached file in its app. Bubbles are drawn with
+  the same selectable text view as file panes; the bubble look is unchanged
+  apart from links, which take the theme's link color.
 - **Claude usage in the Chat layout.** A thin centered line under the
   thread header shows the plan usage the phone shows ("5h 18% · ⟳ 12:50 PM
   7d 35% · ⟳ Thu 2 AM"): numbers turn red from 80%, and the line hides

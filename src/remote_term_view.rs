@@ -1085,7 +1085,7 @@ fn open_uri(uri: &str) {
 }
 
 /// Files a double-click opens instead of revealing: what an agent shows off.
-fn opens_in_app(path: &std::path::Path) -> bool {
+pub(crate) fn opens_in_app(path: &std::path::Path) -> bool {
     const EXTS: &[&str] = &[
         "png", "jpg", "jpeg", "gif", "webp", "heic", "svg", "pdf", "mp4", "mov", "m4v", "webm",
         "html", "htm",
@@ -1099,7 +1099,7 @@ fn opens_in_app(path: &std::path::Path) -> bool {
 /// print `/home/<user>/…` paths that live under the Mac's home folder too
 /// (~/Claude, ~/github), and the other way round, so a missing home path is
 /// tried again under this machine's home.
-fn existing_path(printed: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn existing_path(printed: &str) -> Option<std::path::PathBuf> {
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     let mut tries = Vec::new();
     if let Some(rest) = printed.strip_prefix("~/") {

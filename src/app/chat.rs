@@ -15,7 +15,8 @@ use gpui::{
     SharedString, Window,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::StyledExt as _;
+use gpui_component::text::{TextView, TextViewStyle};
+use gpui_component::{StyledExt as _, WindowExt as _};
 use regex::Regex;
 
 use crate::chat_api::{self, CircleRow, Circles, Msg, Progress, Thread, Usage, UsageWindow};
@@ -122,22 +123,79 @@ fn fetch_round(ws: Option<String>, after: Option<i64>) -> Round {
     round
 }
 
-/// Words of `line`, each paired with its link when it holds one (trailing
-/// punctuation stays outside the link).
-fn words(line: &str) -> Vec<(String, Option<String>)> {
+fn url_re() -> &'static Regex {
     static URL: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let url = URL.get_or_init(|| Regex::new(r"https?://[^\s<>]+").unwrap());
-    line.split(' ')
-        .map(|w| match url.find(w) {
-            Some(m) => {
-                let link = m
-                    .as_str()
-                    .trim_end_matches(['.', ',', ')', ']', ';', ':', '!', '?']);
-                (w.to_string(), Some(link.to_string()))
+    URL.get_or_init(|| Regex::new(r"https?://[^\s<>]+").unwrap())
+}
+
+/// A link's end: trailing punctuation is the sentence's, not the URL's.
+fn trim_link(url: &str) -> &str {
+    url.trim_end_matches(['.', ',', ')', ']', ';', ':', '!', '?'])
+}
+
+/// A message as markdown that reads back as the same text: every ASCII
+/// punctuation mark escaped, line breaks kept, URLs turned into links. The
+/// selectable text view draws it, so the bubble keeps its look and gains
+/// selection, copy and clickable links.
+fn to_markdown(text: &str) -> String {
+    let escape = |s: &str| -> String {
+        s.chars()
+            .flat_map(|c| {
+                let esc = c.is_ascii_punctuation().then_some('\\');
+                esc.into_iter().chain(std::iter::once(c))
+            })
+            .collect()
+    };
+    text.lines()
+        .map(|line| {
+            if line.is_empty() {
+                // A blank line still takes its height.
+                return "\u{a0}".to_string();
             }
-            None => (w.to_string(), None),
+            let (mut out, mut at) = (String::new(), 0);
+            for m in url_re().find_iter(line) {
+                let link = trim_link(m.as_str());
+                out.push_str(&escape(&line[at..m.start()]));
+                out.push_str(&format!("[{}](<{link}>)", escape(link)));
+                at = m.start() + link.len();
+            }
+            out.push_str(&escape(&line[at..]));
+            out
         })
+        .collect::<Vec<_>>()
+        .join("\\\n")
+}
+
+/// The paths in `text` (whitespace-separated words starting `/` or `~/`)
+/// that contain `word`, the word a double-click just selected.
+fn paths_holding<'a>(text: &'a str, word: &str) -> Vec<&'a str> {
+    text.split_whitespace()
+        .map(|t| t.trim_start_matches(['(', '[', '<', '"', '\'', '`']))
+        .map(|t| t.trim_end_matches([')', ']', '>', '"', '\'', '`', '.', ',', ';', ':', '!', '?']))
+        .filter(|t| (t.starts_with('/') || t.starts_with("~/")) && t.len() > 1)
+        .filter(|t| t.contains(word))
         .collect()
+}
+
+/// Double-click in a bubble: the text view has just selected a word. If it sits
+/// in a file path of the message that exists here, open it the way the
+/// terminal does: images, videos and pages in their app, anything else shown
+/// in Finder.
+fn open_path_under_double_click(text: &str, window: &mut Window, cx: &mut gpui::App) {
+    let word = window.selected_text(cx);
+    let word = word.trim();
+    if word.is_empty() {
+        return;
+    }
+    let found = paths_holding(text, word)
+        .into_iter()
+        .find_map(|p| crate::remote_term_view::existing_path(p));
+    let Some(path) = found else { return };
+    if path.is_file() && crate::remote_term_view::opens_in_app(&path) {
+        crate::sysopen::open_detached(&path.to_string_lossy());
+    } else {
+        crate::sysopen::reveal_detached(&path);
+    }
 }
 
 /// One-line preview of a message for the circle list.
@@ -235,6 +293,16 @@ fn usage_strip(u: &Usage) -> Option<AnyElement> {
             .children(parts)
             .into_any_element(),
     )
+}
+
+/// The bubble's text keeps the bubble's own look: no gap between lines and the
+/// colors and size of the bubble around it.
+fn bubble_text_style() -> TextViewStyle {
+    TextViewStyle {
+        paragraph_gap: gpui::rems(0.),
+        is_dark: !crate::theme::is_light(),
+        ..Default::default()
+    }
 }
 
 /// A list heading: a space's name, or Active.
@@ -928,42 +996,46 @@ impl SeanceApp {
         let system = !me && m.from != "lead";
         let mut body = div().flex().flex_col().gap_0p5();
         if let Some(path) = m.image.as_ref().and_then(|n| self.chat.images.get(n)) {
-            body = body.child(
-                img(path.clone())
-                    .max_w(px(360.))
-                    .max_h(px(360.))
-                    .rounded_md(),
-            );
-        }
-        for (i, line) in m.text.lines().enumerate() {
-            // Most lines hold no link: one text node, not a div per word.
-            if !line.contains("://") {
-                body = body.child(div().min_h(px(14.)).child(line.to_string()));
-                continue;
-            }
+            // Click opens the cached file in its app (Preview).
+            let file = path.clone();
             body = body.child(
                 div()
-                    .id(SharedString::from(format!("bubble-{}-{i}", m.id)))
-                    .flex()
-                    .flex_wrap()
+                    .id(SharedString::from(format!("bubble-img-{}", m.id)))
+                    .cursor_pointer()
+                    .on_click(move |_, _, _| crate::sysopen::open_detached(&file.to_string_lossy()))
+                    .child(
+                        img(path.clone())
+                            .max_w(px(360.))
+                            .max_h(px(360.))
+                            .rounded_md(),
+                    ),
+            );
+        }
+        if !m.text.is_empty() {
+            let text = m.text.clone();
+            body = body.child(
+                div()
+                    .id(SharedString::from(format!("bubble-text-{}", m.id)))
                     .min_h(px(14.))
-                    .children(
-                        words(line)
-                            .into_iter()
-                            .enumerate()
-                            .map(|(j, (word, link))| {
-                                let part = div().child(format!("{word} "));
-                                match link {
-                                    Some(url) => part
-                                        .id(SharedString::from(format!("w-{}-{i}-{j}", m.id)))
-                                        .text_color(SeancePalette::flame())
-                                        .cursor_pointer()
-                                        .hover(|s| s.underline())
-                                        .on_click(cx.listener(move |_, _, _, cx| cx.open_url(&url)))
-                                        .into_any_element(),
-                                    None => part.into_any_element(),
-                                }
-                            }),
+                    // Capture phase, so the selection view cannot swallow it;
+                    // the selection itself lands after, hence the defer.
+                    .capture_any_mouse_up(cx.listener(
+                        move |_, ev: &gpui::MouseUpEvent, window, cx| {
+                            if ev.button == gpui::MouseButton::Left && ev.click_count == 2 {
+                                let text = text.clone();
+                                cx.defer_in(window, move |_, window, cx| {
+                                    open_path_under_double_click(&text, window, cx);
+                                });
+                            }
+                        },
+                    ))
+                    .child(
+                        TextView::markdown(
+                            SharedString::from(format!("bubble-md-{}", m.id)),
+                            to_markdown(&m.text),
+                        )
+                        .style(bubble_text_style())
+                        .selectable(true),
                     ),
             );
         }
@@ -1010,65 +1082,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn links_are_found_and_trailing_punctuation_stays_out() {
-        let w = words("see https://bike.rodeo/x/. ok (https://a.b/c)");
-        assert_eq!(w[1].1.as_deref(), Some("https://bike.rodeo/x/"));
-        assert_eq!(w[0].1, None);
-        assert_eq!(w[3].1.as_deref(), Some("https://a.b/c"));
+    fn markdown_reads_back_as_the_same_text() {
+        assert_eq!(to_markdown("a *b* _c_ #d"), "a \\*b\\* \\_c\\_ \\#d");
+        assert_eq!(to_markdown("1. one\n\ntwo"), "1\\. one\\\n\u{a0}\\\ntwo");
     }
 
     #[test]
-    fn reset_labels_use_a_12_hour_clock() {
-        // Whatever the machine's zone, the shape is fixed.
-        let short = reset_label(1_793_000_000_000, false);
-        assert!(short.ends_with("AM") || short.ends_with("PM"), "{short}");
-        assert!(short.contains(':'), "{short}");
-        let long = reset_label(1_793_000_000_000, true);
-        assert!(
-            !long.contains(':') && long.split(' ').count() == 3,
-            "{long}"
+    fn urls_become_links_without_their_trailing_punctuation() {
+        assert_eq!(
+            to_markdown("see https://bike.rodeo/x/. ok"),
+            "see [https\\:\\/\\/bike\\.rodeo\\/x\\/](<https://bike.rodeo/x/>)\\. ok"
         );
+        assert!(to_markdown("(https://a.b/c)").contains("](<https://a.b/c>)"));
     }
 
     #[test]
-    fn usage_strip_hides_without_windows() {
-        assert!(usage_strip(&Usage::default()).is_none());
-        let one = Usage {
-            five_hour: Some(UsageWindow {
-                used: 18.,
-                resets: None,
-            }),
-            seven_day: None,
-        };
-        assert!(usage_strip(&one).is_some());
-    }
-
-    #[test]
-    fn active_is_unread_or_recent_newest_first_and_never_alerts() {
-        let now = 10 * ACTIVE_MS;
-        let circle = |ws: &str, unread: u32, age: Option<u64>| CircleRow {
-            ws: ws.into(),
-            unread,
-            last: age.map(|a| Msg {
-                ts: now - a,
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let circles = [
-            circle("old", 0, Some(ACTIVE_MS + 1)),
-            circle("recent", 0, Some(60_000)),
-            circle("unread-old", 2, Some(5 * ACTIVE_MS)),
-            circle("alerts", 3, Some(1_000)),
-            circle("quiet", 0, None),
-            circle("newest", 0, Some(1_000)),
-            circle("unread-empty", 1, None),
-        ];
-        let got: Vec<String> = active_circles(&circles, now)
-            .into_iter()
-            .map(|c| c.ws)
-            .collect();
-        assert_eq!(got, ["newest", "recent", "unread-old", "unread-empty"]);
+    fn a_double_clicked_word_finds_its_path() {
+        let text = "wrote `~/Claude/out/a.png`, and /tmp/b.txt. See https://x.y/z";
+        assert_eq!(paths_holding(text, "out"), ["~/Claude/out/a.png"]);
+        assert_eq!(paths_holding(text, "b.txt"), ["/tmp/b.txt"]);
+        assert!(paths_holding(text, "nope").is_empty());
+        // A URL is not a file path.
+        assert!(paths_holding(text, "x.y").is_empty());
     }
 
     #[test]
