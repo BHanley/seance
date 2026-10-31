@@ -89,6 +89,8 @@ struct Helper {
 /// One line of work in progress elsewhere, drawn as a row.
 #[derive(Clone, Debug, PartialEq)]
 struct Handed {
+    /// Keeps a row open across refreshes; the pane's or agent's name.
+    key: String,
     name: Option<String>,
     text: String,
     progress: String,
@@ -116,6 +118,7 @@ impl LeadTasks {
         self.handed = std::mem::take(&mut self.helpers)
             .into_iter()
             .map(|h| Handed {
+                key: format!("helper:{}", h.name),
                 name: None,
                 text: h.name,
                 progress: progress_of(h.evidence.as_deref()),
@@ -175,12 +178,14 @@ impl LeadTasks {
             .helpers
             .into_iter()
             .map(|h| Handed {
+                key: format!("helper:{}", h.name),
                 name: h.task.as_ref().map(|_| h.name.clone()),
                 text: h.task.unwrap_or(h.name),
                 progress: progress_of(h.doing.as_deref()),
             })
             .collect();
         handed.extend(t.agents.into_iter().map(|a| Handed {
+            key: format!("agent:{}", a.name),
             name: Some(a.name),
             text: a.doing.unwrap_or_default(),
             progress: format!("Background agent · running {}", a.running),
@@ -277,8 +282,12 @@ impl SeanceApp {
                     let lead = lead.clone();
                     async move {
                         if !skip_invoke {
+                            // No lead: Invoke cannot match this circle's, so its
+                            // list says nothing; the daemon's does.
                             if let Ok(t) = chat_api::tasks(&ws) {
-                                return (Ok(LeadTasks::from_invoke(t)), true);
+                                if t.lead.is_some() {
+                                    return (Ok(LeadTasks::from_invoke(t)), true);
+                                }
                             }
                         }
                         if skip_daemon {
@@ -316,13 +325,16 @@ impl SeanceApp {
                 }
             };
             this.update(cx, |app: &mut SeanceApp, cx| {
-                app.lead_tasks_timeouts = 0;
-                app.lead_tasks_off = None;
                 // Invoke answered, or it is known to be down and the daemon did.
+                // Only the daemon's own answer says the daemon is fine.
                 if via_invoke {
                     app.invoke_tasks_off = None;
-                } else if !skip_invoke {
-                    app.invoke_tasks_off = Some(Instant::now());
+                } else {
+                    app.lead_tasks_timeouts = 0;
+                    app.lead_tasks_off = None;
+                    if !skip_invoke {
+                        app.invoke_tasks_off = Some(Instant::now());
+                    }
                 }
                 if app.lead_tasks.get(&lead) != Some(&data) {
                     app.lead_tasks.insert(lead, data);
@@ -511,9 +523,9 @@ impl SeanceApp {
 
         if !data.handed.is_empty() {
             face = face.child(label("In progress"));
-            for (i, h) in data.handed.iter().enumerate() {
+            for h in &data.handed {
                 let row = TaskRow {
-                    id: format!("handed-{i}"),
+                    id: format!("handed-{}", h.key),
                     status: "open".into(),
                     created_ms: 0,
                     finished_ms: None,
@@ -534,11 +546,12 @@ impl SeanceApp {
             face = face.child(label(title));
             for t in rows {
                 // A parked task was set aside when it finished its turn; with
-                // no such time, when it was sent.
-                let sub = match (status, t.finished_ms.unwrap_or(t.created_ms)) {
-                    ("parked", at) if at > 0 => {
+                // no such time (Invoke gives none), just "parked".
+                let sub = match (status, t.finished_ms) {
+                    ("parked", Some(at)) => {
                         vec![(format!("parked {}", clock(at)), SeancePalette::text_faint())]
                     }
+                    ("parked", None) => vec![("parked".to_string(), SeancePalette::text_faint())],
                     _ => vec![],
                 };
                 face =

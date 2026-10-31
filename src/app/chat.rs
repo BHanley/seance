@@ -134,10 +134,12 @@ fn trim_link(url: &str) -> &str {
 }
 
 /// A message as markdown that reads back as the same text: every ASCII
-/// punctuation mark escaped, line breaks kept, URLs turned into links. The
-/// selectable text view draws it, so the bubble keeps its look and gains
-/// selection, copy and clickable links.
+/// punctuation mark escaped, line breaks kept, leading spaces kept (as
+/// non-breaking ones, so indentation survives and four of them are not a code
+/// block), URLs turned into links. The selectable text view draws it, so the
+/// bubble keeps its look and gains selection, copy and clickable links.
 fn to_markdown(text: &str) -> String {
+    const NBSP: char = '\u{a0}';
     let escape = |s: &str| -> String {
         s.chars()
             .flat_map(|c| {
@@ -146,35 +148,87 @@ fn to_markdown(text: &str) -> String {
             })
             .collect()
     };
-    text.lines()
+    let mut lines: Vec<&str> = text.lines().collect();
+    // A message does not end in blank space.
+    while lines.last().is_some_and(|l| l.trim().is_empty()) {
+        lines.pop();
+    }
+    lines
+        .into_iter()
         .map(|line| {
-            if line.is_empty() {
+            if line.trim().is_empty() {
                 // A blank line still takes its height.
-                return "\u{a0}".to_string();
+                return NBSP.to_string();
             }
-            let (mut out, mut at) = (String::new(), 0);
-            for m in url_re().find_iter(line) {
+            let body = line.trim_start_matches([' ', '\t']);
+            let indent: String = line[..line.len() - body.len()]
+                .chars()
+                .flat_map(|c| std::iter::repeat_n(NBSP, if c == '\t' { 4 } else { 1 }))
+                .collect();
+            let (mut out, mut at) = (indent, 0);
+            for m in url_re().find_iter(body) {
                 let link = trim_link(m.as_str());
-                out.push_str(&escape(&line[at..m.start()]));
+                out.push_str(&escape(&body[at..m.start()]));
                 out.push_str(&format!("[{}](<{link}>)", escape(link)));
                 at = m.start() + link.len();
             }
-            out.push_str(&escape(&line[at..]));
+            out.push_str(&escape(&body[at..]));
             out
         })
         .collect::<Vec<_>>()
         .join("\\\n")
 }
 
-/// The paths in `text` (whitespace-separated words starting `/` or `~/`)
-/// that contain `word`, the word a double-click just selected.
-fn paths_holding<'a>(text: &'a str, word: &str) -> Vec<&'a str> {
-    text.split_whitespace()
-        .map(|t| t.trim_start_matches(['(', '[', '<', '"', '\'', '`']))
-        .map(|t| t.trim_end_matches([')', ']', '>', '"', '\'', '`', '.', ',', ';', ':', '!', '?']))
-        .filter(|t| (t.starts_with('/') || t.starts_with("~/")) && t.len() > 1)
-        .filter(|t| t.contains(word))
-        .collect()
+/// The file paths in `text` (whitespace-separated words starting `/` or
+/// `~/`, wrapping quotes and trailing punctuation left out), with where each
+/// sits in it.
+fn path_spans(text: &str) -> Vec<(std::ops::Range<usize>, &str)> {
+    let mut spans = Vec::new();
+    let mut at = 0;
+    for word in text.split_inclusive(char::is_whitespace) {
+        let start = at;
+        at += word.len();
+        let lead = word.len()
+            - word
+                .trim_start_matches(['(', '[', '<', '"', '\'', '`'])
+                .len();
+        let token = word
+            .trim_start_matches(['(', '[', '<', '"', '\'', '`'])
+            .trim_end_matches(|c: char| {
+                c.is_whitespace()
+                    || matches!(
+                        c,
+                        ')' | ']' | '>' | '"' | '\'' | '`' | '.' | ',' | ';' | ':' | '!' | '?'
+                    )
+            });
+        if (token.starts_with('/') || token.starts_with("~/")) && token.len() > 1 {
+            let from = start + lead;
+            spans.push((from..from + token.len(), token));
+        }
+    }
+    spans
+}
+
+/// The path a double-clicked `word` belongs to, if it can only be that one:
+/// the word has a letter or digit in it (gpui picks a lone "/" or "." on
+/// punctuation), every place it appears in the message is inside a path, and
+/// those places name one path. "png" in "I put the png in ~/out/a.png" is a
+/// word of the sentence, not a click on the file.
+fn path_of_word<'a>(text: &'a str, word: &str) -> Option<&'a str> {
+    if !word.chars().any(char::is_alphanumeric) {
+        return None;
+    }
+    let spans = path_spans(text);
+    let mut found: Option<&str> = None;
+    for (at, _) in text.match_indices(word) {
+        let end = at + word.len();
+        let (_, path) = spans.iter().find(|(r, _)| r.start <= at && end <= r.end)?;
+        match found {
+            Some(p) if p != *path => return None,
+            _ => found = Some(path),
+        }
+    }
+    found
 }
 
 /// Double-click in a bubble: the text view has just selected a word. If it sits
@@ -183,14 +237,12 @@ fn paths_holding<'a>(text: &'a str, word: &str) -> Vec<&'a str> {
 /// in Finder.
 fn open_path_under_double_click(text: &str, window: &mut Window, cx: &mut gpui::App) {
     let word = window.selected_text(cx);
-    let word = word.trim();
-    if word.is_empty() {
+    let Some(printed) = path_of_word(text, word.trim()) else {
         return;
-    }
-    let found = paths_holding(text, word)
-        .into_iter()
-        .find_map(|p| crate::remote_term_view::existing_path(p));
-    let Some(path) = found else { return };
+    };
+    let Some(path) = crate::remote_term_view::existing_path(printed) else {
+        return;
+    };
     if path.is_file() && crate::remote_term_view::opens_in_app(&path) {
         crate::sysopen::open_detached(&path.to_string_lossy());
     } else {
@@ -1097,13 +1149,91 @@ mod tests {
     }
 
     #[test]
-    fn a_double_clicked_word_finds_its_path() {
+    fn a_double_clicked_word_finds_only_its_own_path() {
         let text = "wrote `~/Claude/out/a.png`, and /tmp/b.txt. See https://x.y/z";
-        assert_eq!(paths_holding(text, "out"), ["~/Claude/out/a.png"]);
-        assert_eq!(paths_holding(text, "b.txt"), ["/tmp/b.txt"]);
-        assert!(paths_holding(text, "nope").is_empty());
+        assert_eq!(path_of_word(text, "out"), Some("~/Claude/out/a.png"));
+        assert_eq!(path_of_word(text, "b.txt"), Some("/tmp/b.txt"));
+        assert_eq!(path_of_word(text, "nope"), None);
         // A URL is not a file path.
-        assert!(paths_holding(text, "x.y").is_empty());
+        assert_eq!(path_of_word(text, "x.y"), None);
+    }
+
+    #[test]
+    fn a_word_of_the_sentence_is_not_a_click_on_the_file() {
+        let text = "I put the png in ~/Claude/out/a.png";
+        assert_eq!(path_of_word(text, "png"), None);
+        assert_eq!(path_of_word(text, "a.png"), Some("~/Claude/out/a.png"));
+        // Punctuation picked by the word select is not a path word.
+        assert_eq!(path_of_word(text, "/"), None);
+        assert_eq!(path_of_word(text, "."), None);
+        // The same word in two paths cannot say which was clicked.
+        assert_eq!(path_of_word("/a/out/x and /b/out/y", "out"), None);
+    }
+
+    #[test]
+    fn indentation_and_blank_space_survive_as_markdown() {
+        let nb = "\u{a0}";
+        assert_eq!(to_markdown("    code"), format!("{nb}{nb}{nb}{nb}code"));
+        assert_eq!(to_markdown("\tx"), format!("{nb}{nb}{nb}{nb}x"));
+        assert_eq!(to_markdown("a\n  - b"), format!("a\\\n{nb}{nb}\\- b"));
+        // Whitespace-only lines are blank lines; the tail of a message is not.
+        assert_eq!(to_markdown("a\n   \nb"), format!("a\\\n{nb}\\\nb"));
+        assert_eq!(to_markdown("a\n   "), "a");
+        assert_eq!(to_markdown("a\n\n"), "a");
+    }
+
+    #[test]
+    fn reset_labels_use_a_12_hour_clock() {
+        // Whatever the machine's zone, the shape is fixed.
+        let short = reset_label(1_793_000_000_000, false);
+        assert!(short.ends_with("AM") || short.ends_with("PM"), "{short}");
+        assert!(short.contains(':'), "{short}");
+        let long = reset_label(1_793_000_000_000, true);
+        assert!(
+            !long.contains(':') && long.split(' ').count() == 3,
+            "{long}"
+        );
+    }
+
+    #[test]
+    fn usage_strip_hides_without_windows() {
+        assert!(usage_strip(&Usage::default()).is_none());
+        let one = Usage {
+            five_hour: Some(UsageWindow {
+                used: 18.,
+                resets: None,
+            }),
+            seven_day: None,
+        };
+        assert!(usage_strip(&one).is_some());
+    }
+
+    #[test]
+    fn active_is_unread_or_recent_newest_first_and_never_alerts() {
+        let now = 10 * ACTIVE_MS;
+        let circle = |ws: &str, unread: u32, age: Option<u64>| CircleRow {
+            ws: ws.into(),
+            unread,
+            last: age.map(|a| Msg {
+                ts: now - a,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let circles = [
+            circle("old", 0, Some(ACTIVE_MS + 1)),
+            circle("recent", 0, Some(60_000)),
+            circle("unread-old", 2, Some(5 * ACTIVE_MS)),
+            circle("alerts", 3, Some(1_000)),
+            circle("quiet", 0, None),
+            circle("newest", 0, Some(1_000)),
+            circle("unread-empty", 1, None),
+        ];
+        let got: Vec<String> = active_circles(&circles, now)
+            .into_iter()
+            .map(|c| c.ws)
+            .collect();
+        assert_eq!(got, ["newest", "recent", "unread-old", "unread-empty"]);
     }
 
     #[test]
