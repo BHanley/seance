@@ -19,6 +19,10 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **The lead's creature dances while its circle works.** On the lead's
+  title strip and Stage card, the sprite hops left and right whenever any
+  pane in the circle is mid-turn, and rests when the circle goes quiet.
+
 - **Double-click a file path to show it in Finder.** A path an agent
   printed (`/…` or `~/…`, spaces, accents and wrapped rows included) opens
   its folder with the item selected, files and folders alike, and copies

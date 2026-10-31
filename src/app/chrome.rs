@@ -443,6 +443,8 @@ pub(super) fn render_pane(
     is_zoomed: bool,
     rail_hover: bool,
     is_lead: bool,
+    // The circle has a pane mid-turn: the lead's creature dances.
+    circle_working: bool,
     cx: &Context<SeanceApp>,
 ) -> impl IntoElement {
     let is_active = active == Some(pane.slug.as_str());
@@ -702,6 +704,7 @@ pub(super) fn render_pane(
                     d.child(super::sprite::render(
                         &super::sprite::for_circle(&pane.workspace),
                         1.5,
+                        circle_working,
                     ))
                 })
                 .child(match rename_input {

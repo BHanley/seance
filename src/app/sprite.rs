@@ -111,13 +111,27 @@ pub(super) fn generate(seed: &str) -> Sprite {
     }
 }
 
+/// Dance steps while the circle works, as (x, y) cell offsets: rest, hop left,
+/// rest, hop right.
+const DANCE: [(f32, f32); 4] = [(0., 0.), (-1., -1.), (0., 0.), (1., -1.)];
+
 /// The sprite as a grid of `cell`-point squares. Whole device pixels keep it
 /// crisp: 1.5 and 2.5 points land on 3 and 5 pixels on a 2x screen.
-pub(super) fn render(sprite: &Sprite, cell: f32) -> AnyElement {
+/// `dancing` steps it through [`DANCE`] on the wall clock; the sidebar spinner's
+/// 240ms tick already re-renders while any circle works, so it costs no frames.
+pub(super) fn render(sprite: &Sprite, cell: f32, dancing: bool) -> AnyElement {
     let body = rgb(BODY[sprite.color]);
     let ink = rgb(INK);
+    let (dx, dy) = if dancing {
+        DANCE[((super::util::now_ms() / 240) as usize) % DANCE.len()]
+    } else {
+        (0., 0.)
+    };
     div()
         .flex_none()
+        .relative()
+        .left(px(dx * cell))
+        .top(px(dy * cell))
         .flex()
         .flex_col()
         .children(sprite.cells.iter().map(|row| {
