@@ -880,9 +880,18 @@ impl SeanceApp {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    // The ✦ opens the same menu as in Classic and Stage: the
-                    // connected guis and the theme list.
-                    .child(self.render_seance_mark("chat", cx))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            // The ✦ opens the same menu as in Classic and Stage:
+                            // the connected guis and the theme list.
+                            .child(self.render_seance_mark("chat", cx))
+                            // The AFK chip as Stage and Wall draw it; nothing
+                            // where the script is not installed.
+                            .children(self.render_afk_chip("chat", cx)),
+                    )
                     .child(self.render_view_switch("chat", cx)),
             )
             .child(col)

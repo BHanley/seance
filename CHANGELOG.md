@@ -19,6 +19,10 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **The AFK button in the Chat layout.** The same AFK chip Stage and Wall show
+  now sits beside the ✦ seance mark at the top of Chat's circle list: same
+  state, same confirm, same switch (and absent where the afk script is not
+  installed).
 - **The theme chooser in the Chat layout.** The ✦ seance mark now sits at the
   top of Chat's circle list, above the layout switch, and opens the same menu as
   in Classic and Stage (connected guis, and the dark and light themes with the
