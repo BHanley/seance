@@ -252,6 +252,14 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Changed
 
+- **The tasks card reads Invoke's list.** The card behind a lead's "☑ N"
+  chip (in Classic and in the Chat header) now shows what the phone shows:
+  the lead's own name for each task as the row title, with Brian's own words
+  in faint text under it ("You: ..." from the phone, "Asked: ..." from a
+  pane), plus a "Handed off" section for busy helper panes (name, task and
+  progress line) and the lead's background agents (what each is doing and how
+  long it has run). The daemon's own list is used only while Invoke cannot be
+  reached.
 - The progress HUD picked from the Seance menu is kept across restarts (in
   `~/.config/seance/view.json` on the GUI machine). `seance-hud` in
   `terminal.conf` is the default until you pick one.

@@ -13,6 +13,7 @@ use gpui::{
 };
 use serde::Deserialize;
 
+use crate::chat_api;
 use crate::events;
 use crate::theme::SeancePalette;
 
@@ -25,6 +26,8 @@ const POLL_EVERY: Duration = Duration::from_millis(2000);
 const FULL_TEXT_CAP: usize = 2500;
 /// After the daemon fails to answer, ask again this rarely.
 const RETRY_OFF: Duration = Duration::from_secs(600);
+/// After Invoke fails to answer, the daemon's list stands in for this long.
+const INVOKE_RETRY: Duration = Duration::from_secs(30);
 /// Timeouts in a row before the poll goes quiet.
 const TIMEOUTS_BEFORE_OFF: u8 = 3;
 /// The popover card's width and its share of the window height.
@@ -39,12 +42,19 @@ pub(super) struct TasksPopover {
     pub(super) at: Point<Pixels>,
 }
 
+/// What the card draws. It comes from Invoke's `/api/tasks` (the same list
+/// the phone shows) or, when Invoke cannot be reached, from the daemon's
+/// `lead_tasks` answer.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 pub(super) struct LeadTasks {
     #[serde(default)]
     tasks: Vec<TaskRow>,
+    /// The daemon's busy panes; `normalized` turns them into `handed`.
     #[serde(default)]
     helpers: Vec<Helper>,
+    /// Work handed off: busy helper panes and the lead's background agents.
+    #[serde(skip)]
+    handed: Vec<Handed>,
     /// The lead's own deciding screen line while it works.
     #[serde(default)]
     evidence: Option<String>,
@@ -60,6 +70,12 @@ struct TaskRow {
     finished_ms: Option<u64>,
     #[serde(default)]
     body: String,
+    /// The lead's own name for the task; Brian's words go under it.
+    #[serde(default)]
+    name: Option<String>,
+    /// Sent from the phone (else from a pane).
+    #[serde(default)]
+    phone: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -70,18 +86,119 @@ struct Helper {
     evidence: Option<String>,
 }
 
+/// One line of work handed off, drawn as a row.
+#[derive(Clone, Debug, PartialEq)]
+struct Handed {
+    name: Option<String>,
+    text: String,
+    progress: String,
+}
+
+/// Id of the stand-in row for a pane that is busy with no task open.
+const TYPED_ID: &str = "typed";
+
 impl LeadTasks {
     /// What the chip counts: open and queued tasks. Parked ones stay out,
     /// since Seance rarely clears them.
     pub(super) fn open_count(&self) -> usize {
         self.tasks
             .iter()
-            .filter(|t| matches!(t.status.as_str(), "open" | "queued"))
+            .filter(|t| matches!(t.status.as_str(), "open" | "queued") && t.id != TYPED_ID)
             .count()
     }
 
     fn with_status<'a>(&'a self, status: &'a str) -> impl Iterator<Item = &'a TaskRow> {
         self.tasks.iter().filter(move |t| t.status == status)
+    }
+
+    /// The daemon's answer, its busy panes moved to where the card looks.
+    fn normalized(mut self) -> Self {
+        self.handed = std::mem::take(&mut self.helpers)
+            .into_iter()
+            .map(|h| Handed {
+                name: None,
+                text: h.name,
+                progress: progress_of(h.evidence.as_deref()),
+            })
+            .collect();
+        self
+    }
+
+    /// Invoke's list as the card draws it, with the phone's own rules: a
+    /// helper's task is its row's words and its name the title, and a lead busy
+    /// with nothing open gets a stand-in "typed into the pane" row.
+    fn from_invoke(t: chat_api::Tasks) -> Self {
+        let row = |t: chat_api::TaskItem, status: &str| TaskRow {
+            id: t.id,
+            status: if t.status.is_empty() {
+                status.to_string()
+            } else {
+                t.status
+            },
+            created_ms: t.start.unwrap_or(0),
+            finished_ms: t.end,
+            body: t.text,
+            name: t.name.filter(|n| !n.is_empty()),
+            phone: t.phone,
+        };
+        let busy = t.busy;
+        let evidence = if busy {
+            progress_of(t.doing.as_deref())
+        } else {
+            "Waiting for its next turn".to_string()
+        };
+        let mut tasks: Vec<TaskRow> = Vec::new();
+        for (items, status) in [(t.now, "open"), (t.waiting, "queued"), (t.parked, "parked")] {
+            tasks.extend(items.into_iter().map(|i| {
+                // Invoke files the row under its list; the list is the truth.
+                let mut r = row(i, status);
+                r.status = status.to_string();
+                r
+            }));
+        }
+        if busy && !tasks.iter().any(|r| r.status == "open") {
+            tasks.insert(
+                0,
+                TaskRow {
+                    id: TYPED_ID.into(),
+                    status: "open".into(),
+                    created_ms: 0,
+                    finished_ms: None,
+                    body: "Something typed into the pane".into(),
+                    name: None,
+                    phone: false,
+                },
+            );
+        }
+        tasks.extend(t.done.into_iter().map(|i| row(i, "done")));
+        let mut handed: Vec<Handed> = t
+            .helpers
+            .into_iter()
+            .map(|h| Handed {
+                name: h.task.as_ref().map(|_| h.name.clone()),
+                text: h.task.unwrap_or(h.name),
+                progress: progress_of(h.doing.as_deref()),
+            })
+            .collect();
+        handed.extend(t.agents.into_iter().map(|a| Handed {
+            name: Some(a.name),
+            text: a.doing.unwrap_or_default(),
+            progress: format!("Background agent · running {}", a.running),
+        }));
+        LeadTasks {
+            tasks,
+            helpers: Vec::new(),
+            handed,
+            evidence: Some(evidence),
+        }
+    }
+}
+
+/// A pane's progress line minus its spinner glyph; "Working" with none.
+fn progress_of(doing: Option<&str>) -> String {
+    match doing.map(strip_spinner).filter(|d| !d.is_empty()) {
+        Some(d) => d.to_string(),
+        None => "Working".to_string(),
     }
 }
 
@@ -129,7 +246,7 @@ fn span(ms: u64) -> String {
 }
 
 impl SeanceApp {
-    /// Poll the daemon for the selected circle's lead tasks.
+    /// Poll for the selected circle's lead tasks.
     pub(super) fn start_lead_tasks_poll(cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(POLL_EVERY).await;
@@ -139,48 +256,74 @@ impl SeanceApp {
                 if app.tasks_popover.is_some() && !app.tasks_popover_valid() {
                     app.close_tasks_popover(cx);
                 }
-                if app
-                    .lead_tasks_off
-                    .is_some_and(|at| at.elapsed() < RETRY_OFF)
-                {
-                    return None;
-                }
                 let ws = app.selected_workspace.clone()?;
                 let lead = app.stage_lead(&ws)?;
-                Some((lead, Arc::clone(&app.client)))
+                let skip_invoke = app
+                    .invoke_tasks_off
+                    .is_some_and(|at| at.elapsed() < INVOKE_RETRY);
+                let skip_daemon = app
+                    .lead_tasks_off
+                    .is_some_and(|at| at.elapsed() < RETRY_OFF);
+                Some((lead, ws, Arc::clone(&app.client), skip_invoke, skip_daemon))
             });
-            let Some((lead, client)) = ask else { continue };
+            let Some((lead, ws, client, skip_invoke, skip_daemon)) = ask else {
+                continue;
+            };
+            // Invoke's list first (names, handed-off work, as on the phone);
+            // the daemon's only when Invoke cannot be reached.
             let got = cx
                 .background_executor()
                 .spawn({
                     let lead = lead.clone();
-                    async move { client.lead_tasks(&lead) }
+                    async move {
+                        if !skip_invoke {
+                            if let Ok(t) = chat_api::tasks(&ws) {
+                                return (Ok(LeadTasks::from_invoke(t)), true);
+                            }
+                        }
+                        if skip_daemon {
+                            return (Err(anyhow::anyhow!("daemon list paused")), false);
+                        }
+                        let from_daemon = client.lead_tasks(&lead).and_then(|v| {
+                            serde_json::from_value::<LeadTasks>(v)
+                                .map(LeadTasks::normalized)
+                                .map_err(Into::into)
+                        });
+                        (from_daemon, false)
+                    }
                 })
                 .await;
-            let data = match got {
+            let (data, via_invoke) = got;
+            let data = match data {
                 Ok(data) => data,
                 Err(e) => {
                     // A daemon that never answers costs a 10 s wait per ask.
                     // One tunnel blip is not that: it takes a run of timeouts
                     // to stop asking for a while. (An older daemon also says so
                     // outright, see `GuiEvent::Error` in mod.rs.)
-                    if e.to_string().contains("timed out") {
-                        this.update(cx, |app: &mut SeanceApp, _| {
+                    this.update(cx, |app: &mut SeanceApp, _| {
+                        if !skip_invoke {
+                            app.invoke_tasks_off = Some(Instant::now());
+                        }
+                        if e.to_string().contains("timed out") {
                             app.lead_tasks_timeouts = app.lead_tasks_timeouts.saturating_add(1);
                             if app.lead_tasks_timeouts >= TIMEOUTS_BEFORE_OFF {
                                 app.lead_tasks_off = Some(Instant::now());
                             }
-                        });
-                    }
+                        }
+                    });
                     continue;
                 }
-            };
-            let Ok(data) = serde_json::from_value::<LeadTasks>(data) else {
-                continue;
             };
             this.update(cx, |app: &mut SeanceApp, cx| {
                 app.lead_tasks_timeouts = 0;
                 app.lead_tasks_off = None;
+                // Invoke answered, or it is known to be down and the daemon did.
+                if via_invoke {
+                    app.invoke_tasks_off = None;
+                } else if !skip_invoke {
+                    app.invoke_tasks_off = Some(Instant::now());
+                }
                 if app.lead_tasks.get(&lead) != Some(&data) {
                     app.lead_tasks.insert(lead, data);
                     cx.notify();
@@ -344,14 +487,16 @@ impl SeanceApp {
                         sub.push((ev.to_string(), SeancePalette::flame()));
                     }
                 }
-                sub.push((
-                    format!(
-                        "started {} · {} so far",
-                        clock(t.created_ms),
-                        span(now.saturating_sub(t.created_ms))
-                    ),
-                    SeancePalette::text_faint(),
-                ));
+                if t.created_ms > 0 {
+                    sub.push((
+                        format!(
+                            "started {} · {} so far",
+                            clock(t.created_ms),
+                            span(now.saturating_sub(t.created_ms))
+                        ),
+                        SeancePalette::text_faint(),
+                    ));
+                }
                 face = face.child(self.task_row(slug, t, "▶", SeancePalette::flame(), sub, cx));
             }
             None => {
@@ -364,27 +509,20 @@ impl SeanceApp {
             }
         }
 
-        if !data.helpers.is_empty() {
-            face = face.child(label("Helpers working"));
-            for h in &data.helpers {
-                let ev = h.evidence.as_deref().map(strip_spinner).unwrap_or("");
-                face = face.child(
-                    div()
-                        .text_xs()
-                        .flex()
-                        .gap_2()
-                        .child(
-                            div()
-                                .text_color(SeancePalette::text())
-                                .child(h.name.clone()),
-                        )
-                        .child(
-                            div()
-                                .min_w_0()
-                                .text_color(SeancePalette::text_dim())
-                                .child(ev.to_string()),
-                        ),
-                );
+        if !data.handed.is_empty() {
+            face = face.child(label("Handed off"));
+            for (i, h) in data.handed.iter().enumerate() {
+                let row = TaskRow {
+                    id: format!("handed-{i}"),
+                    status: "open".into(),
+                    created_ms: 0,
+                    finished_ms: None,
+                    body: h.text.clone(),
+                    name: h.name.clone().filter(|n| !n.is_empty()),
+                    phone: false,
+                };
+                let sub = vec![(h.progress.clone(), SeancePalette::flame())];
+                face = face.child(self.task_row(slug, &row, "▶", SeancePalette::flame(), sub, cx));
             }
         }
 
@@ -395,9 +533,10 @@ impl SeanceApp {
             }
             face = face.child(label(title));
             for t in rows {
-                // A parked task was set aside when it finished its turn.
-                let sub = match (status, t.finished_ms) {
-                    ("parked", Some(at)) => {
+                // A parked task was set aside when it finished its turn; with
+                // no such time, when it was sent.
+                let sub = match (status, t.finished_ms.unwrap_or(t.created_ms)) {
+                    ("parked", at) if at > 0 => {
                         vec![(format!("parked {}", clock(at)), SeancePalette::text_faint())]
                     }
                     _ => vec![],
@@ -410,16 +549,16 @@ impl SeanceApp {
         let done: Vec<&TaskRow> = data
             .tasks
             .iter()
-            .filter(|t| matches!(t.status.as_str(), "done" | "failed"))
+            .filter(|t| !matches!(t.status.as_str(), "open" | "queued" | "parked"))
             .collect();
         if !done.is_empty() {
             face = face.child(label("Done lately"));
             for t in done {
                 let end = t.finished_ms.unwrap_or(t.created_ms);
-                let (glyph, colour, verb) = if t.status == "done" {
-                    ("☑", SeancePalette::success(), "done")
-                } else {
-                    ("☒", SeancePalette::danger(), "failed")
+                let (glyph, colour, verb) = match t.status.as_str() {
+                    "done" => ("☑", SeancePalette::success(), "done"),
+                    "failed" => ("☒", SeancePalette::danger(), "failed"),
+                    _ => ("☒", SeancePalette::danger(), "dropped"),
                 };
                 let sub = vec![(
                     format!(
@@ -435,8 +574,9 @@ impl SeanceApp {
         face.into_any_element()
     }
 
-    /// One checklist row: glyph, first line, small lines under it. A click
-    /// shows the task's full text.
+    /// One checklist row: glyph, the task's name (else its first line), Brian's
+    /// words in faint text under a name, small lines under that. A click shows
+    /// the task's full text.
     fn task_row(
         &self,
         slug: &str,
@@ -448,6 +588,7 @@ impl SeanceApp {
     ) -> AnyElement {
         let open = self.tasks_row_open.as_deref() == Some(t.id.as_str());
         let id = t.id.clone();
+        let (title, said) = row_title(t);
         let mut text = div()
             .flex_1()
             .min_w_0()
@@ -457,8 +598,14 @@ impl SeanceApp {
                 div()
                     .text_sm()
                     .text_color(SeancePalette::text())
-                    .child(first_line(&t.body)),
+                    .child(title),
             )
+            .children(said.map(|line| {
+                div()
+                    .text_xs()
+                    .text_color(SeancePalette::text_faint())
+                    .child(line)
+            }))
             .children(
                 sub.into_iter()
                     .map(|(line, colour)| div().text_xs().text_color(colour).child(line)),
@@ -515,6 +662,20 @@ impl SeanceApp {
     }
 }
 
+/// A row's title and, under a lead-given name, Brian's words ("You: " from the
+/// phone, "Asked: " from a pane).
+fn row_title(t: &TaskRow) -> (String, Option<String>) {
+    let words = first_line(&t.body);
+    match t.name.as_deref().filter(|n| !n.is_empty()) {
+        Some(name) if !words.is_empty() => {
+            let who = if t.phone { "You" } else { "Asked" };
+            (name.to_string(), Some(format!("{who}: {words}")))
+        }
+        Some(name) => (name.to_string(), None),
+        None => (words, None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -554,11 +715,131 @@ mod tests {
             created_ms: 0,
             finished_ms: None,
             body: String::new(),
+            name: None,
+            phone: false,
         };
         let data = LeadTasks {
             tasks: vec![row("open"), row("queued"), row("parked"), row("done")],
             ..Default::default()
         };
         assert_eq!(data.open_count(), 2);
+    }
+
+    fn item(id: &str, text: &str, name: Option<&str>, phone: bool) -> chat_api::TaskItem {
+        chat_api::TaskItem {
+            id: id.into(),
+            text: text.into(),
+            name: name.map(Into::into),
+            phone,
+            start: Some(1_000),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn invoke_lists_become_rows_by_list_with_names_kept() {
+        let t = chat_api::Tasks {
+            lead: Some("L".into()),
+            busy: true,
+            doing: Some("✻ Reading the code (4s)".into()),
+            now: vec![item("task-1", "fix it", Some("Fix the thing"), true)],
+            waiting: vec![item("task-2", "later", None, false)],
+            parked: vec![item("task-3", "old", None, false)],
+            done: vec![chat_api::TaskItem {
+                status: "orphaned".into(),
+                ..item("task-4", "gone", None, true)
+            }],
+            ..Default::default()
+        };
+        let d = LeadTasks::from_invoke(t);
+        let by: Vec<(&str, &str)> = d
+            .tasks
+            .iter()
+            .map(|r| (r.id.as_str(), r.status.as_str()))
+            .collect();
+        assert_eq!(
+            by,
+            [
+                ("task-1", "open"),
+                ("task-2", "queued"),
+                ("task-3", "parked"),
+                ("task-4", "orphaned"),
+            ]
+        );
+        assert_eq!(d.open_count(), 2);
+        assert_eq!(d.evidence.as_deref(), Some("Reading the code (4s)"));
+        let (title, said) = row_title(&d.tasks[0]);
+        assert_eq!(title, "Fix the thing");
+        assert_eq!(said.as_deref(), Some("You: fix it"));
+    }
+
+    #[test]
+    fn a_busy_lead_with_nothing_open_gets_a_stand_in_row_that_is_not_counted() {
+        let d = LeadTasks::from_invoke(chat_api::Tasks {
+            busy: true,
+            ..Default::default()
+        });
+        assert_eq!(d.tasks[0].body, "Something typed into the pane");
+        assert_eq!(d.open_count(), 0);
+        let idle = LeadTasks::from_invoke(chat_api::Tasks::default());
+        assert!(idle.tasks.is_empty());
+        assert_eq!(idle.evidence.as_deref(), Some("Waiting for its next turn"));
+    }
+
+    #[test]
+    fn handed_off_work_follows_the_phone_rules() {
+        let d = LeadTasks::from_invoke(chat_api::Tasks {
+            helpers: vec![
+                chat_api::HelperItem {
+                    name: "MacBuilder".into(),
+                    doing: Some("✽ Building (6s)".into()),
+                    task: Some("build it".into()),
+                },
+                chat_api::HelperItem {
+                    name: "Scout".into(),
+                    ..Default::default()
+                },
+            ],
+            agents: vec![chat_api::AgentItem {
+                name: "review".into(),
+                doing: Some("reading the diff".into()),
+                running: "5 min".into(),
+            }],
+            ..Default::default()
+        });
+        assert_eq!(d.handed.len(), 3);
+        assert_eq!(d.handed[0].name.as_deref(), Some("MacBuilder"));
+        assert_eq!(d.handed[0].text, "build it");
+        assert_eq!(d.handed[0].progress, "Building (6s)");
+        assert_eq!(d.handed[1].name, None);
+        assert_eq!(d.handed[1].text, "Scout");
+        assert_eq!(d.handed[1].progress, "Working");
+        assert_eq!(d.handed[2].progress, "Background agent · running 5 min");
+    }
+
+    #[test]
+    fn the_daemons_helpers_move_to_handed_off() {
+        let raw: LeadTasks = serde_json::from_str(
+            r#"{"tasks":[],"helpers":[{"name":"MacBuilder","evidence":"✽ Building"}],"evidence":null}"#,
+        )
+        .unwrap();
+        let d = raw.normalized();
+        assert!(d.helpers.is_empty());
+        assert_eq!(d.handed[0].text, "MacBuilder");
+        assert_eq!(d.handed[0].progress, "Building");
+    }
+
+    #[test]
+    fn rows_without_a_name_use_their_first_line() {
+        let row = TaskRow {
+            id: "t".into(),
+            status: "done".into(),
+            created_ms: 0,
+            finished_ms: None,
+            body: "ok can you do it plz.\nmore".into(),
+            name: None,
+            phone: true,
+        };
+        assert_eq!(row_title(&row), ("ok can you do it plz.".to_string(), None));
     }
 }
