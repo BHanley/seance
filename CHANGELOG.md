@@ -234,6 +234,13 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Changed
 
+- **The lead's tasks list is a floating card, not a flipped pane.** Clicking
+  the "☑ N" chip opens a raised card under it (about 420 px wide, up to 60%
+  of the window tall, with its own scroll) while the terminal stays visible
+  and live. Same sections as before; click a row for its full text. It
+  closes when you click the chip again, click outside it, or press Esc, and
+  focus goes back to the terminal. In the Chat layout the header's chip opens
+  the same card. The tasks face flip is gone; notes still flip as before.
 - The progress HUD picked from the Seance menu is kept across restarts (in
   `~/.config/seance/view.json` on the GUI machine). `seance-hud` in
   `terminal.conf` is the default until you pick one.

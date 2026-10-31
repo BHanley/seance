@@ -67,8 +67,6 @@ pub(super) struct ChatState {
     images: HashMap<String, PathBuf>,
     image_asked: HashSet<String>,
     error: Option<String>,
-    /// The lead's to-do list is open under the header.
-    tasks_open: bool,
 }
 
 impl ChatState {
@@ -328,7 +326,7 @@ impl SeanceApp {
     fn chat_select(&mut self, ws: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.chat.selected.as_deref() != Some(ws) {
             self.chat.selected = Some(ws.to_string());
-            self.chat.tasks_open = false;
+            self.tasks_popover = None;
             self.chat.stick = 3;
         }
         // The lead's to-do poll follows the selected circle.
@@ -690,7 +688,8 @@ impl SeanceApp {
                     }),
             );
         let read_only = ws == ALERTS_WS;
-        let tasks_open = self.chat.tasks_open && !read_only;
+        let tasks_open = lead.as_deref().is_some_and(|l| self.tasks_popover_open(l));
+        let chip_lead = lead.clone();
         header = header.when(!read_only, |header| {
             header.child(
                 div()
@@ -709,9 +708,10 @@ impl SeanceApp {
                     .hover(|s| s.text_color(SeancePalette::flame()))
                     .cursor_pointer()
                     .tooltip(tip("the lead's tasks"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.chat.tasks_open = !this.chat.tasks_open;
-                        cx.notify();
+                    .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, window, cx| {
+                        if let Some(lead) = chip_lead.as_deref() {
+                            this.toggle_tasks_popover(lead, ev.position(), window, cx);
+                        }
                     }))
                     .child(format!("☑ {todo}")),
             )
@@ -781,21 +781,6 @@ impl SeanceApp {
                     .text_color(SeancePalette::danger())
                     .child(format!("Invoke: {e}")),
             );
-        }
-        if tasks_open {
-            if let Some(lead) = lead {
-                let empty = super::lead_tasks::LeadTasks::default();
-                let data = self.lead_tasks.get(&lead).unwrap_or(&empty);
-                col = col.child(
-                    div()
-                        .flex_none()
-                        .max_h(relative(0.4))
-                        .flex()
-                        .border_b_1()
-                        .border_color(SeancePalette::border())
-                        .child(self.render_tasks_face(&lead, data, cx)),
-                );
-            }
         }
         col.child(thread)
             .when(!read_only, |col| col.child(self.render_chat_composer(cx)))

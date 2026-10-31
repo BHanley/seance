@@ -7,8 +7,10 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gpui::{div, prelude::*, AnyElement, Context, SharedString, Window};
-use gpui_component::WindowExt as _;
+use gpui::{
+    anchored, deferred, div, point, prelude::*, px, Anchor, AnyElement, Context, Pixels, Point,
+    SharedString, Window,
+};
 use serde::Deserialize;
 
 use crate::events;
@@ -25,8 +27,17 @@ const FULL_TEXT_CAP: usize = 2500;
 const RETRY_OFF: Duration = Duration::from_secs(600);
 /// Timeouts in a row before the poll goes quiet.
 const TIMEOUTS_BEFORE_OFF: u8 = 3;
+/// The popover card's width and its share of the window height.
+const CARD_W: f32 = 420.;
+const CARD_MAX_H: f32 = 0.6;
 /// Phone tasks open with this line (Invoke); the face leaves it out.
 const PHONE_HEADER: &str = "📱 From Brian's phone (Invoke):";
+
+/// The open tasks card: whose, and where its chip was clicked.
+pub(super) struct TasksPopover {
+    pub(super) slug: String,
+    pub(super) at: Point<Pixels>,
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 pub(super) struct LeadTasks {
@@ -124,12 +135,6 @@ impl SeanceApp {
             cx.background_executor().timer(POLL_EVERY).await;
             let Some(this) = this.upgrade() else { break };
             let ask = this.update(cx, |app: &mut SeanceApp, _| {
-                // A face on a pane that is no longer a Classic lead goes away.
-                if let Some(slug) = app.tasks_face.clone() {
-                    if !app.tasks_face_up(&slug) {
-                        app.tasks_face = None;
-                    }
-                }
                 if app
                     .lead_tasks_off
                     .is_some_and(|at| at.elapsed() < RETRY_OFF)
@@ -181,66 +186,109 @@ impl SeanceApp {
         .detach();
     }
 
-    /// Chip count and, when this pane shows its tasks face, the face itself.
-    /// `None` for any pane that is not its circle's lead.
-    pub(super) fn lead_tasks_arg(
-        &self,
-        pane: &super::Pane,
-        cx: &Context<Self>,
-    ) -> Option<(usize, Option<AnyElement>)> {
+    /// Chip count and whether its popover is open. `None` for any pane that
+    /// is not its circle's lead.
+    pub(super) fn lead_tasks_arg(&self, pane: &super::Pane) -> Option<(usize, bool)> {
         if self.stage_lead(&pane.workspace).as_deref() != Some(pane.slug.as_str()) {
             return None;
         }
-        let empty = LeadTasks::default();
-        let data = self.lead_tasks.get(&pane.slug).unwrap_or(&empty);
-        let face = self
-            .tasks_face_up(&pane.slug)
-            .then(|| self.render_tasks_face(&pane.slug, data, cx));
-        Some((data.open_count(), face))
+        let open = self
+            .lead_tasks
+            .get(&pane.slug)
+            .map_or(0, LeadTasks::open_count);
+        Some((open, self.tasks_popover_open(&pane.slug)))
     }
 
-    /// Is this pane showing its tasks face? Only while it is still its
-    /// circle's lead and the layout is Classic: Stage draws the lead's
-    /// terminal with no chip to flip back.
-    pub(super) fn tasks_face_up(&self, slug: &str) -> bool {
-        self.tasks_face.as_deref() == Some(slug)
-            && self.view.mode == super::views::ViewMode::Classic
-            && self
-                .panes
-                .iter()
-                .find(|p| p.slug == slug)
-                .is_some_and(|p| self.stage_lead(&p.workspace).as_deref() == Some(slug))
+    pub(super) fn tasks_popover_open(&self, slug: &str) -> bool {
+        self.tasks_popover.as_ref().is_some_and(|p| p.slug == slug)
     }
 
-    /// Flip a lead onto its tasks face, or back if it is already there.
-    pub(super) fn toggle_tasks_face(
+    /// Open the lead's tasks card under the chip clicked at `at`, or close it
+    /// if it is already open. Focus never moves, so the terminal stays live.
+    pub(super) fn toggle_tasks_popover(
         &mut self,
         slug: &str,
+        at: Point<Pixels>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        window.end_text_selection(cx);
-        window.clear_text_selection(cx);
-        if self.tasks_face_up(slug) {
-            self.tasks_face = None;
-            if let Some(pane) = self.panes.iter().find(|p| p.slug == slug) {
-                pane.focus_content(window, cx);
-            }
-            cx.notify();
+        if self.tasks_popover_open(slug) {
+            self.close_tasks_popover(window, cx);
             return;
         }
-        // One face at a time: notes flip back first.
-        if self.is_notes_flipped(slug) {
-            self.flip_notes_for(slug, window, cx);
-        }
+        // The lead's to-do poll follows the selected circle.
         if let Some(pane) = self.panes.iter().find(|p| p.slug == slug) {
             self.selected_workspace = Some(pane.workspace.clone());
         }
-        self.active_slug = Some(slug.to_string());
-        self.tasks_face = Some(slug.to_string());
-        // The face has no terminal to take the keys: park focus on the root.
-        window.focus(&self.focus_handle, cx);
+        self.tasks_popover = Some(TasksPopover {
+            slug: slug.to_string(),
+            at,
+        });
         cx.notify();
+    }
+
+    /// Close the card; keyboard focus goes back to where it was.
+    pub(super) fn close_tasks_popover(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.tasks_popover.take().is_some() {
+            self.restore_keyboard_focus(window, cx);
+            cx.notify();
+        }
+    }
+
+    /// The floating card: raised, with its own scroll, over a backdrop that
+    /// catches the click-away (the same trick as the ✦ menu).
+    pub(super) fn render_tasks_popover(
+        &self,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
+        let pop = self.tasks_popover.as_ref()?;
+        let empty = LeadTasks::default();
+        let data = self.lead_tasks.get(&pop.slug).unwrap_or(&empty);
+        let card = div()
+            .id("tasks-popover")
+            .w(px(CARD_W))
+            .max_h(window.viewport_size().height * CARD_MAX_H)
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .rounded_lg()
+            .border_1()
+            .border_color(SeancePalette::border())
+            .bg(SeancePalette::bg_elevated())
+            .shadow_lg()
+            // Clicks inside the card must not reach the backdrop.
+            .on_click(|_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .child(self.render_tasks_face(&pop.slug, data, cx)),
+            );
+        Some(
+            deferred(
+                div()
+                    .id("tasks-popover-backdrop")
+                    .absolute()
+                    .inset_0()
+                    // Swallow mouse events so a click-away does not also land
+                    // in the terminal underneath.
+                    .occlude()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.close_tasks_popover(window, cx);
+                    }))
+                    .child(
+                        anchored()
+                            .position(point(pop.at.x + px(16.), pop.at.y + px(14.)))
+                            .anchor(Anchor::TopRight)
+                            .snap_to_window_with_margin(px(8.))
+                            .child(card),
+                    ),
+            )
+            .with_priority(10)
+            .into_any_element(),
+        )
     }
 
     pub(super) fn render_tasks_face(
