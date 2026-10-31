@@ -19,6 +19,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **The theme chooser in the Chat layout.** The ✦ seance mark now sits at the
+  top of Chat's circle list, above the layout switch, and opens the same menu as
+  in Classic and Stage (connected guis, and the dark and light themes with the
+  active one marked). A pick switches live in every window, and Chat, which draws
+  only from the active theme's colors, repaints with it.
 - **Tap-to-answer choices in the Chat layout.** When a lead's message offers
   choices (its `choice:` lines), they show as pill buttons in a wrapping row
   under the message, the first tinted as the lead's pick. Tapping one sends it

@@ -40,8 +40,9 @@ impl SeanceApp {
             return None;
         }
         let self_id = self.window_id.clone();
-        // Stage and Wall's space row holds the ✦ when it shows.
-        let top = if self.space_tabs_shown() {
+        // Stage and Wall's space row holds the ✦ when it shows; Chat's ✦ sits
+        // at the top of its circle list, with no tab row above it.
+        let top = if self.view.mode != super::views::ViewMode::Chat && self.space_tabs_shown() {
             self.space_tabs_h() + 2.
         } else {
             40.

@@ -880,6 +880,9 @@ impl SeanceApp {
                     .flex()
                     .flex_col()
                     .gap_2()
+                    // The ✦ opens the same menu as in Classic and Stage: the
+                    // connected guis and the theme list.
+                    .child(self.render_seance_mark("chat", cx))
                     .child(self.render_view_switch("chat", cx)),
             )
             .child(col)
