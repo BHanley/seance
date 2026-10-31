@@ -19,6 +19,10 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **Active section in the Chat layout.** The circle list starts with an
+  "Active" heading: circles (not alerts) with unread messages or a last
+  message under two hours old, newest first, the same rule as Invoke's
+  phone list. An active circle moves up out of its space until it cools off.
 - **Chat layout.** A third layout, next to classic and stage, takes
   Wall's place in the switch (ctrl+shift+t cycles classic, stage, chat; a
   saved or `ctl layout wall` still works and opens Chat; Wall's code and
