@@ -355,12 +355,20 @@ impl RemoteTerminalView {
         let Some(cell) = self.cell_at(pos, cx) else {
             return false;
         };
+        let span = seance_core::links::code_span_at(&snap, cell.row, cell.col);
         let found = seance_core::links::path_candidates_at(&snap, cell.row, cell.col)
-            .iter()
-            .find_map(|p| existing_path(p));
-        if let Some(path) = found {
-            self.clear_selection();
+            .into_iter()
+            .find_map(|p| existing_path(&p).map(|found| (p, found)));
+        // A command span that holds a path (`cat /etc/hosts`) still copies whole.
+        let in_command = |p: &str| {
+            span.as_ref()
+                .is_some_and(|s| s.chars().count() > p.chars().count())
+        };
+        if let Some((printed, path)) = found.filter(|(p, _)| !in_command(p)) {
             crate::sysopen::reveal_detached(&path);
+            // Copied too, as the word under a double-click used to be.
+            self.clear_selection();
+            self.copy_text(printed, window, cx);
             return true;
         }
         // Web links only: `ls --hyperlink` and systemd wrap file names in
@@ -1075,17 +1083,23 @@ fn open_uri(uri: &str) {
 /// (~/Claude, ~/github), and the other way round, so a missing home path is
 /// tried again under this machine's home.
 fn existing_path(printed: &str) -> Option<std::path::PathBuf> {
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from)?;
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     let mut tries = Vec::new();
     if let Some(rest) = printed.strip_prefix("~/") {
-        tries.push(home.join(rest));
+        tries.extend(home.map(|h| h.join(rest)));
     } else {
-        tries.push(std::path::PathBuf::from(printed));
+        let mut remapped = None;
         for root in ["/home/", "/Users/"] {
             if let Some((_user, rest)) = printed.strip_prefix(root).and_then(|t| t.split_once('/'))
             {
-                tries.push(home.join(rest));
+                remapped = home.as_ref().map(|h| h.join(rest));
             }
+        }
+        // /home on macOS is an automount that can stall a lookup, so the
+        // remap goes first and the literal path is skipped there.
+        tries.extend(remapped);
+        if !(cfg!(target_os = "macos") && printed.starts_with("/home/")) {
+            tries.push(std::path::PathBuf::from(printed));
         }
     }
     tries.into_iter().find(|p| p.exists())

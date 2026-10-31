@@ -355,12 +355,31 @@ const PATH_ROWS: u16 = 6;
 /// later space or at the line's end; the caller keeps the first that exists.
 /// Trailing punctuation and a `:line:col` suffix are dropped.
 pub fn path_candidates_at(snap: &GridSnapshot, row: u16, col: u16) -> Vec<String> {
-    let Some((chars, hit)) = path_line(snap, row, col) else {
-        return Vec::new();
-    };
-    if chars[hit] == ' ' {
+    let cols = snap.cols as usize;
+    if cols == 0 || col as usize >= cols || (row as usize + 1) * cols > snap.cells.len() {
         return Vec::new();
     }
+    if row_chars(snap, row)[col as usize].c == ' ' {
+        return Vec::new();
+    }
+    // Claude wraps prose at a space, but breaks a token too long for its
+    // width mid-word: read each of its wraps both ways.
+    let mut out: Vec<String> = Vec::new();
+    for glue in [false, true] {
+        if let Some((chars, hit)) = path_line(snap, row, col, glue) {
+            for p in paths_over(&chars, hit) {
+                if !out.contains(&p) {
+                    out.push(p);
+                }
+            }
+        }
+    }
+    out.sort_by_key(|p| std::cmp::Reverse(p.chars().count()));
+    out
+}
+
+/// Every path in `chars` that starts at a word boundary and covers `hit`.
+fn paths_over(chars: &[char], hit: usize) -> Vec<String> {
     let boundary = |i: usize| i == 0 || " \t`'\"([<=".contains(chars[i - 1]);
     let starts_path = |i: usize| {
         boundary(i)
@@ -383,15 +402,15 @@ pub fn path_candidates_at(snap: &GridSnapshot, row: u16, col: u16) -> Vec<String
             }
         }
     }
-    out.sort_by_key(|p| std::cmp::Reverse(p.chars().count()));
     out
 }
 
 /// The rows around `row` joined the way a path could run through them, plus
 /// where `col` landed. A full row runs straight on (the terminal wrapped it).
-/// A shorter row followed by an indented one is Claude wrapping its reply at
-/// a space, so the two join with one space and the indent dropped.
-fn path_line(snap: &GridSnapshot, row: u16, col: u16) -> Option<(Vec<char>, usize)> {
+/// A shorter row followed by an indented one is Claude wrapping its reply:
+/// the indent is dropped and the rows join with one space, or with none
+/// when `glue` (a token Claude broke mid-word).
+fn path_line(snap: &GridSnapshot, row: u16, col: u16, glue: bool) -> Option<(Vec<char>, usize)> {
     let cols = snap.cols as usize;
     if cols == 0 || snap.cells.is_empty() || col as usize >= cols {
         return None;
@@ -427,13 +446,13 @@ fn path_line(snap: &GridSnapshot, row: u16, col: u16) -> Option<(Vec<char>, usiz
     for r in start..rows.min(row + PATH_ROWS + 1) {
         let mut cells = text(r);
         let mut lead = 0;
-        if let Some(on) = how {
+        if how == Some(false) {
             lead = cells.iter().take_while(|c| **c == ' ').count();
             cells.drain(..lead);
-            if !on {
-                while line.last() == Some(&' ') {
-                    line.pop();
-                }
+            while line.last() == Some(&' ') {
+                line.pop();
+            }
+            if !glue {
                 line.push(' ');
             }
         }
@@ -907,6 +926,33 @@ mod tests {
         let snap = grid_of(20, &["at /var/log/seance-d", "aemon.log now"]);
         let got = path_candidates_at(&snap, 1, 2);
         assert!(got.iter().any(|p| p == "/var/log/seance-daemon.log"));
+    }
+
+    /// A double-click on blank cells (a wrapped row's empty tail or the next
+    /// row's indent) is never a path, from review (2026-10-30).
+    #[test]
+    fn blank_cells_beside_a_wrapped_path_are_not_paths() {
+        let snap = grid_of(
+            44,
+            &[
+                "● Saved to /home/b/Claude/Projects/Seance",
+                "  Demo/Rüdle log.md. Next I run it.",
+            ],
+        );
+        assert!(path_candidates_at(&snap, 0, 42).is_empty());
+        assert!(path_candidates_at(&snap, 1, 0).is_empty());
+    }
+
+    /// Claude breaks a path longer than its width mid-word and indents the
+    /// rest; a terminal wrap keeps the next row's leading space.
+    #[test]
+    fn a_path_broken_mid_word_or_wrapped_before_a_space_is_found() {
+        let snap = grid_of(30, &["● see /home/b/Projects/ve  ", "  ry-long/LOG.md now"]);
+        let got = path_candidates_at(&snap, 0, 8);
+        assert!(got.iter().any(|p| p == "/home/b/Projects/very-long/LOG.md"));
+        let snap = grid_of(17, &["/tmp/My Folder/My", " Notes/x.md"]);
+        let got = path_candidates_at(&snap, 0, 2);
+        assert!(got.iter().any(|p| p == "/tmp/My Folder/My Notes/x.md"));
     }
 
     #[test]
