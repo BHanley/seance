@@ -98,6 +98,17 @@ fn enc(s: &str) -> String {
         .collect()
 }
 
+/// `scheme://host[:port]` of the base URL: what Invoke's POST handler wants
+/// in `Origin` (it refuses a request without it, 403).
+fn origin(base: &str) -> String {
+    match base.split_once("://") {
+        Some((scheme, rest)) => {
+            format!("{scheme}://{}", rest.split('/').next().unwrap_or(rest))
+        }
+        None => base.to_string(),
+    }
+}
+
 fn curl(path: &str, secs: u64, post: Option<&serde_json::Value>) -> Result<Vec<u8>> {
     let mut cmd = Command::new("curl");
     cmd.args(["-sS", "-f", "-m", &secs.to_string()]);
@@ -107,6 +118,8 @@ fn curl(path: &str, secs: u64, post: Option<&serde_json::Value>) -> Result<Vec<u
             "POST",
             "-H",
             "content-type: application/json",
+            "-H",
+            &format!("Origin: {}", origin(&base())),
             "--data-binary",
             "@-",
         ]);
@@ -140,18 +153,21 @@ pub fn circles() -> Result<Circles> {
     get("/api/circles", REQUEST_SECS)
 }
 
-pub fn thread(ws: &str) -> Result<Thread> {
-    get(&format!("/api/thread?ws={}", enc(ws)), REQUEST_SECS)
+/// The circle's thread; with `after`, only the messages past that id.
+pub fn thread(ws: &str, after: Option<i64>) -> Result<Thread> {
+    let after = after.map_or(String::new(), |id| format!("&after={id}"));
+    get(&format!("/api/thread?ws={}{after}", enc(ws)), REQUEST_SECS)
 }
 
 pub fn progress(ws: &str) -> Result<Progress> {
     get(&format!("/api/tasks?ws={}", enc(ws)), REQUEST_SECS)
 }
 
-/// Blocks until Invoke's change counter moves past `v` or `secs` run out.
-/// Returns the counter either way.
-pub fn poll(v: u64, secs: u64) -> Result<u64> {
-    Ok(get::<Poll>(&format!("/api/poll?v={v}"), secs)?.v)
+/// Blocks until Invoke's change counter moves past `v`, or its own wait of
+/// `wait` seconds runs out. Returns the counter either way. curl's limit sits
+/// past the server's wait, or every quiet poll would end in a timeout.
+pub fn poll(v: u64, wait: u64) -> Result<u64> {
+    Ok(get::<Poll>(&format!("/api/poll?v={v}"), wait + 10)?.v)
 }
 
 pub fn send(ws: &str, text: &str) -> Result<()> {
@@ -220,6 +236,18 @@ mod tests {
         assert_eq!(t.read, 3);
         assert_eq!(t.messages[0].from, "me");
         assert_eq!(t.messages[0].image, None);
+    }
+
+    #[test]
+    fn origin_drops_the_path() {
+        assert_eq!(
+            origin("https://xps.tail5c9413.ts.net:8443"),
+            "https://xps.tail5c9413.ts.net:8443"
+        );
+        assert_eq!(
+            origin("http://localhost:9000/invoke/"),
+            "http://localhost:9000"
+        );
     }
 
     #[test]

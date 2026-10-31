@@ -787,7 +787,9 @@ impl SeanceApp {
                 .await;
             let Some(this) = this.upgrade() else { break };
             this.update(cx, |app: &mut SeanceApp, cx| {
-                if !app.workspace_was_working.is_empty() || app.chat.any_working() {
+                if !app.workspace_was_working.is_empty()
+                    || (app.view.mode == views::ViewMode::Chat && app.chat.any_working())
+                {
                     cx.notify();
                 }
             });
@@ -1893,6 +1895,26 @@ impl SeanceApp {
         // Every chrome chord below spells its modifier as ctrl, and as cmd too
         // on macOS — see `chord_modifier_held`.
         let chord_mod = chord_modifier_held(&ks.modifiers, cfg!(target_os = "macos"));
+
+        // Chat shows no pane. Chords that move between panes, close, rename or
+        // pop one out would act on something unseen, and cmd+shift+arrows is
+        // text selection in the composer: they pass through to it.
+        let paged_now = arrow_stands_in_for_page(key, &ks.modifiers, cfg!(target_os = "macos"));
+        if self.view.mode == views::ViewMode::Chat
+            && chord_mod
+            && (paged_now
+                || matches!(
+                    key,
+                    "pageup" | "page_up" | "prior" | "pagedown" | "page_down" | "next"
+                )
+                || (ks.modifiers.shift
+                    && matches!(
+                        key,
+                        "n" | "w" | "s" | "o" | "r" | "up" | "down" | "left" | "right" | "home"
+                    )))
+        {
+            return;
+        }
 
         // Ctrl+PageUp/Down — cycle workspaces; Ctrl+Shift+Page — cycle panes.
         // Accept pageup/pagedown (GPUI) and common aliases, plus the mac's

@@ -99,7 +99,7 @@ fn strip_spinner(line: &str) -> &str {
 }
 
 /// HH:MM, with the date (MM-DD) in front of a time before today.
-fn clock(ms: u64) -> String {
+pub(super) fn clock(ms: u64) -> String {
     let time = &events::fmt_time(ms)[..5];
     if ms < events::local_day_start_ms(now_ms()) {
         format!("{} {time}", &events::local_date(ms)[5..])

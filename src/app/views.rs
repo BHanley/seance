@@ -193,6 +193,9 @@ impl SeanceApp {
             self.stage_enter();
         }
         self.view.mode = mode;
+        if mode == ViewMode::Chat {
+            self.chat.focus_input = true;
+        }
         self.stage.peek = None;
         if self.overview() != was_wall {
             let _ = self.client.set_overview(!was_wall);

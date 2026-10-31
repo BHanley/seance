@@ -18,9 +18,9 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use regex::Regex;
 
 use crate::chat_api::{self, CircleRow, Circles, Msg, Progress, Thread};
-use crate::events;
 use crate::theme::SeancePalette;
 
+use super::lead_tasks::clock;
 use super::util::{now_ms, tip};
 use super::views::ViewMode;
 use super::SeanceApp;
@@ -32,6 +32,8 @@ const RETRY: Duration = Duration::from_secs(3);
 /// While another layout is up the loop only checks back this often.
 const IDLE: Duration = Duration::from_secs(1);
 const LIST_W: f32 = 300.;
+/// Invoke's alerts circle is read-only: nothing to say, no lead to open.
+const ALERTS_WS: &str = "alerts";
 
 #[derive(Default)]
 pub(super) struct ChatState {
@@ -45,8 +47,18 @@ pub(super) struct ChatState {
     scroll: ScrollHandle,
     /// Frames left to pin the thread to its newest message.
     stick: u8,
-    /// Highest id already reported read, per circle.
+    /// Highest id Invoke confirmed read, per circle.
     read_sent: HashMap<String, i64>,
+    /// Circles with a read report in flight.
+    read_busy: HashSet<String>,
+    /// Whether this window was the active one at the last frame.
+    window_active: bool,
+    /// Counts down from zero: ids for bubbles shown before Invoke has them.
+    next_local: i64,
+    /// Text of a send that failed, to put back in the composer.
+    restore: Option<String>,
+    /// Focus the composer at the next frame (switching into Chat).
+    pub(super) focus_input: bool,
     /// Image name to its cached file, once fetched.
     images: HashMap<String, PathBuf>,
     image_asked: HashSet<String>,
@@ -56,6 +68,18 @@ pub(super) struct ChatState {
 }
 
 impl ChatState {
+    /// Newest message Invoke has given us for `ws`: a refresh asks only for
+    /// what comes after it.
+    fn last_id(&self, ws: &str) -> Option<i64> {
+        self.threads
+            .get(ws)?
+            .messages
+            .iter()
+            .map(|m| m.id)
+            .filter(|id| *id > 0)
+            .max()
+    }
+
     pub(super) fn any_working(&self) -> bool {
         self.circles.iter().any(|c| c.working)
     }
@@ -64,12 +88,13 @@ impl ChatState {
 /// One round's answers; a failed call leaves its part as it was.
 struct Round {
     circles: Option<Circles>,
-    thread: Option<(String, Thread)>,
+    /// The thread, and whether it holds only the messages past an id.
+    thread: Option<(String, Thread, bool)>,
     progress: Option<(String, Progress)>,
     error: Option<String>,
 }
 
-fn fetch_round(ws: Option<String>) -> Round {
+fn fetch_round(ws: Option<String>, after: Option<i64>) -> Round {
     let mut round = Round {
         circles: None,
         thread: None,
@@ -81,7 +106,9 @@ fn fetch_round(ws: Option<String>) -> Round {
         Err(e) => round.error = Some(e.to_string()),
     }
     if let (Some(ws), None) = (ws, &round.error) {
-        round.thread = chat_api::thread(&ws).ok().map(|t| (ws.clone(), t));
+        round.thread = chat_api::thread(&ws, after)
+            .ok()
+            .map(|t| (ws.clone(), t, after.is_some()));
         round.progress = chat_api::progress(&ws).ok().map(|p| (ws, p));
     }
     round
@@ -124,8 +151,10 @@ impl SeanceApp {
     pub(super) fn start_chat_poll(cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| loop {
             let Some(this) = this.upgrade() else { break };
-            let (on, ws) = this.update(cx, |app: &mut SeanceApp, _| {
-                (app.view.mode == ViewMode::Chat, app.chat.selected.clone())
+            let (on, ws, after) = this.update(cx, |app: &mut SeanceApp, _| {
+                let ws = app.chat.selected.clone();
+                let after = ws.as_deref().and_then(|w| app.chat.last_id(w));
+                (app.view.mode == ViewMode::Chat, ws, after)
             });
             if !on {
                 cx.background_executor().timer(IDLE).await;
@@ -133,7 +162,7 @@ impl SeanceApp {
             }
             let round = cx
                 .background_executor()
-                .spawn(async move { fetch_round(ws) })
+                .spawn(async move { fetch_round(ws, after) })
                 .await;
             let failed = round.error.is_some();
             let v = this.update(cx, |app: &mut SeanceApp, cx| {
@@ -174,17 +203,36 @@ impl SeanceApp {
         if let Some((ws, p)) = round.progress {
             chat.progress.insert(ws, p);
         }
-        if let Some((ws, t)) = round.thread {
-            self.apply_thread(ws, t, cx);
+        if let Some((ws, t, delta)) = round.thread {
+            self.apply_thread(ws, t, delta, cx);
         }
         cx.notify();
     }
 
-    fn apply_thread(&mut self, ws: String, thread: Thread, cx: &mut Context<Self>) {
+    /// Take in a thread answer. A `delta` holds only the messages past what
+    /// we had; they join it, and bubbles shown before Invoke had them go.
+    fn apply_thread(
+        &mut self,
+        ws: String,
+        mut thread: Thread,
+        delta: bool,
+        cx: &mut Context<Self>,
+    ) {
         let chat = &mut self.chat;
-        let newest = thread.messages.last().map_or(0, |m| m.id);
-        let old = chat.threads.get(&ws).and_then(|t| t.messages.last());
-        if old.map(|m| m.id) != Some(newest) || chat.selected.as_deref() == Some(&ws) {
+        let before = chat.last_id(&ws);
+        if delta {
+            let mut merged = chat.threads.remove(&ws).unwrap_or_default().messages;
+            merged.retain(|m| m.id > 0);
+            for m in std::mem::take(&mut thread.messages) {
+                match merged.iter_mut().find(|o| o.id == m.id) {
+                    Some(o) => *o = m,
+                    None => merged.push(m),
+                }
+            }
+            thread.messages = merged;
+        }
+        let newest = thread.messages.iter().map(|m| m.id).max().unwrap_or(0);
+        if before != Some(newest) {
             chat.stick = 3;
         }
         // Images the thread shows: fetch each once.
@@ -213,18 +261,48 @@ impl SeanceApp {
                 .detach();
             }
         }
-        // Reading the open thread tells Invoke, so the phone's badge clears.
-        let open = chat.selected.as_deref() == Some(&ws);
-        if open && newest > thread.read && chat.read_sent.get(&ws).is_none_or(|r| *r < newest) {
-            chat.read_sent.insert(ws.clone(), newest);
-            let ws = ws.clone();
-            cx.background_executor()
-                .spawn(async move {
-                    let _ = chat_api::mark_read(&ws, newest);
-                })
-                .detach();
-        }
         chat.threads.insert(ws, thread);
+    }
+
+    /// Reading the open thread tells Invoke, so the phone's badge clears: only
+    /// while this window is the active one and Chat is showing that thread.
+    fn maybe_mark_read(&mut self, cx: &mut Context<Self>) {
+        let chat = &mut self.chat;
+        let Some(ws) = chat.selected.clone() else {
+            return;
+        };
+        if self.view.mode != ViewMode::Chat || !chat.window_active || chat.read_busy.contains(&ws) {
+            return;
+        }
+        let Some(thread) = chat.threads.get(&ws) else {
+            return;
+        };
+        let Some(newest) = chat.last_id(&ws) else {
+            return;
+        };
+        let done = thread
+            .read
+            .max(chat.read_sent.get(&ws).copied().unwrap_or(0));
+        if newest <= done {
+            return;
+        }
+        chat.read_busy.insert(ws.clone());
+        cx.spawn(async move |this, cx| {
+            let at = ws.clone();
+            let sent = cx
+                .background_executor()
+                .spawn(async move { chat_api::mark_read(&at, newest) })
+                .await;
+            let Some(this) = this.upgrade() else { return };
+            this.update(cx, |app: &mut SeanceApp, _| {
+                app.chat.read_busy.remove(&ws);
+                // Only a report Invoke accepted counts; a failed one is retried.
+                if sent.is_ok() {
+                    app.chat.read_sent.insert(ws, newest);
+                }
+            });
+        })
+        .detach();
     }
 
     fn chat_select(&mut self, ws: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -242,10 +320,11 @@ impl SeanceApp {
             window.focus(&focus, cx);
         }
         let ws = ws.to_string();
+        let after = self.chat.last_id(&ws);
         cx.spawn(async move |this, cx| {
             let round = cx
                 .background_executor()
-                .spawn(async move { fetch_round(Some(ws)) })
+                .spawn(async move { fetch_round(Some(ws), after) })
                 .await;
             let Some(this) = this.upgrade() else { return };
             this.update(cx, |app: &mut SeanceApp, cx| app.apply_round(round, cx));
@@ -258,15 +337,21 @@ impl SeanceApp {
         let (Some(ws), Some(input)) = (self.chat.selected.clone(), self.chat.input.clone()) else {
             return;
         };
+        if ws == ALERTS_WS {
+            return;
+        }
         let text = input.read(cx).value().trim().to_string();
         if text.is_empty() {
             return;
         }
         input.update(cx, |i, cx| i.set_value("", window, cx));
         // Shown at once; the next thread answer replaces it with the real one.
+        self.chat.next_local -= 1;
+        let local_id = self.chat.next_local;
+        let after = self.chat.last_id(&ws);
         let thread = self.chat.threads.entry(ws.clone()).or_default();
         thread.messages.push(Msg {
-            id: -1,
+            id: local_id,
             from: "me".into(),
             text: text.clone(),
             ts: now_ms(),
@@ -275,20 +360,24 @@ impl SeanceApp {
         self.chat.stick = 3;
         cx.spawn(async move |this, cx| {
             let to = ws.clone();
+            let body = text.clone();
             let sent = cx
                 .background_executor()
-                .spawn(async move { chat_api::send(&to, &text) })
+                .spawn(async move { chat_api::send(&to, &body) })
                 .await;
             let round = cx
                 .background_executor()
-                .spawn(async move { fetch_round(Some(ws)) })
+                .spawn(async move { fetch_round(Some(ws), after) })
                 .await;
             let Some(this) = this.upgrade() else { return };
             this.update(cx, |app: &mut SeanceApp, cx| {
                 app.apply_round(round, cx);
                 if let Err(e) = sent {
+                    // Not sent: the words go back where they were typed.
                     app.chat.error = Some(format!("not sent: {e}"));
+                    app.chat.restore = Some(text);
                 }
+                cx.notify();
             });
         })
         .detach();
@@ -342,6 +431,17 @@ impl SeanceApp {
             window.focus(&focus, cx);
             self.chat.input = Some(input);
         }
+        self.chat.window_active = window.is_window_active();
+        if let Some(input) = self.chat.input.clone() {
+            if let Some(text) = self.chat.restore.take() {
+                input.update(cx, |i, cx| i.set_value(text, window, cx));
+            }
+            if std::mem::take(&mut self.chat.focus_input) {
+                let focus = input.read(cx).focus_handle(cx);
+                window.focus(&focus, cx);
+            }
+        }
+        self.maybe_mark_read(cx);
         if self.chat.stick > 0 {
             self.chat.stick -= 1;
             self.chat.scroll.scroll_to_bottom();
@@ -581,25 +681,30 @@ impl SeanceApp {
                 }))
                 .child(format!("☑ {todo}")),
         );
-        header = header.child(
-            div()
-                .id("chat-terminal")
-                .flex_none()
-                .px_2()
-                .py_0p5()
-                .rounded_sm()
-                .text_xs()
-                .text_color(SeancePalette::text_dim())
-                .bg(SeancePalette::surface())
-                .hover(|s| s.text_color(SeancePalette::flame()))
-                .cursor_pointer()
-                .tooltip(tip("flip to Classic, on this circle's lead"))
-                .on_click({
-                    let ws = ws.clone();
-                    cx.listener(move |this, _, window, cx| this.chat_show_terminal(&ws, window, cx))
-                })
-                .child("show terminal"),
-        );
+        let read_only = ws == ALERTS_WS;
+        header = header.when(!read_only, |header| {
+            header.child(
+                div()
+                    .id("chat-terminal")
+                    .flex_none()
+                    .px_2()
+                    .py_0p5()
+                    .rounded_sm()
+                    .text_xs()
+                    .text_color(SeancePalette::text_dim())
+                    .bg(SeancePalette::surface())
+                    .hover(|s| s.text_color(SeancePalette::flame()))
+                    .cursor_pointer()
+                    .tooltip(tip("flip to Classic, on this circle's lead"))
+                    .on_click({
+                        let ws = ws.clone();
+                        cx.listener(move |this, _, window, cx| {
+                            this.chat_show_terminal(&ws, window, cx)
+                        })
+                    })
+                    .child("show terminal"),
+            )
+        });
 
         let mut thread = div()
             .id("chat-thread")
@@ -659,7 +764,7 @@ impl SeanceApp {
             }
         }
         col.child(thread)
-            .child(self.render_chat_composer(cx))
+            .when(!read_only, |col| col.child(self.render_chat_composer(cx)))
             .into_any_element()
     }
 
@@ -708,6 +813,11 @@ impl SeanceApp {
             );
         }
         for (i, line) in m.text.lines().enumerate() {
+            // Most lines hold no link: one text node, not a div per word.
+            if !line.contains("://") {
+                body = body.child(div().min_h(px(14.)).child(line.to_string()));
+                continue;
+            }
             body = body.child(
                 div()
                     .id(SharedString::from(format!("bubble-{}-{i}", m.id)))
@@ -719,28 +829,22 @@ impl SeanceApp {
                             .into_iter()
                             .enumerate()
                             .map(|(j, (word, link))| {
-                                let part = div()
-                                    .id(SharedString::from(format!("w-{}-{i}-{j}", m.id)))
-                                    .child(format!("{word} "));
+                                let part = div().child(format!("{word} "));
                                 match link {
                                     Some(url) => part
+                                        .id(SharedString::from(format!("w-{}-{i}-{j}", m.id)))
                                         .text_color(SeancePalette::flame())
                                         .cursor_pointer()
                                         .hover(|s| s.underline())
-                                        .on_click(
-                                            cx.listener(move |_, _, _, cx| cx.open_url(&url)),
-                                        ),
-                                    None => part,
+                                        .on_click(cx.listener(move |_, _, _, cx| cx.open_url(&url)))
+                                        .into_any_element(),
+                                    None => part.into_any_element(),
                                 }
                             }),
                     ),
             );
         }
-        let stamp = if m.ts > 0 {
-            events::fmt_time(m.ts)[..5].to_string()
-        } else {
-            String::new()
-        };
+        let stamp = if m.ts > 0 { clock(m.ts) } else { String::new() };
         if system {
             return div()
                 .flex()
