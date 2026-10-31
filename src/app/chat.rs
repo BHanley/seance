@@ -15,9 +15,11 @@ use gpui::{
     SharedString, Window,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::StyledExt as _;
 use regex::Regex;
 
-use crate::chat_api::{self, CircleRow, Circles, Msg, Progress, Thread};
+use crate::chat_api::{self, CircleRow, Circles, Msg, Progress, Thread, Usage, UsageWindow};
+use crate::events;
 use crate::theme::SeancePalette;
 
 use super::lead_tasks::clock;
@@ -69,6 +71,8 @@ pub(super) struct ChatState {
     images: HashMap<String, PathBuf>,
     image_asked: HashSet<String>,
     error: Option<String>,
+    /// Claude plan usage from the last thread answer; none hides the strip.
+    usage: Option<Usage>,
 }
 
 impl ChatState {
@@ -167,6 +171,70 @@ fn active_circles(circles: &[CircleRow], now: u64) -> Vec<CircleRow> {
         .collect();
     active.sort_by_key(|c| std::cmp::Reverse(c.last.as_ref().map_or(0, |m| m.ts)));
     active
+}
+
+/// 12-hour clock, as the phone shows it: "12:50 PM", or with a weekday and
+/// no minutes for the weekly reset: "Thu 2 AM".
+fn reset_label(ts_ms: u64, with_day: bool) -> String {
+    const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    let (day, hour, minute) = events::local_clock(ts_ms);
+    let h12 = if hour % 12 == 0 { 12 } else { hour % 12 };
+    let ampm = if hour < 12 { "AM" } else { "PM" };
+    if with_day {
+        format!("{} {h12} {ampm}", DAYS[day as usize % 7])
+    } else {
+        format!("{h12}:{minute:02} {ampm}")
+    }
+}
+
+/// The thin usage line under the thread header, like the phone's: "5h 18% ·
+/// ⟳ 12:50 PM   7d 35% · ⟳ Thu 2 AM". Numbers go red from 80%. None when
+/// neither window is known.
+fn usage_strip(u: &Usage) -> Option<AnyElement> {
+    let part = |label: &str, w: &UsageWindow, with_day: bool| {
+        let hot = w.used >= 80.;
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(label.to_string())
+            .child(
+                div()
+                    .font_semibold()
+                    .text_color(if hot {
+                        SeancePalette::danger()
+                    } else {
+                        SeancePalette::text_faint()
+                    })
+                    .child(format!("{}%", w.used.round() as i64)),
+            )
+            .children(
+                w.resets
+                    .map(|at| format!("· ⟳ {}", reset_label(at, with_day))),
+            )
+    };
+    let parts: Vec<_> = [
+        u.five_hour.as_ref().map(|w| part("5h", w, false)),
+        u.seven_day.as_ref().map(|w| part("7d", w, true)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if parts.is_empty() {
+        return None;
+    }
+    Some(
+        div()
+            .flex_none()
+            .py_1()
+            .flex()
+            .justify_center()
+            .gap_4()
+            .text_xs()
+            .text_color(SeancePalette::text_faint())
+            .children(parts)
+            .into_any_element(),
+    )
 }
 
 /// A list heading: a space's name, or Active.
@@ -294,6 +362,7 @@ impl SeanceApp {
                 .detach();
             }
         }
+        chat.usage = thread.usage.clone();
         chat.threads.insert(ws, thread);
     }
 
@@ -804,7 +873,8 @@ impl SeanceApp {
             .h_full()
             .flex()
             .flex_col()
-            .child(header);
+            .child(header)
+            .children(self.chat.usage.as_ref().and_then(usage_strip));
         if let Some(e) = &self.chat.error {
             col = col.child(
                 div()
@@ -945,6 +1015,32 @@ mod tests {
         assert_eq!(w[1].1.as_deref(), Some("https://bike.rodeo/x/"));
         assert_eq!(w[0].1, None);
         assert_eq!(w[3].1.as_deref(), Some("https://a.b/c"));
+    }
+
+    #[test]
+    fn reset_labels_use_a_12_hour_clock() {
+        // Whatever the machine's zone, the shape is fixed.
+        let short = reset_label(1_793_000_000_000, false);
+        assert!(short.ends_with("AM") || short.ends_with("PM"), "{short}");
+        assert!(short.contains(':'), "{short}");
+        let long = reset_label(1_793_000_000_000, true);
+        assert!(
+            !long.contains(':') && long.split(' ').count() == 3,
+            "{long}"
+        );
+    }
+
+    #[test]
+    fn usage_strip_hides_without_windows() {
+        assert!(usage_strip(&Usage::default()).is_none());
+        let one = Usage {
+            five_hour: Some(UsageWindow {
+                used: 18.,
+                resets: None,
+            }),
+            seven_day: None,
+        };
+        assert!(usage_strip(&one).is_some());
     }
 
     #[test]

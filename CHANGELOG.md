@@ -19,6 +19,10 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **Claude usage in the Chat layout.** A thin centered line under the
+  thread header shows the plan usage the phone shows ("5h 18% · ⟳ 12:50 PM
+  7d 35% · ⟳ Thu 2 AM"): numbers turn red from 80%, and the line hides
+  when Invoke reports no usage.
 - **Active section in the Chat layout.** The circle list starts with an
   "Active" heading: circles (not alerts) with unread messages or a last
   message under two hours old, newest first, the same rule as Invoke's
