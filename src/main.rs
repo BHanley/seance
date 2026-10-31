@@ -2,6 +2,7 @@ mod agency;
 mod agents;
 mod app;
 mod caps;
+mod chat_api;
 mod clipboard;
 mod cmdlog;
 mod control;

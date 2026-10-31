@@ -243,7 +243,12 @@ impl SeanceApp {
         cx.notify();
     }
 
-    fn render_tasks_face(&self, slug: &str, data: &LeadTasks, cx: &Context<Self>) -> AnyElement {
+    pub(super) fn render_tasks_face(
+        &self,
+        slug: &str,
+        data: &LeadTasks,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let now = now_ms();
         let label = |text: &str| {
             div()

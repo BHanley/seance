@@ -406,7 +406,7 @@ COMMANDS:
     sleep [WS]                    sleep a circle (frees its RAM; wakes on resume)
     wake [WS]                     wake a sleeping circle
     theme [ID]                    color scheme: show the list, or switch every window
-    layout [NAME]                 classic / stage / wall: list windows, or switch every window
+    layout [NAME]                 classic / stage / chat: list windows, or switch every window
     whoami / caps / grant / revoke / policy
     seize / release / drive PANE  co-presence ownership
     wait PANE [opts]              block until condition
