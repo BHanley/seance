@@ -19,6 +19,12 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **Claude's replies in their own colour.** In a Claude Code pane, the
+  reply text (from Claude's `●` down to the next tool call or prompt) is
+  painted in the theme's accent, eased to read at 7:1, so it stands apart
+  from command output, which Claude draws in the same plain colour. Code,
+  links and other coloured text keep their colours.
+
 - **Claude plan usage in the footer.** Stage's footer (and the Wall's
   feed) shows a bar per Claude limit, 5 hour and weekly, with percent used
   and time to reset, read from `seance-usage-file` every 15 s. The health
