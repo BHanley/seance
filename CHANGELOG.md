@@ -19,6 +19,13 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **Tap-to-answer choices in the Chat layout.** When a lead's message offers
+  choices (its `choice:` lines), they show as pill buttons in a wrapping row
+  under the message, the first tinted as the lead's pick. Tapping one sends it
+  as your message, tied to the message it answers; the tapped pill fills, the
+  others dim and everything goes dead. A message that was already answered
+  (here or on the phone) shows its picked pill filled. A failed send brings the
+  pills back with the reason on top.
 - **Parked tasks can be sent back or closed from the tasks card.** Each
   Parked row (in Classic and in the Chat header's card) gets a round ↩
   button ("do this next": the lead gets the task again as your message and

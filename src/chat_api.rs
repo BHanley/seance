@@ -55,6 +55,12 @@ pub struct Msg {
     /// Every picture of a note that has more than one (`image` is the first).
     #[serde(default)]
     pub images: Vec<String>,
+    /// Answers a lead offers (from its `choice:` lines); the first is its pick.
+    #[serde(default)]
+    pub choices: Vec<String>,
+    /// The choice that was tapped, once one has been.
+    #[serde(default)]
+    pub picked: Option<String>,
 }
 
 impl Msg {
@@ -318,6 +324,17 @@ pub fn dismiss(ws: &str, id: &str) -> Result<()> {
     .map(|_| ())
 }
 
+/// Answer a lead's message with one of its choices: sent as Brian's message,
+/// tied to the message it answers so Invoke can mark the pick.
+pub fn answer(ws: &str, text: &str, answers: i64) -> Result<()> {
+    curl(
+        "/api/send",
+        REQUEST_SECS,
+        Some(&serde_json::json!({ "ws": ws, "text": text, "answers": answers })),
+    )
+    .map(|_| ())
+}
+
 pub fn mark_read(ws: &str, id: i64) -> Result<()> {
     curl(
         "/api/read",
@@ -465,6 +482,18 @@ mod tests {
         assert_eq!(size_from_header(&webp), Some((800, 512)));
         assert_eq!(size_from_header(b"not a picture"), None);
         assert_eq!(size_from_header(b"\x89PNG"), None);
+    }
+
+    #[test]
+    fn choices_and_the_pick_parse() {
+        let m: Msg = serde_json::from_str(
+            r#"{"id":7,"from":"lead","text":"which?","choices":["a","b"],"picked":"b"}"#,
+        )
+        .unwrap();
+        assert_eq!(m.choices, ["a", "b"]);
+        assert_eq!(m.picked.as_deref(), Some("b"));
+        let plain: Msg = serde_json::from_str(r#"{"id":8,"from":"lead","text":"hi"}"#).unwrap();
+        assert!(plain.choices.is_empty() && plain.picked.is_none());
     }
 
     #[test]
