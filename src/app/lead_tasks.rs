@@ -33,8 +33,6 @@ const TIMEOUTS_BEFORE_OFF: u8 = 3;
 /// The popover card's width and its share of the window height.
 const CARD_W: f32 = 420.;
 const CARD_MAX_H: f32 = 0.6;
-/// Phone tasks open with this line (Invoke); the card leaves it out.
-const PHONE_HEADER: &str = "📱 From Brian's phone (Invoke):";
 
 /// The open tasks card: whose, and where its chip was clicked.
 pub(super) struct TasksPopover {
@@ -119,6 +117,10 @@ impl LeadTasks {
 
     /// The daemon's answer, its busy panes moved to where the card looks.
     fn normalized(mut self) -> Self {
+        // The daemon's rows say where they came from only in their header.
+        for t in &mut self.tasks {
+            t.phone |= header_end(&t.body).is_some();
+        }
         self.handed = std::mem::take(&mut self.helpers)
             .into_iter()
             .map(|h| Handed {
@@ -216,8 +218,17 @@ fn progress_of(doing: Option<&str>) -> String {
 /// "---" footer a phone task carries are cut, the rest is trimmed.
 fn clean_body(body: &str) -> String {
     let body = body.split("\n---\n").next().unwrap_or(body).trim();
-    let body = body.strip_prefix(PHONE_HEADER).unwrap_or(body);
+    let body = header_end(body).map_or(body, |end| &body[end..]);
     body.trim().to_string()
+}
+
+/// Where Invoke's header line ends, if the text opens with one: a first line
+/// starting "📱 From Brian" and ending ":" ("... on his phone (Invoke):", "...
+/// in Seance's Chat on his Mac (Invoke):", "... in a browser (Invoke):").
+fn header_end(body: &str) -> Option<usize> {
+    let end = body.find('\n').unwrap_or(body.len());
+    let line = body[..end].trim();
+    (line.starts_with("📱 From Brian") && line.ends_with(':')).then_some(end)
 }
 
 fn first_line(body: &str) -> String {
@@ -874,9 +885,35 @@ mod tests {
 
     #[test]
     fn phone_task_loses_header_and_footer() {
-        let body = "📱 From Brian's phone (Invoke):\nship the icon\nmore detail\n---\nreply with seance ctl finish";
-        assert_eq!(clean_body(body), "ship the icon\nmore detail");
-        assert_eq!(first_line(body), "ship the icon");
+        for header in [
+            "📱 From Brian's phone (Invoke):",
+            "📱 From Brian on his phone (Invoke):",
+            "📱 From Brian in Seance's Chat on his Mac (Invoke):",
+            "📱 From Brian in a browser (Invoke):",
+        ] {
+            let body =
+                format!("{header}\nship the icon\nmore detail\n---\nreply with seance ctl finish");
+            assert_eq!(clean_body(&body), "ship the icon\nmore detail", "{header}");
+            assert_eq!(first_line(&body), "ship the icon", "{header}");
+        }
+        // Only a header line is cut: words that merely start that way stay.
+        assert_eq!(
+            clean_body("📱 From Brian, a thought"),
+            "📱 From Brian, a thought"
+        );
+    }
+
+    #[test]
+    fn the_daemons_rows_with_a_header_count_as_from_the_phone() {
+        let raw: LeadTasks = serde_json::from_str(
+            r#"{"tasks":[
+            {"id":"t1","status":"done","body":"📱 From Brian in a browser (Invoke):\nhi"},
+            {"id":"t2","status":"done","body":"from a pane"}]}"#,
+        )
+        .unwrap();
+        let d = raw.normalized();
+        assert!(d.tasks[0].phone);
+        assert!(!d.tasks[1].phone);
     }
 
     #[test]
