@@ -1281,3 +1281,33 @@ fn week_old_finished_tasks_are_not_saved() {
         let _ = std::fs::remove_dir_all(&scratch);
     });
 }
+
+#[test]
+fn busy_title_evidence_holds_the_last_spinner_line() {
+    use seance_core::agent_state::{classify, Activity};
+    with_test_state_dir("steady-evidence", || {
+        let (eng, _rx) = Engine::bare_for_test(temp_scratch("steady-evidence"));
+        let title = "◐ circle · lead";
+        let spin = classify("✻ Brewing… (5s · ↓ 386 tokens)\n❯ ", Some(title));
+        let mut a = spin.clone();
+        eng.steady_evidence("lead", &mut a, Some(title));
+        assert_eq!(
+            a.evidence.as_deref(),
+            Some("✻ Brewing… (5s · ↓ 386 tokens)")
+        );
+        // Spinner off screen for a frame: the title decides, the line holds.
+        let mut gap = classify("❯ ", Some(title));
+        assert_eq!(gap.activity, Activity::Busy);
+        eng.steady_evidence("lead", &mut gap, Some(title));
+        assert_eq!(gap.evidence, spin.evidence);
+        // Too old: the title shows again.
+        eng.last_spinner.lock().unwrap().get_mut("lead").unwrap().1 -= 11_000;
+        let mut stale = classify("❯ ", Some(title));
+        eng.steady_evidence("lead", &mut stale, Some(title));
+        assert_eq!(stale.evidence.as_deref(), Some(title));
+        // Idle clears it.
+        let mut idle = classify("❯ ", None);
+        eng.steady_evidence("lead", &mut idle, None);
+        assert!(!eng.last_spinner.lock().unwrap().contains_key("lead"));
+    });
+}

@@ -339,6 +339,9 @@ impl Engine {
             self.pane_busy_at.remove(slug);
             self.pane_woke_at.remove(slug);
             self.wake_failed_at.remove(slug);
+            if let Ok(m) = self.last_spinner.get_mut() {
+                m.remove(slug);
+            }
             // Its conversation record (auto-sleep) goes with it.
             if let Some(path) = super::sleep::hosted_path(&pane.pane_id) {
                 let _ = std::fs::remove_file(path);

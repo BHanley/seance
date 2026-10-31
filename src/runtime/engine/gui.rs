@@ -983,10 +983,9 @@ impl Engine {
         pane.session.as_ref().map(|s| s.snapshot())
     }
 
-    /// Dense one-row summary for orchestrators (`list` / `brief` / `roster`).
     /// A busy pane whose evidence fell back to its window title keeps the
     /// spinner line it showed up to `SPINNER_HOLD_MS` ago.
-    fn steady_evidence(
+    pub(super) fn steady_evidence(
         &self,
         slug: &str,
         a: &mut seance_core::agent_state::AgentState,
@@ -1015,6 +1014,7 @@ impl Engine {
         }
     }
 
+    /// Dense one-row summary for orchestrators (`list` / `brief` / `roster`).
     pub(super) fn pane_summary_json(&self, p: &EnginePane) -> serde_json::Value {
         let w = p.agency.to_wire();
         let running = if p.kind == "file" {
