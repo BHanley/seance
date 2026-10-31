@@ -23,6 +23,8 @@ const POLL_EVERY: Duration = Duration::from_millis(2000);
 const FULL_TEXT_CAP: usize = 2500;
 /// After the daemon fails to answer, ask again this rarely.
 const RETRY_OFF: Duration = Duration::from_secs(600);
+/// Timeouts in a row before the poll goes quiet.
+const TIMEOUTS_BEFORE_OFF: u8 = 3;
 /// Phone tasks open with this line (Invoke); the face leaves it out.
 const PHONE_HEADER: &str = "📱 From Brian's phone (Invoke):";
 
@@ -149,11 +151,16 @@ impl SeanceApp {
             let data = match got {
                 Ok(data) => data,
                 Err(e) => {
-                    // A daemon that never answers (an older build) costs a
-                    // 10 s wait per ask: stop asking for a while.
+                    // A daemon that never answers costs a 10 s wait per ask.
+                    // One tunnel blip is not that: it takes a run of timeouts
+                    // to stop asking for a while. (An older daemon also says so
+                    // outright, see `GuiEvent::Error` in mod.rs.)
                     if e.to_string().contains("timed out") {
                         this.update(cx, |app: &mut SeanceApp, _| {
-                            app.lead_tasks_off = Some(Instant::now());
+                            app.lead_tasks_timeouts += 1;
+                            if app.lead_tasks_timeouts >= TIMEOUTS_BEFORE_OFF {
+                                app.lead_tasks_off = Some(Instant::now());
+                            }
                         });
                     }
                     continue;
@@ -163,6 +170,8 @@ impl SeanceApp {
                 continue;
             };
             this.update(cx, |app: &mut SeanceApp, cx| {
+                app.lead_tasks_timeouts = 0;
+                app.lead_tasks_off = None;
                 if app.lead_tasks.get(&lead) != Some(&data) {
                     app.lead_tasks.insert(lead, data);
                     cx.notify();

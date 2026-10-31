@@ -182,6 +182,8 @@ pub struct SeanceApp {
     /// When the daemon last failed to answer `lead_tasks` (an older build):
     /// the poll stays quiet for a while after.
     lead_tasks_off: Option<std::time::Instant>,
+    /// `lead_tasks` asks that timed out in a row.
+    lead_tasks_timeouts: u8,
     /// Task row expanded to its full text on the tasks face.
     tasks_row_open: Option<String>,
     /// Last `FsOp::LeadTasks` answer per lead slug.
@@ -500,6 +502,7 @@ impl SeanceApp {
             flipped: None,
             tasks_face: None,
             lead_tasks_off: None,
+            lead_tasks_timeouts: 0,
             tasks_row_open: None,
             lead_tasks: std::collections::HashMap::new(),
             active_slug: None,
