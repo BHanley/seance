@@ -48,6 +48,10 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   click the chip again to flip back. Phone tasks show without their
   Invoke header and footer. The app asks the daemon with one new fs-bridge
   request, `lead_tasks`.
+- **Working creatures throw in random dance moves.** Every few bars a
+  lead's creature swaps its basic step for a jump, shimmy, slide or bounce,
+  and each circle dances on its own beat instead of in step.
+
 - **The lead's creature dances while its circle works.** On the lead's
   title strip and Stage card, the sprite hops left and right whenever any
   pane in the circle is mid-turn, and rests when the circle goes quiet.

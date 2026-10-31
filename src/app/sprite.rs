@@ -22,6 +22,8 @@ pub(super) struct Sprite {
     pub cells: [[Cell; SIZE]; SIZE],
     /// Index into [`BODY`].
     pub color: usize,
+    /// Where this creature is in its dance, so circles don't move in step.
+    pub phase: u64,
 }
 
 /// Muted body colors that sit with the candlelit palette: sage, dusty blue,
@@ -108,22 +110,48 @@ pub(super) fn generate(seed: &str) -> Sprite {
     Sprite {
         cells,
         color: rng.below(BODY.len() as u64),
+        phase: fnv1a(seed),
     }
 }
 
-/// Dance steps while the circle works, as (x, y) cell offsets: rest, hop left,
-/// rest, hop right.
-const DANCE: [(f32, f32); 4] = [(0., 0.), (-1., -1.), (0., 0.), (1., -1.)];
+/// Dance moves while the circle works, as (x, y) cell offsets per beat. The
+/// first is the basic step (rest, hop left, rest, hop right); every few bars
+/// a creature throws in one of the others at random (Brian's ask).
+const MOVES: [[(f32, f32); 4]; 5] = [
+    [(0., 0.), (-1., -1.), (0., 0.), (1., -1.)],
+    // jump
+    [(0., 0.), (0., -1.), (0., -2.), (0., -1.)],
+    // shimmy
+    [(-1., 0.), (1., 0.), (-1., 0.), (1., 0.)],
+    // slide left and back
+    [(-1., 0.), (-2., 0.), (-1., 0.), (0., 0.)],
+    // bounce
+    [(0., -1.), (0., 0.), (0., -1.), (0., 0.)],
+];
+
+/// This creature's offset at beat `beat`: two-beat bars of the basic step,
+/// with a random move in about one bar in four.
+fn dance_step(phase: u64, beat: u64) -> (f32, f32) {
+    let beat = beat.wrapping_add(phase);
+    let bar = beat / 4;
+    let roll = (bar ^ phase).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 60;
+    let mv = if roll < 4 {
+        1 + (roll as usize) % (MOVES.len() - 1)
+    } else {
+        0
+    };
+    MOVES[mv][(beat % 4) as usize]
+}
 
 /// The sprite as a grid of `cell`-point squares. Whole device pixels keep it
 /// crisp: 1.5 and 2.5 points land on 3 and 5 pixels on a 2x screen.
-/// `dancing` steps it through [`DANCE`] on the wall clock; the sidebar spinner's
+/// `dancing` steps it through [`MOVES`] on the wall clock; the sidebar spinner's
 /// 240ms tick already re-renders while any circle works, so it costs no frames.
 pub(super) fn render(sprite: &Sprite, cell: f32, dancing: bool) -> AnyElement {
     let body = rgb(BODY[sprite.color]);
     let ink = rgb(INK);
     let (dx, dy) = if dancing {
-        DANCE[((super::util::now_ms() / 240) as usize) % DANCE.len()]
+        dance_step(sprite.phase, super::util::now_ms() / 240)
     } else {
         (0., 0.)
     };
@@ -156,6 +184,19 @@ pub(super) fn for_circle(slug: &str) -> Sprite {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dance_mixes_in_moves_and_circles_differ() {
+        let steps = |phase| (0..400).map(|b| dance_step(phase, b)).collect::<Vec<_>>();
+        let a = steps(generate("l6-leveling").phase);
+        let b = steps(generate("seance-demo").phase);
+        assert_ne!(a, b);
+        // Mostly the basic step, with some other moves thrown in.
+        let basic = a.chunks(4).filter(|bar| bar == &MOVES[0]).count();
+        assert!(basic > 40 && basic < 100, "basic bars: {basic}");
+        // Never further than two cells from home.
+        assert!(a.iter().all(|(x, y)| x.abs() <= 2. && y.abs() <= 2.));
+    }
 
     #[test]
     fn same_slug_same_creature() {
