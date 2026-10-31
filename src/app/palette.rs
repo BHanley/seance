@@ -245,7 +245,7 @@ impl SeanceApp {
         let header = match self.view.mode {
             ViewMode::Stage => Some(super::stage::STRIP_H + self.stage.pills_row_h),
             ViewMode::Wall => Some(super::wall::HEADER_H),
-            ViewMode::Classic => None,
+            ViewMode::Classic | ViewMode::Chat => None,
         }
         .filter(|_| matches!(self.palette, PaletteMode::Jump { .. }));
         let top = match header {

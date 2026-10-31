@@ -116,7 +116,11 @@ impl SeanceApp {
     /// circles, so moving across its tiles opens nothing; Stage or Classic
     /// count the pane they show when you get there.
     pub(super) fn read_later(&mut self) {
-        if self.view.mode == super::views::ViewMode::Wall || self.active_slug == self.later_last {
+        if matches!(
+            self.view.mode,
+            super::views::ViewMode::Wall | super::views::ViewMode::Chat
+        ) || self.active_slug == self.later_last
+        {
             return;
         }
         self.later_last = self.active_slug.clone();

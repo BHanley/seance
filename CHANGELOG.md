@@ -19,6 +19,27 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **Chat layout.** A third layout, next to classic and stage, takes
+  Wall's place in the switch (ctrl+shift+t cycles classic, stage, chat; a
+  saved or `ctl layout wall` still works and opens Chat; Wall's code and
+  its ctrl+shift+space peek stay). Circles are listed on the left as
+  Invoke-style rows in the sidebar's space order: creature, name, last
+  message, unread count and a pulse while the circle works. The selected
+  circle's thread is on the right as bubbles (you on the right, the lead
+  on the left, system notes centered), with photos inline, clickable links
+  and a composer (Enter sends, Shift+Enter adds a line). The history is
+  Invoke's own, read from its API, so the phone and this window share one
+  conversation, and reading a thread marks it read on both. The header
+  shows the creature (dancing while the circle works), the lead's progress
+  line, the lead's to-do chip and a "show terminal" button that goes back
+  to Classic on that lead. Set `SEANCE_INVOKE_URL` to point at a different
+  Invoke. Not yet: builder guest bubbles, per-bubble terminal peek, photo
+  upload.
+- **Lead tasks face fixes.** Focus stays on the root while the face is up,
+  the face goes away when its pane is killed, stops being the lead, or the
+  layout leaves Classic, an older daemon no longer causes a sticky error
+  bar or a slow poll, task text is capped daemon-side, and done and parked
+  times older than today carry their date.
 - **A lead's to-do list on its pane.** The lead's title strip gets a
   "☑ N" chip (open and queued tasks; parked ones are not counted). Click it
   to flip the pane onto a tasks face: the open task with its live activity

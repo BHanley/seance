@@ -1,0 +1,237 @@
+//! Invoke's HTTP API, for the Chat layout: the same threads the phone app
+//! reads, so a chat started on either continues on the other.
+//!
+//! Tailscale Serve in front of Invoke adds the caller's identity, so there is
+//! no token. Every call blocks, so callers run it off the UI thread. It goes
+//! through the system `curl` (TLS and the tailnet's certs included) rather
+//! than a new HTTP crate: gpui's own client is a stub until an app installs one.
+
+use std::io::Write;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+
+use anyhow::{anyhow, Context as _, Result};
+use serde::{de::DeserializeOwned, Deserialize};
+
+const DEFAULT_BASE: &str = "https://xps.tail5c9413.ts.net:8443";
+/// Plain requests give up here; the long-poll gets its own, longer limit.
+const REQUEST_SECS: u64 = 10;
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct Circles {
+    #[serde(default)]
+    pub circles: Vec<CircleRow>,
+    #[serde(default)]
+    pub v: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct CircleRow {
+    pub ws: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub unread: u32,
+    #[serde(default)]
+    pub working: bool,
+    #[serde(default)]
+    pub last: Option<Msg>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct Msg {
+    #[serde(default)]
+    pub id: i64,
+    /// "me", "lead", or anything else (shown as a system note).
+    #[serde(default)]
+    pub from: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub ts: u64,
+    /// File name under `/api/file/`.
+    #[serde(default)]
+    pub image: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct Thread {
+    #[serde(default)]
+    pub messages: Vec<Msg>,
+    /// Highest message id already read.
+    #[serde(default)]
+    pub read: i64,
+}
+
+/// `/api/tasks`: only what the thread header shows.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct Progress {
+    #[serde(default)]
+    pub busy: bool,
+    /// The lead's progress line while it works.
+    #[serde(default)]
+    pub doing: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Poll {
+    #[serde(default)]
+    v: u64,
+}
+
+fn base() -> String {
+    std::env::var("SEANCE_INVOKE_URL")
+        .ok()
+        .filter(|u| !u.is_empty())
+        .unwrap_or_else(|| DEFAULT_BASE.to_string())
+}
+
+/// Percent-encode a query value (circle slugs are plain, but be safe).
+fn enc(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+fn curl(path: &str, secs: u64, post: Option<&serde_json::Value>) -> Result<Vec<u8>> {
+    let mut cmd = Command::new("curl");
+    cmd.args(["-sS", "-f", "-m", &secs.to_string()]);
+    if post.is_some() {
+        cmd.args([
+            "-X",
+            "POST",
+            "-H",
+            "content-type: application/json",
+            "--data-binary",
+            "@-",
+        ]);
+    }
+    cmd.arg(format!("{}{path}", base()))
+        .stdin(if post.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().context("run curl")?;
+    if let (Some(body), Some(mut stdin)) = (post, child.stdin.take()) {
+        stdin.write_all(body.to_string().as_bytes())?;
+    }
+    let out = child.wait_with_output()?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(anyhow!("{}", err.trim()));
+    }
+    Ok(out.stdout)
+}
+
+fn get<T: DeserializeOwned>(path: &str, secs: u64) -> Result<T> {
+    let bytes = curl(path, secs, None)?;
+    serde_json::from_slice(&bytes).with_context(|| format!("read {path}"))
+}
+
+pub fn circles() -> Result<Circles> {
+    get("/api/circles", REQUEST_SECS)
+}
+
+pub fn thread(ws: &str) -> Result<Thread> {
+    get(&format!("/api/thread?ws={}", enc(ws)), REQUEST_SECS)
+}
+
+pub fn progress(ws: &str) -> Result<Progress> {
+    get(&format!("/api/tasks?ws={}", enc(ws)), REQUEST_SECS)
+}
+
+/// Blocks until Invoke's change counter moves past `v` or `secs` run out.
+/// Returns the counter either way.
+pub fn poll(v: u64, secs: u64) -> Result<u64> {
+    Ok(get::<Poll>(&format!("/api/poll?v={v}"), secs)?.v)
+}
+
+pub fn send(ws: &str, text: &str) -> Result<()> {
+    curl(
+        "/api/send",
+        REQUEST_SECS,
+        Some(&serde_json::json!({ "ws": ws, "text": text })),
+    )
+    .map(|_| ())
+}
+
+pub fn mark_read(ws: &str, id: i64) -> Result<()> {
+    curl(
+        "/api/read",
+        REQUEST_SECS,
+        Some(&serde_json::json!({ "ws": ws, "id": id })),
+    )
+    .map(|_| ())
+}
+
+/// An attached image, downloaded once into the cache; its local path.
+pub fn file(name: &str) -> Result<PathBuf> {
+    // The name goes into a path: keep only its last component.
+    let leaf = name.rsplit('/').next().unwrap_or(name);
+    if leaf.is_empty() || leaf.starts_with('.') {
+        return Err(anyhow!("bad file name"));
+    }
+    let dir = PathBuf::from(shellexpand::tilde("~/.cache/seance/chat").as_ref());
+    let path = dir.join(leaf);
+    if path.exists() {
+        return Ok(path);
+    }
+    std::fs::create_dir_all(&dir)?;
+    let bytes = curl(&format!("/api/file/{}", enc(leaf)), 30, None)?;
+    let tmp = path.with_extension("part");
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, &path)?;
+    Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn circles_parse_with_a_missing_last_message() {
+        let c: Circles = serde_json::from_str(
+            r#"{"circles":[{"ws":"main","name":"PM","unread":2,"working":true,
+            "last":{"from":"lead","text":"hi","ts":5,"image":null}},
+            {"ws":"b","name":"B","last":null}],"v":20,"afk":{"on":true}}"#,
+        )
+        .unwrap();
+        assert_eq!(c.v, 20);
+        assert_eq!(c.circles[0].unread, 2);
+        assert_eq!(c.circles[0].last.as_ref().unwrap().text, "hi");
+        assert!(c.circles[1].last.is_none() && !c.circles[1].working);
+    }
+
+    #[test]
+    fn thread_ignores_fields_it_does_not_show() {
+        let t: Thread = serde_json::from_str(
+            r#"{"messages":[{"id":3,"ws":"main","from":"me","ts":9,"status":"answered","mode":"","text":"yes"}],
+            "read":3,"working":false,"usage":{}}"#,
+        )
+        .unwrap();
+        assert_eq!(t.read, 3);
+        assert_eq!(t.messages[0].from, "me");
+        assert_eq!(t.messages[0].image, None);
+    }
+
+    #[test]
+    fn query_values_are_encoded() {
+        assert_eq!(enc("l6-leveling"), "l6-leveling");
+        assert_eq!(enc("a b&c"), "a%20b%26c");
+    }
+
+    #[test]
+    fn file_names_cannot_leave_the_cache() {
+        assert!(file("").is_err());
+        assert!(file("../").is_err());
+        assert!(file("x/.hidden").is_err());
+    }
+}

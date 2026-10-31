@@ -166,7 +166,7 @@ attention routing free.
 | ctrl+shift+j | fuzzy jump (workspace) |
 | ctrl+shift+z | focus-zoom active pane |
 | ctrl+shift+space | peek at the Wall (a tile per circle); again or esc goes back |
-| ctrl+shift+t | next layout: classic → stage → wall |
+| ctrl+shift+t | next layout: classic → stage → chat |
 | ctrl+shift+i | next pane waiting on you, any circle or space (needs you, then done); again for the one after |
 | ctrl+shift+r | rename selected workspace |
 | ctrl+shift+f | last failed shell command |
@@ -198,7 +198,7 @@ attention routing free.
 
 ## Layouts
 
-Each window has a layout, picked from the **classic · stage · wall** toggle
+Each window has a layout, picked from the **classic · stage · chat** toggle
 (under the logo in the rail, in the top bar elsewhere), with ctrl+shift+t
 (cmd+shift+t on macOS), or with `seance ctl layout NAME`.
 

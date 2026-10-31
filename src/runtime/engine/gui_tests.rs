@@ -1421,7 +1421,7 @@ fn layout_lines_are_accepted_and_a_switch_reaches_every_window() {
         let data = list.data.unwrap();
         assert_eq!(
             data["layouts"],
-            serde_json::json!(["classic", "stage", "wall"])
+            serde_json::json!(["classic", "stage", "chat"])
         );
         assert_eq!(
             by_window(&data),
@@ -1443,10 +1443,11 @@ fn layout_lines_are_accepted_and_a_switch_reaches_every_window() {
         let _ = (a.drain(), b.drain());
         let bad = eng.handle_control(layout(Some("plaid")));
         assert!(!bad.ok);
-        assert!(bad.error.unwrap().contains("classic, stage, wall"));
+        assert!(bad.error.unwrap().contains("classic, stage, chat"));
         assert!(views(&a).is_empty() && views(&b).is_empty());
 
-        // `seance ctl layout Wall` as the GUI plane would carry it.
+        // `seance ctl layout Wall` as the GUI plane would carry it: the old
+        // name reaches every window as Chat.
         let line = r#"{"op":"ctl","req":{"op":"layout","name":"Wall"}}"#;
         let req: GuiRequest = serde_json::from_str(line).expect("daemon parses ctl layout");
         match eng.handle_gui(req, &a.id) {
@@ -1457,15 +1458,15 @@ fn layout_lines_are_accepted_and_a_switch_reaches_every_window() {
                 assert_eq!(
                     by_window(&data),
                     [
-                        (a.id.clone(), serde_json::json!("wall")),
+                        (a.id.clone(), serde_json::json!("chat")),
                         (b.id.clone(), serde_json::Value::Null),
                     ]
                 );
             }
             other => panic!("ctl layout refused: {other:?}"),
         }
-        assert_eq!(views(&a), ["wall"]);
-        assert_eq!(views(&b), ["wall"]);
+        assert_eq!(views(&a), ["chat"]);
+        assert_eq!(views(&b), ["chat"]);
     });
 }
 

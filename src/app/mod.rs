@@ -31,6 +31,7 @@ use std::sync::Arc;
 pub(crate) mod actions;
 mod afk;
 mod alerts;
+mod chat;
 mod chrome;
 mod dock;
 pub mod hud;
@@ -182,6 +183,8 @@ pub struct SeanceApp {
     /// When the daemon last failed to answer `lead_tasks` (an older build):
     /// the poll stays quiet for a while after.
     lead_tasks_off: Option<std::time::Instant>,
+    /// The Chat layout's circles, threads and composer.
+    chat: chat::ChatState,
     /// Task row expanded to its full text on the tasks face.
     tasks_row_open: Option<String>,
     /// Last `FsOp::LeadTasks` answer per lead slug.
@@ -500,6 +503,7 @@ impl SeanceApp {
             flipped: None,
             tasks_face: None,
             lead_tasks_off: None,
+            chat: chat::ChatState::default(),
             tasks_row_open: None,
             lead_tasks: std::collections::HashMap::new(),
             active_slug: None,
@@ -754,6 +758,7 @@ impl SeanceApp {
         .detach();
 
         Self::start_lead_tasks_poll(cx);
+        Self::start_chat_poll(cx);
 
         // Live-refresh pad drawer every 2s while open (disk mtime/content).
         cx.spawn(async move |this, cx| loop {
@@ -779,7 +784,7 @@ impl SeanceApp {
                 .await;
             let Some(this) = this.upgrade() else { break };
             this.update(cx, |app: &mut SeanceApp, cx| {
-                if !app.workspace_was_working.is_empty() {
+                if !app.workspace_was_working.is_empty() || app.chat.any_working() {
                     cx.notify();
                 }
             });
@@ -1600,7 +1605,7 @@ impl SeanceApp {
         // Stage renders one pane: the one on stage. The Wall renders none.
         match self.view.mode {
             views::ViewMode::Stage => return self.stage_pane().as_deref() == Some(p.slug.as_str()),
-            views::ViewMode::Wall => return false,
+            views::ViewMode::Wall | views::ViewMode::Chat => return false,
             views::ViewMode::Classic => {}
         }
         if let Some(z) = self.zoomed_slug.as_deref() {
@@ -1671,8 +1676,10 @@ impl SeanceApp {
                 }
                 // The Wall shows no pane: focusing one would strand the
                 // keyboard on a handle outside the frame, so recover instead.
-                if self.view.mode != views::ViewMode::Wall
-                    && !self.is_flipped(&slug)
+                if !matches!(
+                    self.view.mode,
+                    views::ViewMode::Wall | views::ViewMode::Chat
+                ) && !self.is_flipped(&slug)
                     && pane.focus_content(window, cx)
                 {
                     self.pending_focus = None;
@@ -3043,6 +3050,7 @@ impl Render for SeanceApp {
             && self.renaming.is_none()
             && self.whisper.is_none()
             && !self.notes_editor_focused(window, cx)
+            && !self.chat_input_focused(window, cx)
             && self.quicklaunch_editor.is_none()
         {
             self.ensure_keyboard_focus(window, cx);
@@ -3053,6 +3061,8 @@ impl Render for SeanceApp {
         let walled = self.view.mode == views::ViewMode::Wall;
         let body: Vec<gpui::AnyElement> = if staged {
             vec![self.render_stage(window, cx)]
+        } else if self.view.mode == views::ViewMode::Chat {
+            vec![self.render_chat(window, cx)]
         } else if walled {
             vec![self.render_wall(window, cx)]
         } else {
