@@ -1281,3 +1281,80 @@ fn week_old_finished_tasks_are_not_saved() {
         let _ = std::fs::remove_dir_all(&scratch);
     });
 }
+
+#[test]
+fn busy_title_evidence_holds_the_last_spinner_line() {
+    use seance_core::agent_state::{classify, Activity};
+    with_test_state_dir("steady-evidence", || {
+        let (eng, _rx) = Engine::bare_for_test(temp_scratch("steady-evidence"));
+        let title = "◐ circle · lead";
+        let spin = classify("✻ Brewing… (5s · ↓ 386 tokens)\n❯ ", Some(title));
+        let mut a = spin.clone();
+        eng.steady_evidence("lead", &mut a, Some(title));
+        assert_eq!(
+            a.evidence.as_deref(),
+            Some("✻ Brewing… (5s · ↓ 386 tokens)")
+        );
+        // Spinner off screen for a frame: the title decides, the line holds.
+        let mut gap = classify("❯ ", Some(title));
+        assert_eq!(gap.activity, Activity::Busy);
+        eng.steady_evidence("lead", &mut gap, Some(title));
+        assert_eq!(gap.evidence, spin.evidence);
+        // Too old: the title shows again.
+        eng.last_spinner.lock().unwrap().get_mut("lead").unwrap().1 -= 11_000;
+        let mut stale = classify("❯ ", Some(title));
+        eng.steady_evidence("lead", &mut stale, Some(title));
+        assert_eq!(stale.evidence.as_deref(), Some(title));
+        // Idle clears it.
+        let mut idle = classify("❯ ", None);
+        eng.steady_evidence("lead", &mut idle, None);
+        assert!(!eng.last_spinner.lock().unwrap().contains_key("lead"));
+    });
+}
+
+#[test]
+fn lead_tasks_json_lists_live_tasks_and_the_newest_finished() {
+    with_test_state_dir("lead-tasks", || {
+        let scratch = temp_scratch("lead-tasks");
+        let (mut eng, _rx) = Engine::bare_for_test(scratch);
+        let lead = eng.push_stub_pane("lead", "lab");
+        let first = eng.begin_task(&lead, "first");
+        let second = eng.begin_task(&lead, "second");
+        eng.tasks.get_mut(&second).unwrap().status = "queued".into();
+        for i in 0..8u64 {
+            let mut t = eng.tasks[&first].clone();
+            t.id = format!("old-{i}");
+            t.status = "done".into();
+            t.created_ms = 1_000 + i;
+            t.finished_ms = Some(2_000 + i);
+            eng.tasks.insert(t.id.clone(), t);
+        }
+        let got = eng.lead_tasks_json(&lead);
+        let ids: Vec<&str> = got["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["id"].as_str().unwrap())
+            .collect();
+        // Live tasks first, then six finished ones, newest first.
+        assert!(ids.contains(&second.as_str()));
+        let done: Vec<&&str> = ids.iter().filter(|i| i.starts_with("old-")).collect();
+        assert_eq!(done.len(), 6);
+        assert_eq!(*done[0], "old-7");
+        assert_eq!(eng.lead_tasks_json("nope")["tasks"], serde_json::json!([]));
+
+        // A long body is cut on a char boundary.
+        eng.tasks.get_mut(&second).unwrap().body = "é".repeat(2000);
+        let got = eng.lead_tasks_json(&lead);
+        let cut = got["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["id"] == second.as_str())
+            .unwrap()["body"]
+            .as_str()
+            .unwrap()
+            .len();
+        assert!(cut <= 2500 && cut > 2000, "{cut}");
+    });
+}

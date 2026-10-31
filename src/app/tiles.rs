@@ -219,6 +219,7 @@ impl SeanceApp {
                         self.rail_hover_pane.as_deref() == Some(pane.slug.as_str()),
                         self.stage_lead(&pane.workspace).as_deref() == Some(pane.slug.as_str()),
                         self.workspace_has_working_agent(&pane.workspace),
+                        self.lead_tasks_arg(pane, cx),
                         cx,
                     )),
             )
@@ -348,6 +349,7 @@ impl SeanceApp {
                             self.rail_hover_pane.as_deref() == Some(left.slug.as_str()),
                             self.stage_lead(&left.workspace).as_deref() == Some(left.slug.as_str()),
                             self.workspace_has_working_agent(&left.workspace),
+                            self.lead_tasks_arg(left, cx),
                             cx,
                         )),
                 )
@@ -389,6 +391,7 @@ impl SeanceApp {
                             self.stage_lead(&right.workspace).as_deref()
                                 == Some(right.slug.as_str()),
                             self.workspace_has_working_agent(&right.workspace),
+                            self.lead_tasks_arg(right, cx),
                             cx,
                         )),
                 )
@@ -484,6 +487,7 @@ impl SeanceApp {
                             self.rail_hover_pane.as_deref() == Some(pane.slug.as_str()),
                             self.stage_lead(&pane.workspace).as_deref() == Some(pane.slug.as_str()),
                             self.workspace_has_working_agent(&pane.workspace),
+                            self.lead_tasks_arg(pane, cx),
                             cx,
                         )),
                 );

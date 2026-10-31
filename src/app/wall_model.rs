@@ -410,7 +410,7 @@ pub(super) fn wall_takes_keys(mode: ViewMode, field_open: bool) -> bool {
 /// Whether app paths that write into the active pane (the prompts
 /// palette) may run: not on the Wall, where the active pane is hidden.
 pub(super) fn may_write_to_active(mode: ViewMode) -> bool {
-    mode != ViewMode::Wall
+    !matches!(mode, ViewMode::Wall | ViewMode::Chat)
 }
 
 /// Grid columns for the tile area's width: 4, dropping to 3 and 2.

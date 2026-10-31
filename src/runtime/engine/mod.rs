@@ -122,6 +122,10 @@ pub struct Engine {
     pub statuses: HashMap<String, (String, Option<String>)>,
     /// Scratchpad revision per pane (bumped on note/finish/atomic pad write).
     pub pad_revs: HashMap<String, u64>,
+    /// Last spinner line seen per busy pane, with when. Claude's spinner drops off
+    /// screen for a frame now and then; the roster keeps showing it for a moment
+    /// instead of falling back to the window title.
+    pub last_spinner: std::sync::Mutex<HashMap<String, (String, u64)>>,
     /// At last inject: (pad_rev, pad_bytes) — evidence for wait --since-inject.
     pub inject_baselines: HashMap<String, (u64, u64)>,
     /// task_id → record (dispatch envelope + durable inbox body).
@@ -212,6 +216,7 @@ impl Engine {
             asks: Vec::new(),
             statuses: HashMap::new(),
             pad_revs: HashMap::new(),
+            last_spinner: Default::default(),
             inject_baselines: HashMap::new(),
             tasks: HashMap::new(),
             active_tasks: HashMap::new(),
@@ -289,6 +294,7 @@ impl Engine {
             asks: Vec::new(),
             statuses: HashMap::new(),
             pad_revs: HashMap::new(),
+            last_spinner: Default::default(),
             inject_baselines: HashMap::new(),
             tasks: HashMap::new(),
             active_tasks: HashMap::new(),
@@ -428,6 +434,7 @@ impl Engine {
                 }
                 m
             },
+            last_spinner: Default::default(),
             inject_baselines: bundle
                 .inject_baselines
                 .into_iter()

@@ -1,4 +1,5 @@
-//! Window layouts: Classic (the rail and pane grid), Stage and Wall. Each
+//! Window layouts: Classic (the rail and pane grid), Stage and Chat; Wall is
+//! hidden from the switch but still there as a peek. Each
 //! window keeps its own, switched from the toggle, ctrl+shift+t or
 //! `ctl layout`, and the last pick is saved on this machine
 //! (`~/.config/seance/view.json`), never in the daemon's shared layout. The
@@ -192,6 +193,9 @@ impl SeanceApp {
             self.stage_enter();
         }
         self.view.mode = mode;
+        if mode == ViewMode::Chat {
+            self.chat.focus_input = true;
+        }
         self.stage.peek = None;
         if self.overview() != was_wall {
             let _ = self.client.set_overview(!was_wall);
@@ -228,7 +232,7 @@ impl SeanceApp {
         }
     }
 
-    /// Classic · Stage · Wall. Narrow enough for the slimmest rail: the
+    /// Classic · Stage · Chat. Narrow enough for the slimmest rail: the
     /// segments share the width and the labels are one word.
     pub(super) fn render_view_switch(&self, key: &str, cx: &Context<Self>) -> gpui::AnyElement {
         let current = self.view.mode;
@@ -268,6 +272,7 @@ impl SeanceApp {
                             "classic: the rail and pane grid (ctrl+shift+t cycles)"
                         }
                         ViewMode::Stage => "stage: one circle's lead up front, crew beside it",
+                        ViewMode::Chat => "chat: talk to each circle's lead, no terminal",
                         ViewMode::Wall => "wall: every circle live (ctrl+shift+space)",
                     }))
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -302,10 +307,10 @@ mod tests {
             (ViewMode::Stage, Some("pips"))
         );
         // Saving the layout keeps the HUD, and the other way round.
-        let again = put(&both, "layout", "wall");
+        let again = put(&both, "layout", "chat");
         assert_eq!(
             (decode(&again), hud_of(&again).as_deref()),
-            (ViewMode::Wall, Some("pips"))
+            (ViewMode::Chat, Some("pips"))
         );
         assert_eq!(hud_of(&put("{", "hud", "off")).as_deref(), Some("off"));
     }
@@ -326,7 +331,7 @@ mod tests {
         assert!(wall_all_of(&text));
         assert_eq!(
             (decode(&text), hud_of(&text).as_deref()),
-            (ViewMode::Wall, Some("ink"))
+            (ViewMode::Chat, Some("ink"))
         );
         assert!(!wall_all_of(&put(&text, "wall_all", false)));
     }
@@ -343,6 +348,7 @@ mod tests {
         ] {
             assert_eq!(decode(text), ViewMode::Classic, "{text}");
         }
-        assert_eq!(decode(r#"{"layout":"Wall","later":1}"#), ViewMode::Wall);
+        // A layout saved as "wall" before Chat took its place opens as Chat.
+        assert_eq!(decode(r#"{"layout":"Wall","later":1}"#), ViewMode::Chat);
     }
 }

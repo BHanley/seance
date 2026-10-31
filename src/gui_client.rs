@@ -585,6 +585,16 @@ impl GuiClient {
         Ok((events, seq))
     }
 
+    /// A lead's task face data (see `FsOp::LeadTasks`). Background threads only.
+    pub fn lead_tasks(&self, pane: &str) -> Result<serde_json::Value> {
+        self.fs_call(
+            crate::runtime::protocol::FsOp::LeadTasks {
+                pane: pane.to_string(),
+            },
+            FS_TIMEOUT,
+        )
+    }
+
     /// Run a host widget select command daemon-side; returns its stdout.
     pub fn host_select(&self, widget: &str, item: &str) -> Result<String> {
         let v = self.fs_call(

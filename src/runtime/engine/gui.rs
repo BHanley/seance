@@ -983,6 +983,83 @@ impl Engine {
         pane.session.as_ref().map(|s| s.snapshot())
     }
 
+    /// A busy pane whose evidence fell back to its window title keeps the
+    /// spinner line it showed up to `SPINNER_HOLD_MS` ago.
+    pub(super) fn steady_evidence(
+        &self,
+        slug: &str,
+        a: &mut seance_core::agent_state::AgentState,
+        title: Option<&str>,
+    ) {
+        const SPINNER_HOLD_MS: u64 = 10_000;
+        let Ok(mut seen) = self.last_spinner.lock() else {
+            return;
+        };
+        if a.activity != seance_core::agent_state::Activity::Busy {
+            seen.remove(slug);
+            return;
+        }
+        let now = now_ms();
+        match a.evidence.as_deref() {
+            Some(ev) if Some(ev) != title.map(str::trim) => {
+                seen.insert(slug.to_string(), (ev.to_string(), now));
+            }
+            _ => {
+                if let Some((ev, at)) = seen.get(slug) {
+                    if now.saturating_sub(*at) < SPINNER_HOLD_MS {
+                        a.evidence = Some(ev.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    /// A lead's task face (`FsOp::LeadTasks`): its live tasks and the newest
+    /// finished ones, its own screen evidence, and the circle's other busy
+    /// panes with theirs.
+    pub(crate) fn lead_tasks_json(&self, lead: &str) -> serde_json::Value {
+        const RECENT: usize = 6;
+        const BODY_CAP: usize = 2500;
+        let Some(lp) = self.panes.iter().find(|p| p.slug == lead) else {
+            return json!({ "tasks": [], "helpers": [], "evidence": null });
+        };
+        let task = |t: &seance_core::protocol::TaskRecord| {
+            // The face shows a row's text at most this long.
+            let mut end = t.body.len().min(BODY_CAP);
+            while !t.body.is_char_boundary(end) {
+                end -= 1;
+            }
+            json!({
+                "id": t.id,
+                "status": t.status,
+                "created_ms": t.created_ms,
+                "finished_ms": t.finished_ms,
+                "body": &t.body[..end],
+            })
+        };
+        let mine = || self.tasks.values().filter(|t| t.pane == lead);
+        let mut tasks: Vec<_> = mine()
+            .filter(|t| matches!(t.status.as_str(), "open" | "queued" | "parked"))
+            .collect();
+        tasks.sort_by_key(|t| t.created_ms);
+        let mut done: Vec<_> = mine()
+            .filter(|t| matches!(t.status.as_str(), "done" | "failed"))
+            .collect();
+        done.sort_by_key(|t| std::cmp::Reverse(t.finished_ms.unwrap_or(t.created_ms)));
+        done.truncate(RECENT);
+        let tasks: Vec<_> = tasks.into_iter().chain(done).map(task).collect();
+        let helpers: Vec<_> = self
+            .panes
+            .iter()
+            .filter(|p| p.workspace == lp.workspace && p.slug != lead && p.kind != "file")
+            .map(|p| self.pane_summary_json(p))
+            .filter(|r| r["activity"] == "busy")
+            .map(|r| json!({ "slug": r["slug"], "name": r["name"], "evidence": r["activity_evidence"] }))
+            .collect();
+        let row = self.pane_summary_json(lp);
+        json!({ "tasks": tasks, "helpers": helpers, "evidence": row["activity_evidence"] })
+    }
+
     /// Dense one-row summary for orchestrators (`list` / `brief` / `roster`).
     pub(super) fn pane_summary_json(&self, p: &EnginePane) -> serde_json::Value {
         let w = p.agency.to_wire();
@@ -1029,7 +1106,11 @@ impl Engine {
             .as_ref()
             .filter(|_| running && !p.asleep)
             .map(|s| {
-                seance_core::agent_state::classify(&s.live_screen_text(), s.title().as_deref())
+                let title = s.title();
+                let mut a =
+                    seance_core::agent_state::classify(&s.live_screen_text(), title.as_deref());
+                self.steady_evidence(&p.slug, &mut a, title.as_deref());
+                a
             });
         let activity = match &agent {
             Some(a) => a.activity.as_str(),
