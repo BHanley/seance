@@ -1384,8 +1384,15 @@ fn paint_grid(layout: &Layout, window: &mut Window, cx: &mut App) {
     let sel_bg = SeancePalette::violet_dim().opacity(0.55);
     // Claude's own prose takes the reply colour so it stands apart from
     // tool output, which arrives in the same plain colour.
-    let reply_rows = seance_core::replies::claude_reply_rows(&layout.snap);
-    let (plain_fg, _) = seance_core::links::plain_style(&layout.snap);
+    // A shell's title means Claude isn't running (`systemctl status` prints
+    // a plain `●` too).
+    let claude = layout.snap.title.is_none()
+        || crate::runtime::engine::sleep::title_is_claude(layout.snap.title.as_deref());
+    let (reply_rows, (plain_fg, plain_bg)) = if claude {
+        seance_core::replies::claude_reply_rows(&layout.snap)
+    } else {
+        (Vec::new(), (0, 0))
+    };
     let reply_color = reply_fg();
 
     for row in 0..rows {
@@ -1416,6 +1423,7 @@ fn paint_grid(layout: &Layout, window: &mut Window, cx: &mut App) {
             let mut style = cell_style(cell);
             if reply_rows.get(row) == Some(&true)
                 && (cell.fg == plain_fg || cell.fg == 0xFFFF_FFFF)
+                && (cell.bg == plain_bg || cell.bg == 0xFFFF_FFFF)
                 && !cell.dim
                 && !cell.inverse
             {
