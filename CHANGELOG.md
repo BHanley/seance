@@ -19,6 +19,13 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **Double-click a file path to show it in Finder.** A path an agent
+  printed (`/…` or `~/…`, spaces, accents and wrapped rows included) opens
+  its folder with the item selected, files and folders alike, and copies
+  the path. Images, videos, PDFs and HTML pages open in their app instead. A command span that holds a
+  path still copies whole. A `/home/<you>/…` path from an XPS pane is found
+  under the Mac's home folder. Linux opens the parent folder.
+
 - **Claude plan usage in the footer.** Stage's footer (and the Wall's
   feed) shows a bar per Claude limit, 5 hour and weekly, with percent used
   and time to reset, read from `seance-usage-file` every 15 s. The health

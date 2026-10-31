@@ -1,5 +1,6 @@
 //! URL detection over a rendered grid — what a ctrl+click (native) or a tap
-//! (web) resolves to — plus the inline code span a double-click copies.
+//! (web) resolves to — plus the inline code span a double-click copies and
+//! the file path a double-click shows in Finder.
 //!
 //! Shared so the native GUI and the web client cannot drift, same rule as
 //! `util::title_looks_busy`.
@@ -337,6 +338,150 @@ pub fn http_url_at(line: &str, col: usize) -> Option<String> {
         }
     }
     None
+}
+
+/// How far a path may run across spaces from where it starts, in chars.
+const PATH_MAX: usize = 400;
+
+/// Rows a path may be followed across either side of the hit row.
+const PATH_ROWS: u16 = 6;
+
+/// File paths a double-click on `(row, col)` could mean, longest first.
+///
+/// Agents print paths like `/home/bhanley/Claude/Projects/Seance Demo/LOG.md`
+/// or `~/sites/rüdle/` in prose, wrapped across rows and with spaces in them,
+/// so the grid can't say where one ends. Every absolute or `~/` path that
+/// starts at a word boundary and runs over the hit is offered, ending at each
+/// later space or at the line's end; the caller keeps the first that exists.
+/// Trailing punctuation and a `:line:col` suffix are dropped.
+pub fn path_candidates_at(snap: &GridSnapshot, row: u16, col: u16) -> Vec<String> {
+    let cols = snap.cols as usize;
+    if cols == 0 || col as usize >= cols || (row as usize + 1) * cols > snap.cells.len() {
+        return Vec::new();
+    }
+    if row_chars(snap, row)[col as usize].c == ' ' {
+        return Vec::new();
+    }
+    // Claude wraps prose at a space, but breaks a token too long for its
+    // width mid-word: read each of its wraps both ways.
+    let mut out: Vec<String> = Vec::new();
+    for glue in [false, true] {
+        if let Some((chars, hit)) = path_line(snap, row, col, glue) {
+            for p in paths_over(&chars, hit) {
+                if !out.contains(&p) {
+                    out.push(p);
+                }
+            }
+        }
+    }
+    out.sort_by_key(|p| std::cmp::Reverse(p.chars().count()));
+    out
+}
+
+/// Every path in `chars` that starts at a word boundary and covers `hit`.
+fn paths_over(chars: &[char], hit: usize) -> Vec<String> {
+    let boundary = |i: usize| i == 0 || " \t`'\"([<=".contains(chars[i - 1]);
+    let starts_path = |i: usize| {
+        boundary(i)
+            && ((chars[i] == '/' && chars.get(i + 1).is_some_and(|c| *c != ' ' && *c != '/'))
+                || (chars[i] == '~' && chars.get(i + 1) == Some(&'/')))
+    };
+    let mut out: Vec<String> = Vec::new();
+    for s in (hit.saturating_sub(PATH_MAX)..=hit).rev() {
+        if !starts_path(s) {
+            continue;
+        }
+        let limit = chars.len().min(s + PATH_MAX);
+        let mut ends: Vec<usize> = (hit + 1..limit).filter(|&e| chars[e] == ' ').collect();
+        ends.push(limit);
+        for e in ends {
+            let raw: String = chars[s..e].iter().collect();
+            let p = trim_path(&raw);
+            if p.chars().count() > 1 && s + p.chars().count() > hit && !out.contains(&p) {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+/// The rows around `row` joined the way a path could run through them, plus
+/// where `col` landed. A full row runs straight on (the terminal wrapped it).
+/// A shorter row followed by an indented one is Claude wrapping its reply:
+/// the indent is dropped and the rows join with one space, or with none
+/// when `glue` (a token Claude broke mid-word).
+fn path_line(snap: &GridSnapshot, row: u16, col: u16, glue: bool) -> Option<(Vec<char>, usize)> {
+    let cols = snap.cols as usize;
+    if cols == 0 || snap.cells.is_empty() || col as usize >= cols {
+        return None;
+    }
+    let rows = (snap.cells.len() / cols) as u16;
+    if row >= rows {
+        return None;
+    }
+    let text = |r: u16| -> Vec<char> { row_chars(snap, r).iter().map(|c| c.c).collect() };
+    // How row `r + 1` joins onto row `r`: Some(true) runs on, Some(false)
+    // adds a space, None ends the line.
+    let joins = |r: u16| -> Option<bool> {
+        if r + 1 >= rows {
+            return None;
+        }
+        let (this, next) = (text(r), text(r + 1));
+        if next.iter().all(|c| *c == ' ') || this.iter().all(|c| *c == ' ') {
+            return None;
+        }
+        if this.last() != Some(&' ') {
+            Some(true)
+        } else {
+            (next[0] == ' ').then_some(false)
+        }
+    };
+    let mut start = row;
+    while start > 0 && row - start < PATH_ROWS && joins(start - 1).is_some() {
+        start -= 1;
+    }
+    let mut line: Vec<char> = Vec::new();
+    let mut hit = 0;
+    let mut how: Option<bool> = None;
+    for r in start..rows.min(row + PATH_ROWS + 1) {
+        let mut cells = text(r);
+        let mut lead = 0;
+        if how == Some(false) {
+            lead = cells.iter().take_while(|c| **c == ' ').count();
+            cells.drain(..lead);
+            while line.last() == Some(&' ') {
+                line.pop();
+            }
+            if !glue {
+                line.push(' ');
+            }
+        }
+        if r == row {
+            hit = line.len() + (col as usize).saturating_sub(lead);
+        }
+        line.extend(cells);
+        how = joins(r);
+        if how.is_none() {
+            break;
+        }
+    }
+    (hit < line.len()).then_some((line, hit))
+}
+
+/// A printed path minus what prose puts after it: `.`, `,`, `)`, quotes,
+/// backticks and a `:12` or `:12:3` position.
+fn trim_path(raw: &str) -> String {
+    let mut p = raw
+        .trim_end()
+        .trim_end_matches(['.', ',', ';', ':', ')', ']', '\'', '"', '`', '>']);
+    for _ in 0..2 {
+        if let Some((head, tail)) = p.rsplit_once(':') {
+            if !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit()) {
+                p = head;
+            }
+        }
+    }
+    p.to_string()
 }
 
 #[cfg(test)]
@@ -739,5 +884,92 @@ mod tests {
         let want = Some("sudo systemctl restart seance-daemon.service");
         assert_eq!(code_span_at(&snap, 0, 17).as_deref(), want);
         assert_eq!(code_span_at(&snap, 1, 5).as_deref(), want);
+    }
+
+    /// Double-click a path, spaces, ü and Claude's word wrap included: every
+    /// reading is offered, longest first, so the GUI can keep the one that
+    /// exists (2026-10-30).
+    #[test]
+    fn a_path_is_offered_at_every_space_longest_first() {
+        let snap = grid_of(
+            44,
+            &[
+                "● Saved to /home/b/Claude/Projects/Seance",
+                "  Demo/Rüdle log.md. Next I run it.",
+                "",
+                "  /tmp/elsewhere",
+            ],
+        );
+        let got = path_candidates_at(&snap, 0, 14);
+        assert_eq!(
+            got.first().map(String::as_str),
+            Some("/home/b/Claude/Projects/Seance Demo/Rüdle log.md. Next I run it")
+        );
+        assert!(got
+            .iter()
+            .any(|p| p == "/home/b/Claude/Projects/Seance Demo/Rüdle log.md"));
+        assert!(got.iter().any(|p| p == "/home/b/Claude/Projects/Seance"));
+        assert!(!got.iter().any(|p| p.contains("elsewhere")));
+        // A click on "Demo" (the wrapped row) only offers readings that reach
+        // it, whether the wrap was a space or a token broken mid-word.
+        let got = path_candidates_at(&snap, 1, 4);
+        assert!(got.iter().all(|p| {
+            p.starts_with("/home/b/Claude/Projects/Seance Demo")
+                || p.starts_with("/home/b/Claude/Projects/SeanceDemo")
+        }));
+        assert!(got
+            .iter()
+            .any(|p| p == "/home/b/Claude/Projects/Seance Demo/Rüdle log.md"));
+    }
+
+    /// A long path the terminal broke mid-word runs straight on.
+    #[test]
+    fn a_path_cut_at_the_right_edge_runs_on() {
+        let snap = grid_of(20, &["at /var/log/seance-d", "aemon.log now"]);
+        let got = path_candidates_at(&snap, 1, 2);
+        assert!(got.iter().any(|p| p == "/var/log/seance-daemon.log"));
+    }
+
+    /// A double-click on blank cells (a wrapped row's empty tail or the next
+    /// row's indent) is never a path, from review (2026-10-30).
+    #[test]
+    fn blank_cells_beside_a_wrapped_path_are_not_paths() {
+        let snap = grid_of(
+            44,
+            &[
+                "● Saved to /home/b/Claude/Projects/Seance",
+                "  Demo/Rüdle log.md. Next I run it.",
+            ],
+        );
+        assert!(path_candidates_at(&snap, 0, 42).is_empty());
+        assert!(path_candidates_at(&snap, 1, 0).is_empty());
+    }
+
+    /// Claude breaks a path longer than its width mid-word and indents the
+    /// rest; a terminal wrap keeps the next row's leading space.
+    #[test]
+    fn a_path_broken_mid_word_or_wrapped_before_a_space_is_found() {
+        let snap = grid_of(30, &["● see /home/b/Projects/ve  ", "  ry-long/LOG.md now"]);
+        let got = path_candidates_at(&snap, 0, 8);
+        assert!(got.iter().any(|p| p == "/home/b/Projects/very-long/LOG.md"));
+        let snap = grid_of(17, &["/tmp/My Folder/My", " Notes/x.md"]);
+        let got = path_candidates_at(&snap, 0, 2);
+        assert!(got.iter().any(|p| p == "/tmp/My Folder/My Notes/x.md"));
+    }
+
+    #[test]
+    fn a_home_path_drops_its_line_number_and_quotes() {
+        let snap = grid_of(50, &["see `~/sites/bin/publish:12:3`, then go"]);
+        let got = path_candidates_at(&snap, 0, 8);
+        assert!(got.iter().any(|p| p == "~/sites/bin/publish"));
+    }
+
+    #[test]
+    fn words_and_slashes_inside_words_are_not_paths() {
+        let snap = grid_of(50, &["read and/or write a 1/2 cup, then // done"]);
+        assert!(path_candidates_at(&snap, 0, 2).is_empty());
+        assert!(path_candidates_at(&snap, 0, 9).is_empty());
+        assert!(path_candidates_at(&snap, 0, 22).is_empty());
+        assert!(path_candidates_at(&snap, 0, 35).is_empty());
     }
 }
