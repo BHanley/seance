@@ -21,6 +21,7 @@ mod tests;
 // Re-export helpers used by sibling modules / tests.
 pub use helpers::OwnedFdAdopt;
 pub use sleep::auto_sleep_idle_ms;
+pub(crate) use sleep::title_is_claude;
 
 use gui::{GuiConn, LastGridFrame};
 

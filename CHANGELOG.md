@@ -25,6 +25,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   the path. Images, videos, PDFs and HTML pages open in their app instead. A command span that holds a
   path still copies whole. A `/home/<you>/…` path from an XPS pane is found
   under the Mac's home folder. Linux opens the parent folder.
+- **Claude's replies in their own colour.** In a Claude Code pane, the
+  reply text (from Claude's `●` down to the next tool call or prompt) is
+  painted in the theme's accent, eased to read at 7:1, so it stands apart
+  from command output, which Claude draws in the same plain colour. Code,
+  links and other coloured text keep their colours.
 
 - **Claude plan usage in the footer.** Stage's footer (and the Wall's
   feed) shows a bar per Claude limit, 5 hour and weekly, with percent used

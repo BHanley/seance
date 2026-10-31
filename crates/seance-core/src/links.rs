@@ -187,7 +187,7 @@ fn logical_line(snap: &GridSnapshot, row: u16, col: u16) -> Option<(String, usiz
 /// cells. A live grid never holds the 0xFFFFFFFF sentinel for plain text:
 /// every session seeds OSC 10/11 at spawn, so "default" arrives as the
 /// palette's RGB. Erased cells carry it, and most blanks are erased cells.
-fn plain_style(snap: &GridSnapshot) -> (u32, u32) {
+pub fn plain_style(snap: &GridSnapshot) -> (u32, u32) {
     let mut counts: std::collections::HashMap<(u32, u32), usize> = Default::default();
     for c in snap.cells.iter().filter(|c| c.c == ' ') {
         *counts.entry((c.fg, c.bg)).or_default() += 1;

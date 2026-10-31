@@ -1240,6 +1240,41 @@ fn term_default_fg() -> Hsla {
     let (fg, _) = crate::theme::term_fg_bg().unwrap_or_else(conf_fg_bg);
     packed_to_hsla(fg)
 }
+/// The colour of Claude's replies: the theme's main accent, eased toward the
+/// plain text colour until it reads at 7:1 on the terminal ground.
+fn reply_fg() -> Hsla {
+    let (fg, bg) = (
+        gpui::Rgba::from(term_default_fg()),
+        gpui::Rgba::from(term_default_bg()),
+    );
+    let accent = gpui::Rgba::from(SeancePalette::flame());
+    let lum = |c: gpui::Rgba| {
+        let ch = |v: f32| {
+            if v <= 0.039_28 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * ch(c.r) + 0.7152 * ch(c.g) + 0.0722 * ch(c.b)
+    };
+    let contrast = |a: gpui::Rgba, b: gpui::Rgba| {
+        let (x, y) = (lum(a), lum(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    };
+    let mix = |t: f32| gpui::Rgba {
+        r: accent.r + (fg.r - accent.r) * t,
+        g: accent.g + (fg.g - accent.g) * t,
+        b: accent.b + (fg.b - accent.b) * t,
+        a: 1.,
+    };
+    let mut t = 0.3;
+    while t < 1. && contrast(mix(t), bg) < 7. {
+        t += 0.05;
+    }
+    mix(t.min(1.)).into()
+}
+
 fn term_default_bg() -> Hsla {
     let (_, bg) = crate::theme::term_fg_bg().unwrap_or_else(conf_fg_bg);
     packed_to_hsla(bg)
@@ -1407,6 +1442,18 @@ fn paint_grid(layout: &Layout, window: &mut Window, cx: &mut App) {
     let in_sel =
         |row: usize, col: usize| sel.is_some_and(|s| s.contains(row, col, sel_cols, sel_rows));
     let sel_bg = SeancePalette::violet_dim().opacity(0.55);
+    // Claude's own prose takes the reply colour so it stands apart from
+    // tool output, which arrives in the same plain colour.
+    // A shell's title means Claude isn't running (`systemctl status` prints
+    // a plain `●` too).
+    let claude = layout.snap.title.is_none()
+        || crate::runtime::engine::title_is_claude(layout.snap.title.as_deref());
+    let (reply_rows, (plain_fg, plain_bg)) = if claude {
+        seance_core::replies::claude_reply_rows(&layout.snap)
+    } else {
+        (Vec::new(), (0, 0))
+    };
+    let reply_color = reply_fg();
 
     for row in 0..rows {
         flush(&mut open, &mut batches);
@@ -1434,6 +1481,14 @@ fn paint_grid(layout: &Layout, window: &mut Window, cx: &mut App) {
             }
             let cell = &layout.snap.cells[idx];
             let mut style = cell_style(cell);
+            if reply_rows.get(row) == Some(&true)
+                && (cell.fg == plain_fg || cell.fg == 0xFFFF_FFFF)
+                && (cell.bg == plain_bg || cell.bg == 0xFFFF_FFFF)
+                && !cell.dim
+                && !cell.inverse
+            {
+                style.fg = reply_color;
+            }
             let selected = in_sel(row, col);
             if selected {
                 style.bg = Some(sel_bg);
