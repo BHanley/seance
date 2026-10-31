@@ -42,6 +42,27 @@ const READ_RETRY: Duration = Duration::from_secs(30);
 /// A circle with a message newer than this is Active, as on the phone.
 const ACTIVE_MS: u64 = 2 * 3600 * 1000;
 
+#[derive(Clone, Debug, PartialEq)]
+enum VideoState {
+    Downloading,
+    Failed(String),
+}
+
+/// Pictures a lead sends as a note can also be renders. Those are not pictures:
+/// no download until someone asks, and then with time to spare.
+fn is_video(name: &str) -> bool {
+    let Some((_, ext)) = name.rsplit_once('.') else {
+        return false;
+    };
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "mp4" | "webm" | "mov" | "m4v"
+    )
+}
+
+/// A video's download may take this long.
+const VIDEO_SECS: u64 = 900;
+
 #[derive(Default)]
 pub(super) struct ChatState {
     circles: Vec<CircleRow>,
@@ -70,6 +91,8 @@ pub(super) struct ChatState {
     pub(super) focus_input: bool,
     /// Image name to its cached file, once fetched.
     images: HashMap<String, (PathBuf, u32, u32)>,
+    /// Videos being fetched on a click, or that failed to be.
+    videos: HashMap<String, VideoState>,
     image_asked: HashSet<String>,
     error: Option<String>,
     /// Claude plan usage from the last thread answer; none hides the strip.
@@ -134,7 +157,8 @@ fn trim_link(url: &str) -> &str {
 }
 
 /// A message as markdown that reads back as the same text: every ASCII
-/// punctuation mark escaped, line breaks kept, leading spaces kept (as
+/// punctuation mark escaped, every line its own paragraph (the renderer drops
+/// markdown's hard breaks, and the view draws paragraphs with no gap), leading spaces kept (as
 /// non-breaking ones, so indentation survives and four of them are not a code
 /// block), URLs turned into links. The selectable text view draws it, so the
 /// bubble keeps its look and gains selection, copy and clickable links.
@@ -176,7 +200,7 @@ fn to_markdown(text: &str) -> String {
             out
         })
         .collect::<Vec<_>>()
-        .join("\\\n")
+        .join("\n\n")
 }
 
 /// The file paths in `text` (whitespace-separated words starting `/` or
@@ -478,6 +502,7 @@ impl SeanceApp {
             .messages
             .iter()
             .flat_map(|m| m.image_names().into_iter().map(str::to_string))
+            .filter(|n| !is_video(n))
             .collect();
         for name in names {
             if chat.image_asked.insert(name.clone()) {
@@ -1072,6 +1097,92 @@ impl SeanceApp {
             .into_any_element()
     }
 
+    /// A "▶ video" tile in a picture's place: the file name, and a click that
+    /// downloads it (no automatic retry) and opens it in its app.
+    fn video_tile(&self, id: i64, i: usize, name: &str, cx: &Context<Self>) -> AnyElement {
+        let state = self.chat.videos.get(name);
+        let status = match state {
+            Some(VideoState::Downloading) => "downloading…".to_string(),
+            Some(VideoState::Failed(why)) => format!("couldn't download: {why}. Click to retry."),
+            None => "click to open".to_string(),
+        };
+        let busy = state == Some(&VideoState::Downloading);
+        let file = name.to_string();
+        div()
+            .id(SharedString::from(format!("bubble-video-{id}-{i}")))
+            .flex_none()
+            .w(px(IMG_MAX_W))
+            .h(px(IMG_MAX_W * 9. / 16.))
+            .px_3()
+            .rounded_md()
+            .overflow_hidden()
+            .bg(SeancePalette::bg().opacity(0.4))
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_1()
+            .child(div().text_color(SeancePalette::text()).child("▶ video"))
+            .child(
+                div()
+                    .max_w_full()
+                    .truncate()
+                    .text_xs()
+                    .text_color(SeancePalette::text_dim())
+                    .child(name.to_string()),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(if matches!(state, Some(VideoState::Failed(_))) {
+                        SeancePalette::danger()
+                    } else {
+                        SeancePalette::text_faint()
+                    })
+                    .child(status),
+            )
+            .when(!busy, |d| {
+                d.cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| this.open_video(&file, cx)))
+            })
+            .into_any_element()
+    }
+
+    /// Fetch a video through Invoke and open it in its app. One try per click.
+    fn open_video(&mut self, name: &str, cx: &mut Context<Self>) {
+        if self.chat.videos.get(name) == Some(&VideoState::Downloading) {
+            return;
+        }
+        self.chat
+            .videos
+            .insert(name.to_string(), VideoState::Downloading);
+        cx.notify();
+        let name = name.to_string();
+        cx.spawn(async move |this, cx| {
+            let leaf = name.clone();
+            let got = cx
+                .background_executor()
+                .spawn(async move { chat_api::file_within(&leaf, VIDEO_SECS) })
+                .await;
+            let Some(this) = this.upgrade() else { return };
+            this.update(cx, |app: &mut SeanceApp, cx| {
+                match got {
+                    Ok(path) => {
+                        app.chat.videos.remove(&name);
+                        crate::sysopen::open_detached(&path.to_string_lossy());
+                    }
+                    Err(e) => {
+                        app.chat
+                            .videos
+                            .insert(name, VideoState::Failed(e.to_string()));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// Me on the right, the lead on the left, anything else centered.
     fn chat_bubble(&self, m: &Msg, cx: &Context<Self>) -> AnyElement {
         let me = m.from == "me";
@@ -1081,6 +1192,10 @@ impl SeanceApp {
         // fixed up front: the decoded size fitted to the bubble, or a plain
         // box until the file has arrived. Nothing can paint outside it.
         for (i, name) in m.image_names().into_iter().enumerate() {
+            if is_video(name) {
+                body = body.child(self.video_tile(m.id, i, name, cx));
+                continue;
+            }
             let found = self.chat.images.get(name);
             let (bw, bh) = found.map_or((IMG_MAX_W, IMG_LOADING_H), |(_, w, h)| fit_image(*w, *h));
             let frame = div()
@@ -1182,7 +1297,33 @@ mod tests {
     #[test]
     fn markdown_reads_back_as_the_same_text() {
         assert_eq!(to_markdown("a *b* _c_ #d"), "a \\*b\\* \\_c\\_ \\#d");
-        assert_eq!(to_markdown("1. one\n\ntwo"), "1\\. one\\\n\u{a0}\\\ntwo");
+        assert_eq!(to_markdown("1. one\n\ntwo"), "1\\. one\n\n\u{a0}\n\ntwo");
+    }
+
+    #[test]
+    fn every_newline_is_a_paragraph_of_its_own() {
+        use markdown::mdast::Node;
+        let md = to_markdown("png\nimage: /home/x.png\nimage: /home/y.png");
+        let Node::Root(root) = markdown::to_mdast(&md, &markdown::ParseOptions::default()).unwrap()
+        else {
+            panic!("no root")
+        };
+        // Three lines, three paragraphs, and no break node the renderer would drop.
+        assert_eq!(root.children.len(), 3);
+        assert!(root
+            .children
+            .iter()
+            .all(|n| matches!(n, Node::Paragraph(_))));
+    }
+
+    #[test]
+    fn videos_are_told_apart_by_extension() {
+        for v in ["a.mp4", "B.MOV", "x.webm", "y.m4v"] {
+            assert!(is_video(v), "{v}");
+        }
+        for p in ["a.png", "b.jpeg", "mp4", "clip.mp4.png"] {
+            assert!(!is_video(p), "{p}");
+        }
     }
 
     #[test]
@@ -1221,9 +1362,9 @@ mod tests {
         let nb = "\u{a0}";
         assert_eq!(to_markdown("    code"), format!("{nb}{nb}{nb}{nb}code"));
         assert_eq!(to_markdown("\tx"), format!("{nb}{nb}{nb}{nb}x"));
-        assert_eq!(to_markdown("a\n  - b"), format!("a\\\n{nb}{nb}\\- b"));
+        assert_eq!(to_markdown("a\n  - b"), format!("a\n\n{nb}{nb}\\- b"));
         // Whitespace-only lines are blank lines; the tail of a message is not.
-        assert_eq!(to_markdown("a\n   \nb"), format!("a\\\n{nb}\\\nb"));
+        assert_eq!(to_markdown("a\n   \nb"), format!("a\n\n{nb}\n\nb"));
         assert_eq!(to_markdown("a\n   "), "a");
         assert_eq!(to_markdown("a\n\n"), "a");
     }

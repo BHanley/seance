@@ -185,6 +185,9 @@ pub struct SeanceApp {
     lead_tasks_off: Option<std::time::Instant>,
     /// `lead_tasks` asks that timed out in a row.
     lead_tasks_timeouts: u8,
+    /// Bumped whenever a resume or close starts or ends: a poll answer that was
+    /// asked before is older than the card and is dropped.
+    lead_tasks_gen: u64,
     /// When Invoke's task list last failed to answer: the daemon's stands in.
     invoke_tasks_off: Option<std::time::Instant>,
     /// The Chat layout's circles, threads and composer.
@@ -512,6 +515,7 @@ impl SeanceApp {
             tasks_popover: None,
             lead_tasks_off: None,
             lead_tasks_timeouts: 0,
+            lead_tasks_gen: 0,
             invoke_tasks_off: None,
             chat: chat::ChatState::default(),
             tasks_row_open: None,

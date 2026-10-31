@@ -290,6 +290,14 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Fixed
 
+- **Chat: videos, line breaks and the tasks card.** A video a lead sends as
+  a note is a "▶ video" tile, not a picture: nothing is downloaded until you
+  click it, then it downloads with up to 15 minutes to spare ("downloading…"
+  shows meanwhile, a failure says so and waits for another click) and opens in
+  its app. Every line break in a message now shows (a single newline used to
+  vanish: "png" and "image" ran together). On the tasks card, a poll that was
+  asked before a resume or close no longer brings the row back for a moment,
+  and a row's error goes away when the row does.
 - **Chat pictures fit their bubble.** A photo or screenshot in a bubble is
   held to 320 px wide and about 420 px tall at its own shape, in a box whose
   size is reserved from the picture's header (a plain box until the file has

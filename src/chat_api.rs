@@ -329,6 +329,12 @@ pub fn mark_read(ws: &str, id: i64) -> Result<()> {
 
 /// An attached image, downloaded once into the cache; its local path.
 pub fn file(name: &str) -> Result<PathBuf> {
+    file_within(name, 30)
+}
+
+/// Same, with `secs` for the download: a render sent as a note can be big.
+/// Written straight to disk, so a long file is not held in memory.
+pub fn file_within(name: &str, secs: u64) -> Result<PathBuf> {
     // The name goes into a path: keep only its last component.
     let leaf = name.rsplit('/').next().unwrap_or(name);
     if leaf.is_empty() || leaf.starts_with('.') {
@@ -340,9 +346,21 @@ pub fn file(name: &str) -> Result<PathBuf> {
         return Ok(path);
     }
     std::fs::create_dir_all(&dir)?;
-    let bytes = curl(&format!("/api/file/{}", enc(leaf)), 30, None)?;
-    let tmp = path.with_extension("part");
-    std::fs::write(&tmp, bytes)?;
+    // Not `with_extension`: a.mp4 and a.png must not share a partial file.
+    let tmp = dir.join(format!("{leaf}.part"));
+    let out = Command::new("curl")
+        .args(["-sS", "--fail-with-body", "-m", &secs.to_string(), "-o"])
+        .arg(&tmp)
+        .arg(format!("{}/api/file/{}", base(), enc(leaf)))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .context("run curl")?;
+    if !out.status.success() {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(anyhow!("{}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
     std::fs::rename(&tmp, &path)?;
     Ok(path)
 }

@@ -274,9 +274,16 @@ impl SeanceApp {
                 let skip_daemon = app
                     .lead_tasks_off
                     .is_some_and(|at| at.elapsed() < RETRY_OFF);
-                Some((lead, ws, Arc::clone(&app.client), skip_invoke, skip_daemon))
+                Some((
+                    lead,
+                    ws,
+                    Arc::clone(&app.client),
+                    skip_invoke,
+                    skip_daemon,
+                    app.lead_tasks_gen,
+                ))
             });
-            let Some((lead, ws, client, skip_invoke, skip_daemon)) = ask else {
+            let Some((lead, ws, client, skip_invoke, skip_daemon, gen)) = ask else {
                 continue;
             };
             // Invoke's list first (names, handed-off work, as on the phone);
@@ -341,13 +348,25 @@ impl SeanceApp {
                         app.invoke_tasks_off = Some(Instant::now());
                     }
                 }
-                if app.lead_tasks.get(&lead) != Some(&data) {
-                    app.lead_tasks.insert(lead, data);
-                    cx.notify();
+                // A resume or close began or ended since this was asked: the
+                // card has a newer list, and this would bring a closed row back.
+                if app.lead_tasks_gen == gen {
+                    app.adopt_lead_tasks(lead, data, cx);
                 }
             });
         })
         .detach();
+    }
+
+    /// Take a list as the lead's card, and forget the errors of rows it no
+    /// longer has.
+    fn adopt_lead_tasks(&mut self, lead: String, data: LeadTasks, cx: &mut Context<Self>) {
+        self.tasks_error
+            .retain(|id, _| data.tasks.iter().any(|t| &t.id == id));
+        if self.lead_tasks.get(&lead) != Some(&data) {
+            self.lead_tasks.insert(lead, data);
+            cx.notify();
+        }
     }
 
     /// Chip count and whether its popover is open. `None` for any pane that
@@ -788,6 +807,7 @@ impl SeanceApp {
             return;
         }
         self.tasks_error.remove(&id);
+        self.lead_tasks_gen += 1;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let (call_ws, call_id) = (ws.clone(), id.clone());
@@ -815,10 +835,12 @@ impl SeanceApp {
             let Some(this) = this.upgrade() else { return };
             this.update(cx, |app: &mut SeanceApp, cx| {
                 app.tasks_busy.remove(&id);
+                // Polls asked while the call ran are older than what it found.
+                app.lead_tasks_gen += 1;
                 match done {
                     Ok(()) => {
                         if let Some(t) = fresh.filter(|t| t.lead.is_some()) {
-                            app.lead_tasks.insert(lead, LeadTasks::from_invoke(t));
+                            app.adopt_lead_tasks(lead, LeadTasks::from_invoke(t), cx);
                         }
                     }
                     Err(e) => {
