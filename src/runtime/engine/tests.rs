@@ -1342,5 +1342,19 @@ fn lead_tasks_json_lists_live_tasks_and_the_newest_finished() {
         assert_eq!(done.len(), 6);
         assert_eq!(*done[0], "old-7");
         assert_eq!(eng.lead_tasks_json("nope")["tasks"], serde_json::json!([]));
+
+        // A long body is cut on a char boundary.
+        eng.tasks.get_mut(&second).unwrap().body = "é".repeat(2000);
+        let got = eng.lead_tasks_json(&lead);
+        let cut = got["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["id"] == second.as_str())
+            .unwrap()["body"]
+            .as_str()
+            .unwrap()
+            .len();
+        assert!(cut <= 2500 && cut > 2000, "{cut}");
     });
 }

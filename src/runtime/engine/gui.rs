@@ -1019,16 +1019,22 @@ impl Engine {
     /// panes with theirs.
     pub(crate) fn lead_tasks_json(&self, lead: &str) -> serde_json::Value {
         const RECENT: usize = 6;
+        const BODY_CAP: usize = 2500;
         let Some(lp) = self.panes.iter().find(|p| p.slug == lead) else {
             return json!({ "tasks": [], "helpers": [], "evidence": null });
         };
         let task = |t: &seance_core::protocol::TaskRecord| {
+            // The face shows a row's text at most this long.
+            let mut end = t.body.len().min(BODY_CAP);
+            while !t.body.is_char_boundary(end) {
+                end -= 1;
+            }
             json!({
                 "id": t.id,
                 "status": t.status,
                 "created_ms": t.created_ms,
                 "finished_ms": t.finished_ms,
-                "body": t.body,
+                "body": &t.body[..end],
             })
         };
         let mine = || self.tasks.values().filter(|t| t.pane == lead);

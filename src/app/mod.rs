@@ -179,6 +179,9 @@ pub struct SeanceApp {
     flipped: Option<(String, Entity<ScratchpadDrawer>)>,
     /// Lead whose tasks face is up (a lead shows one face at a time).
     tasks_face: Option<String>,
+    /// When the daemon last failed to answer `lead_tasks` (an older build):
+    /// the poll stays quiet for a while after.
+    lead_tasks_off: Option<std::time::Instant>,
     /// Task row expanded to its full text on the tasks face.
     tasks_row_open: Option<String>,
     /// Last `FsOp::LeadTasks` answer per lead slug.
@@ -496,6 +499,7 @@ impl SeanceApp {
             whisper: None,
             flipped: None,
             tasks_face: None,
+            lead_tasks_off: None,
             tasks_row_open: None,
             lead_tasks: std::collections::HashMap::new(),
             active_slug: None,
@@ -1374,6 +1378,12 @@ impl SeanceApp {
                 self.client.disconnect();
                 cx.quit();
             }
+            GuiEvent::Error { message } if message.contains("`lead_tasks`") => {
+                // An older daemon doesn't know the request. Not a sticky bar:
+                // the lead's chip just stays at zero until the daemon is updated.
+                eprintln!("[seance gui] daemon lacks lead_tasks: {message}");
+                self.lead_tasks_off = Some(std::time::Instant::now());
+            }
             GuiEvent::Error { message } => {
                 eprintln!("[seance gui] daemon error: {message}");
                 // Sticky, not a toast: the conditions that produce this
@@ -1583,6 +1593,10 @@ impl SeanceApp {
     /// scarcer (another circle's pane, untiled, popped, hidden by zoom) is
     /// out of the dispatch tree, where focus silently strands the keyboard.
     fn pane_content_rendered(&self, p: &Pane) -> bool {
+        // A tasks face replaces the pane's terminal.
+        if self.tasks_face_up(&p.slug) {
+            return false;
+        }
         // Stage renders one pane: the one on stage. The Wall renders none.
         match self.view.mode {
             views::ViewMode::Stage => return self.stage_pane().as_deref() == Some(p.slug.as_str()),
@@ -2466,6 +2480,9 @@ impl SeanceApp {
                     let fh = drawer.read(cx).focus_handle(cx);
                     window.focus(&fh, cx);
                 }
+            } else if self.tasks_face_up(slug) {
+                // The tasks face has no terminal: keep focus on the root.
+                window.focus(&self.focus_handle, cx);
             } else if pane.focus_content(window, cx) {
                 // Eager focus for the common case + a render-time backstop:
                 // when this navigation just switched workspaces, the target
@@ -2523,6 +2540,9 @@ impl SeanceApp {
             // place other than an explicit un-flip that may write it — a window
             // that simply can't SEE the pane must never clear it for everyone.
             self.set_shared_flip(None);
+        }
+        if self.tasks_face.as_deref() == Some(slug) {
+            self.tasks_face = None;
         }
         if self.whisper.as_ref().is_some_and(|(s, _)| s == slug) {
             self.whisper = None;
@@ -2725,7 +2745,7 @@ impl SeanceApp {
     /// A pane showing its notes face has no terminal in the frame, so its
     /// content handle is not a legal focus target.
     fn is_flipped(&self, slug: &str) -> bool {
-        self.is_notes_flipped(slug) || self.tasks_face.as_deref() == Some(slug)
+        self.is_notes_flipped(slug) || self.tasks_face_up(slug)
     }
 
     fn is_notes_flipped(&self, slug: &str) -> bool {

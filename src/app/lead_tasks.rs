@@ -5,7 +5,7 @@
 //! blocks on the bridge.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::{div, prelude::*, AnyElement, Context, SharedString, Window};
 use gpui_component::WindowExt as _;
@@ -21,6 +21,8 @@ use super::SeanceApp;
 const POLL_EVERY: Duration = Duration::from_millis(2000);
 /// A row's full text stops here, like the pad inspector's task body.
 const FULL_TEXT_CAP: usize = 2500;
+/// After the daemon fails to answer, ask again this rarely.
+const RETRY_OFF: Duration = Duration::from_secs(600);
 /// Phone tasks open with this line (Invoke); the face leaves it out.
 const PHONE_HEADER: &str = "📱 From Brian's phone (Invoke):";
 
@@ -94,8 +96,14 @@ fn strip_spinner(line: &str) -> &str {
     }
 }
 
+/// HH:MM, with the date (MM-DD) in front of a time before today.
 fn clock(ms: u64) -> String {
-    events::fmt_time(ms)[..5].to_string()
+    let time = &events::fmt_time(ms)[..5];
+    if ms < events::local_day_start_ms(now_ms()) {
+        format!("{} {time}", &events::local_date(ms)[5..])
+    } else {
+        time.to_string()
+    }
 }
 
 fn span(ms: u64) -> String {
@@ -114,6 +122,18 @@ impl SeanceApp {
             cx.background_executor().timer(POLL_EVERY).await;
             let Some(this) = this.upgrade() else { break };
             let ask = this.update(cx, |app: &mut SeanceApp, _| {
+                // A face on a pane that is no longer a Classic lead goes away.
+                if let Some(slug) = app.tasks_face.clone() {
+                    if !app.tasks_face_up(&slug) {
+                        app.tasks_face = None;
+                    }
+                }
+                if app
+                    .lead_tasks_off
+                    .is_some_and(|at| at.elapsed() < RETRY_OFF)
+                {
+                    return None;
+                }
                 let ws = app.selected_workspace.clone()?;
                 let lead = app.stage_lead(&ws)?;
                 Some((lead, Arc::clone(&app.client)))
@@ -126,7 +146,19 @@ impl SeanceApp {
                     async move { client.lead_tasks(&lead) }
                 })
                 .await;
-            let Ok(data) = got else { continue };
+            let data = match got {
+                Ok(data) => data,
+                Err(e) => {
+                    // A daemon that never answers (an older build) costs a
+                    // 10 s wait per ask: stop asking for a while.
+                    if e.to_string().contains("timed out") {
+                        this.update(cx, |app: &mut SeanceApp, _| {
+                            app.lead_tasks_off = Some(Instant::now());
+                        });
+                    }
+                    continue;
+                }
+            };
             let Ok(data) = serde_json::from_value::<LeadTasks>(data) else {
                 continue;
             };
@@ -150,10 +182,25 @@ impl SeanceApp {
         if self.stage_lead(&pane.workspace).as_deref() != Some(pane.slug.as_str()) {
             return None;
         }
-        let data = self.lead_tasks.get(&pane.slug).cloned().unwrap_or_default();
-        let face = (self.tasks_face.as_deref() == Some(pane.slug.as_str()))
-            .then(|| self.render_tasks_face(&pane.slug, &data, cx));
+        let empty = LeadTasks::default();
+        let data = self.lead_tasks.get(&pane.slug).unwrap_or(&empty);
+        let face = self
+            .tasks_face_up(&pane.slug)
+            .then(|| self.render_tasks_face(&pane.slug, data, cx));
         Some((data.open_count(), face))
+    }
+
+    /// Is this pane showing its tasks face? Only while it is still its
+    /// circle's lead and the layout is Classic: Stage draws the lead's
+    /// terminal with no chip to flip back.
+    pub(super) fn tasks_face_up(&self, slug: &str) -> bool {
+        self.tasks_face.as_deref() == Some(slug)
+            && self.view.mode == super::views::ViewMode::Classic
+            && self
+                .panes
+                .iter()
+                .find(|p| p.slug == slug)
+                .is_some_and(|p| self.stage_lead(&p.workspace).as_deref() == Some(slug))
     }
 
     /// Flip a lead onto its tasks face, or back if it is already there.
@@ -165,7 +212,7 @@ impl SeanceApp {
     ) {
         window.end_text_selection(cx);
         window.clear_text_selection(cx);
-        if self.tasks_face.as_deref() == Some(slug) {
+        if self.tasks_face_up(slug) {
             self.tasks_face = None;
             if let Some(pane) = self.panes.iter().find(|p| p.slug == slug) {
                 pane.focus_content(window, cx);
@@ -182,6 +229,8 @@ impl SeanceApp {
         }
         self.active_slug = Some(slug.to_string());
         self.tasks_face = Some(slug.to_string());
+        // The face has no terminal to take the keys: park focus on the root.
+        window.focus(&self.focus_handle, cx);
         cx.notify();
     }
 
@@ -264,14 +313,15 @@ impl SeanceApp {
             }
             face = face.child(label(title));
             for t in rows {
-                face = face.child(self.task_row(
-                    slug,
-                    t,
-                    glyph,
-                    SeancePalette::text_dim(),
-                    vec![],
-                    cx,
-                ));
+                // A parked task was set aside when it finished its turn.
+                let sub = match (status, t.finished_ms) {
+                    ("parked", Some(at)) => {
+                        vec![(format!("parked {}", clock(at)), SeancePalette::text_faint())]
+                    }
+                    _ => vec![],
+                };
+                face =
+                    face.child(self.task_row(slug, t, glyph, SeancePalette::text_dim(), sub, cx));
             }
         }
 
