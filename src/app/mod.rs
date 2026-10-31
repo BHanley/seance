@@ -191,6 +191,10 @@ pub struct SeanceApp {
     chat: chat::ChatState,
     /// Task row expanded to its full text on the tasks card.
     tasks_row_open: Option<String>,
+    /// Parked tasks with a resume or close call in flight.
+    tasks_busy: std::collections::HashSet<String>,
+    /// Why a parked task's last resume or close failed, by task id.
+    tasks_error: std::collections::HashMap<String, String>,
     /// Last `FsOp::LeadTasks` answer per lead slug.
     lead_tasks: std::collections::HashMap<String, lead_tasks::LeadTasks>,
     active_slug: Option<String>,
@@ -511,6 +515,8 @@ impl SeanceApp {
             invoke_tasks_off: None,
             chat: chat::ChatState::default(),
             tasks_row_open: None,
+            tasks_busy: std::collections::HashSet::new(),
+            tasks_error: std::collections::HashMap::new(),
             lead_tasks: std::collections::HashMap::new(),
             active_slug: None,
             window_active: true,

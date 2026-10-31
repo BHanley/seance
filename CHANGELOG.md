@@ -19,6 +19,13 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **Parked tasks can be sent back or closed from the tasks card.** Each
+  Parked row (in Classic and in the Chat header's card) gets a round ↩
+  button ("do this next": the lead gets the task again as your message and
+  the parked copy closes) and a small × ("close it"), like the phone's list.
+  The buttons are dead while the call runs, the card refreshes after, and a
+  refusal from Invoke shows under the row. They only appear on rows from
+  Invoke's list, not on the daemon's fallback.
 - **Chat bubbles: select, copy, links, paths and photos.** Text in a bubble
   can be selected and copied, links open on click, double-clicking a file
   path that exists on this Mac opens it the way a terminal does (images,

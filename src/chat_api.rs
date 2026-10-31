@@ -200,7 +200,8 @@ fn origin(base: &str) -> String {
 
 fn curl(path: &str, secs: u64, post: Option<&serde_json::Value>) -> Result<Vec<u8>> {
     let mut cmd = Command::new("curl");
-    cmd.args(["-sS", "-f", "-m", &secs.to_string()]);
+    // --fail-with-body: a refusal still hands back Invoke's {"error": ...}.
+    cmd.args(["-sS", "--fail-with-body", "-m", &secs.to_string()]);
     if post.is_some() {
         cmd.args([
             "-X",
@@ -227,10 +228,19 @@ fn curl(path: &str, secs: u64, post: Option<&serde_json::Value>) -> Result<Vec<u
     }
     let out = child.wait_with_output()?;
     if !out.status.success() {
+        if let Some(said) = refusal(&out.stdout) {
+            return Err(anyhow!("{said}"));
+        }
         let err = String::from_utf8_lossy(&out.stderr);
         return Err(anyhow!("{}", err.trim()));
     }
     Ok(out.stdout)
+}
+
+/// What Invoke said when it refused a request: its `{"error": ...}` text.
+fn refusal(body: &[u8]) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_slice(body).ok()?;
+    v.get("error")?.as_str().map(str::to_string)
 }
 
 fn get<T: DeserializeOwned>(path: &str, secs: u64) -> Result<T> {
@@ -269,6 +279,27 @@ pub fn send(ws: &str, text: &str) -> Result<()> {
         "/api/send",
         REQUEST_SECS,
         Some(&serde_json::json!({ "ws": ws, "text": text })),
+    )
+    .map(|_| ())
+}
+
+/// Send a parked task back to the circle's lead as Brian's message and close
+/// the parked copy. Invoke refuses with "not a parked task" for anything else.
+pub fn resume(ws: &str, id: &str) -> Result<()> {
+    curl(
+        "/api/resume",
+        REQUEST_SECS,
+        Some(&serde_json::json!({ "ws": ws, "id": id })),
+    )
+    .map(|_| ())
+}
+
+/// Close a parked task without doing it.
+pub fn dismiss(ws: &str, id: &str) -> Result<()> {
+    curl(
+        "/api/dismiss",
+        REQUEST_SECS,
+        Some(&serde_json::json!({ "ws": ws, "id": id })),
     )
     .map(|_| ())
 }
@@ -349,6 +380,16 @@ mod tests {
         assert_eq!(t.helpers[0].task.as_deref(), Some("build it"));
         assert_eq!(t.parked[0].start, None);
         assert_eq!(t.done[0].end, Some(2));
+    }
+
+    #[test]
+    fn a_refusal_reads_back_as_its_error_text() {
+        assert_eq!(
+            refusal(br#"{"error": "not a parked task"}"#).as_deref(),
+            Some("not a parked task")
+        );
+        assert_eq!(refusal(b"<html>nope</html>"), None);
+        assert_eq!(refusal(br#"{"message": "ok"}"#), None);
     }
 
     #[test]
