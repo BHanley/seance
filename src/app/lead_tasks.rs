@@ -17,7 +17,7 @@ use crate::chat_api;
 use crate::events;
 use crate::theme::SeancePalette;
 
-use super::util::now_ms;
+use super::util::{now_ms, tip};
 use super::SeanceApp;
 
 /// How often the selected circle's lead is asked for its tasks.
@@ -58,6 +58,10 @@ pub(super) struct LeadTasks {
     /// The lead's own deciding screen line while it works.
     #[serde(default)]
     evidence: Option<String>,
+    /// Came from Invoke, which can resume or close a parked task; the daemon's
+    /// list cannot.
+    #[serde(skip)]
+    invoke: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -195,6 +199,7 @@ impl LeadTasks {
             helpers: Vec::new(),
             handed,
             evidence: Some(evidence),
+            invoke: true,
         }
     }
 }
@@ -269,9 +274,16 @@ impl SeanceApp {
                 let skip_daemon = app
                     .lead_tasks_off
                     .is_some_and(|at| at.elapsed() < RETRY_OFF);
-                Some((lead, ws, Arc::clone(&app.client), skip_invoke, skip_daemon))
+                Some((
+                    lead,
+                    ws,
+                    Arc::clone(&app.client),
+                    skip_invoke,
+                    skip_daemon,
+                    app.lead_tasks_gen,
+                ))
             });
-            let Some((lead, ws, client, skip_invoke, skip_daemon)) = ask else {
+            let Some((lead, ws, client, skip_invoke, skip_daemon, gen)) = ask else {
                 continue;
             };
             // Invoke's list first (names, handed-off work, as on the phone);
@@ -336,13 +348,25 @@ impl SeanceApp {
                         app.invoke_tasks_off = Some(Instant::now());
                     }
                 }
-                if app.lead_tasks.get(&lead) != Some(&data) {
-                    app.lead_tasks.insert(lead, data);
-                    cx.notify();
+                // A resume or close began or ended since this was asked: the
+                // card has a newer list, and this would bring a closed row back.
+                if app.lead_tasks_gen == gen {
+                    app.adopt_lead_tasks(lead, data, cx);
                 }
             });
         })
         .detach();
+    }
+
+    /// Take a list as the lead's card, and forget the errors of rows it no
+    /// longer has.
+    fn adopt_lead_tasks(&mut self, lead: String, data: LeadTasks, cx: &mut Context<Self>) {
+        self.tasks_error
+            .retain(|id, _| data.tasks.iter().any(|t| &t.id == id));
+        if self.lead_tasks.get(&lead) != Some(&data) {
+            self.lead_tasks.insert(lead, data);
+            cx.notify();
+        }
     }
 
     /// Chip count and whether its popover is open. `None` for any pane that
@@ -473,6 +497,12 @@ impl SeanceApp {
         cx: &Context<Self>,
     ) -> AnyElement {
         let now = now_ms();
+        // The circle Invoke knows this lead by: where resume and close go.
+        let ws = self
+            .panes
+            .iter()
+            .find(|p| p.slug == slug)
+            .map(|p| p.workspace.clone());
         let label = |text: &str| {
             div()
                 .mt_1()
@@ -509,7 +539,8 @@ impl SeanceApp {
                         SeancePalette::text_faint(),
                     ));
                 }
-                face = face.child(self.task_row(slug, t, "▶", SeancePalette::flame(), sub, cx));
+                face =
+                    face.child(self.task_row(slug, t, "▶", SeancePalette::flame(), sub, None, cx));
             }
             None => {
                 face = face.child(
@@ -534,7 +565,15 @@ impl SeanceApp {
                     phone: false,
                 };
                 let sub = vec![(h.progress.clone(), SeancePalette::flame())];
-                face = face.child(self.task_row(slug, &row, "▶", SeancePalette::flame(), sub, cx));
+                face = face.child(self.task_row(
+                    slug,
+                    &row,
+                    "▶",
+                    SeancePalette::flame(),
+                    sub,
+                    None,
+                    cx,
+                ));
             }
         }
 
@@ -554,8 +593,20 @@ impl SeanceApp {
                     ("parked", None) => vec![("parked".to_string(), SeancePalette::text_faint())],
                     _ => vec![],
                 };
-                face =
-                    face.child(self.task_row(slug, t, glyph, SeancePalette::text_dim(), sub, cx));
+                // Invoke's list can send a parked task back to the lead or
+                // close it; the daemon's cannot.
+                let actions = (status == "parked" && data.invoke)
+                    .then(|| ws.as_deref())
+                    .flatten();
+                face = face.child(self.task_row(
+                    slug,
+                    t,
+                    glyph,
+                    SeancePalette::text_dim(),
+                    sub,
+                    actions,
+                    cx,
+                ));
             }
         }
 
@@ -581,7 +632,7 @@ impl SeanceApp {
                     ),
                     SeancePalette::text_faint(),
                 )];
-                face = face.child(self.task_row(slug, t, glyph, colour, sub, cx));
+                face = face.child(self.task_row(slug, t, glyph, colour, sub, None, cx));
             }
         }
         face.into_any_element()
@@ -597,6 +648,8 @@ impl SeanceApp {
         glyph: &str,
         glyph_colour: gpui::Hsla,
         sub: Vec<(String, gpui::Hsla)>,
+        // The circle, when the row offers "do this next" and "close it".
+        actions: Option<&str>,
         cx: &Context<Self>,
     ) -> AnyElement {
         let open = self.tasks_row_open.as_deref() == Some(t.id.as_str());
@@ -623,6 +676,14 @@ impl SeanceApp {
                 sub.into_iter()
                     .map(|(line, colour)| div().text_xs().text_color(colour).child(line)),
             );
+        if let Some(why) = self.tasks_error.get(&t.id) {
+            text = text.child(
+                div()
+                    .text_xs()
+                    .text_color(SeancePalette::danger())
+                    .child(why.clone()),
+            );
+        }
         if open {
             let mut full = clean_body(&t.body);
             if full.len() > FULL_TEXT_CAP {
@@ -671,7 +732,125 @@ impl SeanceApp {
                     .child(glyph.to_string()),
             )
             .child(text)
+            .children(actions.map(|ws| self.parked_buttons(slug, ws, &t.id, cx)))
             .into_any_element()
+    }
+
+    /// A parked row's two buttons, as on the phone: a round ↩ ("do this next":
+    /// the lead gets it again as Brian's message) and a small × ("close it").
+    /// Both are dead while a call is running.
+    fn parked_buttons(&self, slug: &str, ws: &str, id: &str, cx: &Context<Self>) -> AnyElement {
+        let busy = self.tasks_busy.contains(id);
+        let button = |key: &str, resume: bool| {
+            let (lead, ws, id) = (slug.to_string(), ws.to_string(), id.to_string());
+            let b = div()
+                .id(SharedString::from(format!("task-{key}-{slug}-{id}")))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .when(busy, |d| d.opacity(0.4));
+            let b = if resume {
+                b.size(px(22.))
+                    .rounded_full()
+                    .bg(SeancePalette::flame())
+                    .text_color(SeancePalette::bg())
+                    .text_sm()
+                    .child("↩")
+                    .tooltip(tip("do this next"))
+            } else {
+                b.size(px(18.))
+                    .rounded_full()
+                    .text_xs()
+                    .text_color(SeancePalette::text_faint())
+                    .child("×")
+                    .tooltip(tip("close it"))
+            };
+            if busy {
+                return b;
+            }
+            b.cursor_pointer()
+                .hover(|s| {
+                    if resume {
+                        s.bg(SeancePalette::flame_dim())
+                    } else {
+                        s.text_color(SeancePalette::danger())
+                    }
+                })
+                // The row itself expands on a click; the buttons are not that.
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.parked_action(lead.clone(), ws.clone(), id.clone(), resume, cx);
+                    cx.stop_propagation();
+                }))
+        };
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(button("resume", true))
+            .child(button("dismiss", false))
+            .into_any_element()
+    }
+
+    /// "Do this next" (`resume`) or "close it" on a parked task, through
+    /// Invoke. The card refreshes after; a refusal shows under the row.
+    fn parked_action(
+        &mut self,
+        lead: String,
+        ws: String,
+        id: String,
+        resume: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.tasks_busy.insert(id.clone()) {
+            return;
+        }
+        self.tasks_error.remove(&id);
+        self.lead_tasks_gen += 1;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let (call_ws, call_id) = (ws.clone(), id.clone());
+            let done = cx
+                .background_executor()
+                .spawn(async move {
+                    if resume {
+                        chat_api::resume(&call_ws, &call_id)
+                    } else {
+                        chat_api::dismiss(&call_ws, &call_id)
+                    }
+                })
+                .await;
+            // Read the list again now, rather than at the next poll.
+            let fresh = match done {
+                Ok(()) => {
+                    let ask = ws.clone();
+                    cx.background_executor()
+                        .spawn(async move { chat_api::tasks(&ask) })
+                        .await
+                        .ok()
+                }
+                Err(_) => None,
+            };
+            let Some(this) = this.upgrade() else { return };
+            this.update(cx, |app: &mut SeanceApp, cx| {
+                app.tasks_busy.remove(&id);
+                // Polls asked while the call ran are older than what it found.
+                app.lead_tasks_gen += 1;
+                match done {
+                    Ok(()) => {
+                        if let Some(t) = fresh.filter(|t| t.lead.is_some()) {
+                            app.adopt_lead_tasks(lead, LeadTasks::from_invoke(t), cx);
+                        }
+                    }
+                    Err(e) => {
+                        app.tasks_error.insert(id, e.to_string());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 }
 
@@ -854,5 +1033,12 @@ mod tests {
             phone: true,
         };
         assert_eq!(row_title(&row), ("ok can you do it plz.".to_string(), None));
+    }
+
+    #[test]
+    fn only_invoke_lists_offer_resume_and_close() {
+        assert!(LeadTasks::from_invoke(chat_api::Tasks::default()).invoke);
+        let daemon: LeadTasks = serde_json::from_str(r#"{"tasks":[],"helpers":[]}"#).unwrap();
+        assert!(!daemon.normalized().invoke);
     }
 }

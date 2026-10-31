@@ -19,6 +19,13 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **Parked tasks can be sent back or closed from the tasks card.** Each
+  Parked row (in Classic and in the Chat header's card) gets a round ↩
+  button ("do this next": the lead gets the task again as your message and
+  the parked copy closes) and a small × ("close it"), like the phone's list.
+  The buttons are dead while the call runs, the card refreshes after, and a
+  refusal from Invoke shows under the row. They only appear on rows from
+  Invoke's list, not on the daemon's fallback.
 - **Chat bubbles: select, copy, links, paths and photos.** Text in a bubble
   can be selected and copied, links open on click, double-clicking a file
   path that exists on this Mac opens it the way a terminal does (images,
@@ -283,6 +290,21 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Fixed
 
+- **Chat: videos, line breaks and the tasks card.** A video a lead sends as
+  a note is a "▶ video" tile, not a picture: nothing is downloaded until you
+  click it, then it downloads with up to 15 minutes to spare ("downloading…"
+  shows meanwhile, a failure says so and waits for another click) and opens in
+  its app. Every line break in a message now shows (a single newline used to
+  vanish: "png" and "image" ran together). On the tasks card, a poll that was
+  asked before a resume or close no longer brings the row back for a moment,
+  and a row's error goes away when the row does.
+- **Chat pictures fit their bubble.** A photo or screenshot in a bubble is
+  held to 320 px wide and about 420 px tall at its own shape, in a box whose
+  size is reserved from the picture's header (a plain box until the file has
+  arrived), so a tall phone photo no longer runs past the bubble, under the
+  next messages or behind a reply's text. A note with several pictures shows
+  all of them, stacked above its text. Pictures always come through Invoke's
+  `/api/file`; clicking one still opens it full size.
 - **A busy pane's progress line no longer flickers to its window title.**
   Claude's spinner drops off screen for a frame now and then, and the
   roster's `activity_evidence` fell back to the OSC title until it came

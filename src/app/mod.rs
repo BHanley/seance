@@ -185,12 +185,19 @@ pub struct SeanceApp {
     lead_tasks_off: Option<std::time::Instant>,
     /// `lead_tasks` asks that timed out in a row.
     lead_tasks_timeouts: u8,
+    /// Bumped whenever a resume or close starts or ends: a poll answer that was
+    /// asked before is older than the card and is dropped.
+    lead_tasks_gen: u64,
     /// When Invoke's task list last failed to answer: the daemon's stands in.
     invoke_tasks_off: Option<std::time::Instant>,
     /// The Chat layout's circles, threads and composer.
     chat: chat::ChatState,
     /// Task row expanded to its full text on the tasks card.
     tasks_row_open: Option<String>,
+    /// Parked tasks with a resume or close call in flight.
+    tasks_busy: std::collections::HashSet<String>,
+    /// Why a parked task's last resume or close failed, by task id.
+    tasks_error: std::collections::HashMap<String, String>,
     /// Last `FsOp::LeadTasks` answer per lead slug.
     lead_tasks: std::collections::HashMap<String, lead_tasks::LeadTasks>,
     active_slug: Option<String>,
@@ -508,9 +515,12 @@ impl SeanceApp {
             tasks_popover: None,
             lead_tasks_off: None,
             lead_tasks_timeouts: 0,
+            lead_tasks_gen: 0,
             invoke_tasks_off: None,
             chat: chat::ChatState::default(),
             tasks_row_open: None,
+            tasks_busy: std::collections::HashSet::new(),
+            tasks_error: std::collections::HashMap::new(),
             lead_tasks: std::collections::HashMap::new(),
             active_slug: None,
             window_active: true,
