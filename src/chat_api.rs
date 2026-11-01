@@ -61,6 +61,9 @@ pub struct Msg {
     /// The choice that was tapped, once one has been.
     #[serde(default)]
     pub picked: Option<String>,
+    /// How far one of Brian's notes has got: sending, got, answered or failed.
+    #[serde(default)]
+    pub status: String,
 }
 
 impl Msg {
