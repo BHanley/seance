@@ -887,6 +887,62 @@ fn sleeping_keeps_the_pane_and_survives_its_own_exit_event() {
     });
 }
 
+/// A `claude-mac` pane with its conversation id pinned in the command can sleep
+/// (the transcript is on the Mac, so nothing here could vouch for it), its exit
+/// event is ignored, and waking runs the very same command again. A plain shell
+/// beside it still vetoes its own circle.
+#[test]
+fn a_pinned_claude_mac_pane_sleeps_and_wakes_on_its_own_command() {
+    use std::os::unix::fs::PermissionsExt as _;
+    with_test_state_dir("sleep-claude-mac", || {
+        let scratch = temp_scratch("sleep-claude-mac");
+        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
+        let slug = eng.push_stub_pane("lead", "lab");
+        let shell = eng.push_stub_pane("worker", "other");
+
+        // A stand-in `claude-mac`: it only has to stay alive.
+        let bin = scratch.join("claude-mac");
+        std::fs::write(&bin, "#!/bin/sh\nsleep 30\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let command = format!(
+            "env LEAD_UNATTENDED=1 CLAUDE_MAC_ARGS='--resume 441ac7a9-2dd2-4942-a3fa-b77d17b64255' {}",
+            bin.display()
+        );
+        let cwd = std::env::temp_dir().to_string_lossy().to_string();
+        {
+            let p = eng.panes.iter_mut().find(|p| p.slug == slug).unwrap();
+            p.command = command.clone();
+            p.cwd = cwd;
+        }
+
+        assert!(eng.pane_restorable(&slug));
+        assert!(!eng.pane_restorable(&shell), "a bare shell still vetoes");
+        assert!(eng.sleep_workspace("other").is_err());
+        assert_eq!(eng.sleep_workspace("lab").unwrap(), 1);
+        assert!(eng.panes.iter().any(|p| p.slug == slug && p.asleep));
+
+        // The exit that sleeping caused must not close the pane.
+        eng.handle_session_event(SessionEvent::Exited {
+            slug: slug.clone(),
+            generation: 0,
+            code: Some(130),
+        });
+        assert!(eng.panes.iter().any(|p| p.slug == slug && p.asleep));
+        // Still restorable while asleep.
+        assert!(eng.pane_restorable(&slug));
+
+        assert!(eng.wake_pane(&slug).unwrap());
+        let p = eng.panes.iter_mut().find(|p| p.slug == slug).unwrap();
+        assert!(!p.asleep && p.session.is_some());
+        assert_eq!(p.command, command, "the pane's own command, unchanged");
+        if let Some(s) = p.session.take() {
+            s.shutdown();
+        }
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    });
+}
+
 /// A status-set that repeats the pane's last (state, note) changes nothing a
 /// window shows, so it isn't broadcast; a new note is.
 #[test]
