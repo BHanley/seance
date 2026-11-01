@@ -5,12 +5,15 @@
 //! exactly (`Engine::pane_restorable`: an agent pane whose conversation is on
 //! disk, or Claude hosted in a shell with a session record), never one that
 //! is busy, waiting on the human, holding queued tasks or focused, and never
-//! in a circle listed in `seance-auto-sleep-skip`. Idle is human input and
+//! in a circle listed in `seance-auto-sleep-skip`. A `claude-mac` pane with a
+//! pinned conversation id is restorable too, but only by hand: the sweep can't
+//! see what the Mac side is doing (a background server, a watcher), so it
+//! leaves those up. Idle is human input and
 //! the pane's busy changes, not screen output, which a Claude status line
 //! never stops making. Anything addressed to a sleeping pane wakes it.
 //!
 //! Manual sleep (`seance ctl sleep`, right-click → sleep) still sleeps whole
-//! circles.
+//! circles, `claude-mac` panes with a pinned id included.
 
 use std::time::Duration;
 

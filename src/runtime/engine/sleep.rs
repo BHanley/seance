@@ -226,8 +226,9 @@ fn shell_words(line: &str) -> Vec<String> {
 
 /// The conversation id pinned in a `claude-mac` command, when it has one:
 /// the program (basename `claude-mac`, possibly behind `env` and `NAME=value`
-/// words) with a UUID after `--resume`, `-r` or `--session-id` (or joined with
-/// `=`) inside its `CLAUDE_MAC_ARGS`. Rerunning that command resumes the
+/// words) with a UUID after `--resume`, `-r` or `--session-id` (or joined to
+/// `--resume` or `--session-id` with `=`) inside its `CLAUDE_MAC_ARGS`, and no
+/// `--continue` or `-c` beside it. Rerunning that command resumes the
 /// conversation on the Mac, where the transcript lives, so the pane can be put
 /// back though this machine cannot see the transcript. No id, no answer.
 pub(crate) fn claude_mac_session(command: &str) -> Option<String> {
@@ -261,11 +262,18 @@ pub(crate) fn claude_mac_session(command: &str) -> Option<String> {
         return None;
     }
     let args = shell_words(&args?);
+    // `claude-mac` treats --continue (-c) as "the latest conversation", which is
+    // no pin at all, whatever else is on the line.
+    if args.iter().any(|a| a == "--continue" || a == "-c") {
+        return None;
+    }
     let mut it = args.iter();
     while let Some(arg) = it.next() {
+        // The forms claude-mac itself pins: `--resume ID`, `-r ID`,
+        // `--session-id ID`, `--resume=ID` and `--session-id=ID` (no `-r=ID`).
         let value = match arg.as_str() {
             "--resume" | "-r" | "--session-id" => it.next().map(String::as_str),
-            _ => ["--resume=", "-r=", "--session-id="]
+            _ => ["--resume=", "--session-id="]
                 .iter()
                 .find_map(|flag| arg.strip_prefix(flag)),
         };
@@ -525,8 +533,10 @@ impl Engine {
 
     /// Panes idle longer than `idle_ms` that can be put back exactly.
     ///
-    /// Per pane, not per circle: a circle's Mac panes and shells can't sleep,
-    /// and they shouldn't keep its idle Claude panes awake. Idle is the later
+    /// Per pane, not per circle: a circle's shells can't sleep,
+    /// and they shouldn't keep its idle Claude panes awake. A `claude-mac` pane
+    /// with a pinned conversation id sleeps by hand (`ctl sleep`) only; the
+    /// sweep leaves it up. Idle is the later
     /// of the circle's last human input and the pane's last busy change (the
     /// daemon's start when it saw none); screen output doesn't count, since a
     /// Claude status line redraws all the time. Never: a busy pane, one
@@ -539,6 +549,12 @@ impl Engine {
             .iter()
             .filter(|p| {
                 if p.asleep || p.kind == "file" || skip.contains(&p.workspace) {
+                    return false;
+                }
+                // A `claude-mac` pane is sleepable by hand only: `pane_quiet`
+                // sees the ssh under it, not the Mac, so a background server,
+                // watcher or Monitor over there would look idle and be killed.
+                if claude_mac_session(&p.command).is_some() {
                     return false;
                 }
                 let slug = p.slug.as_str();
@@ -741,6 +757,7 @@ mod claude_mac_tests {
             format!("-r {ID}"),
             format!("--session-id {ID}"),
             format!("--resume={ID}"),
+            format!("--session-id={ID}"),
             format!("--dangerously-skip-permissions --resume {ID} --model opus"),
         ] {
             assert_eq!(
@@ -774,6 +791,23 @@ mod claude_mac_tests {
             None
         );
         assert_eq!(claude_mac_session("bash -l"), None);
+        // claude-mac does not pin `-r=ID`, and --continue (-c) is no pin at all,
+        // even beside an id.
+        assert_eq!(
+            claude_mac_session(&format!("env CLAUDE_MAC_ARGS='-r={ID}' claude-mac")),
+            None
+        );
+        for args in [
+            format!("--continue --resume {ID}"),
+            format!("-c --resume {ID}"),
+            "-c".to_string(),
+        ] {
+            assert_eq!(
+                claude_mac_session(&format!("env CLAUDE_MAC_ARGS='{args}' claude-mac")),
+                None,
+                "{args}"
+            );
+        }
         // A flag with nothing after it.
         assert_eq!(
             claude_mac_session("env CLAUDE_MAC_ARGS='--resume' claude-mac"),
