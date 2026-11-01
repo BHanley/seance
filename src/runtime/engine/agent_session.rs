@@ -52,7 +52,7 @@ pub(crate) fn new_session_uuid() -> String {
     )
 }
 
-fn looks_like_uuid(s: &str) -> bool {
+pub(super) fn looks_like_uuid(s: &str) -> bool {
     s.len() == 36
         && s.char_indices().all(|(i, c)| {
             if matches!(i, 8 | 13 | 18 | 23) {

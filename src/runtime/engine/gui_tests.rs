@@ -887,6 +887,109 @@ fn sleeping_keeps_the_pane_and_survives_its_own_exit_event() {
     });
 }
 
+/// A `claude-mac` pane with its conversation id pinned in the command can be
+/// slept by hand (the transcript is on the Mac, so nothing here could vouch for
+/// it), but never by the sweep (nothing here sees what runs over there); its
+/// exit event is ignored; and waking runs the very same command again, whatever
+/// a hosted record or a saved session id says. A plain shell beside it still
+/// vetoes its own circle.
+#[test]
+fn a_pinned_claude_mac_pane_sleeps_by_hand_and_wakes_on_its_own_command() {
+    use std::os::unix::fs::PermissionsExt as _;
+    with_test_state_dir("sleep-claude-mac", || {
+        let scratch = temp_scratch("sleep-claude-mac");
+        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
+        let slug = eng.push_stub_pane("lead", "lab");
+        let shell = eng.push_stub_pane("worker", "other");
+        let control = eng.push_stub_pane("agent", "plain");
+        fake_claude_pane(&mut eng, &control, "mac-control");
+
+        // A stand-in `claude-mac` that records what it was run with.
+        let bin = scratch.join("claude-mac");
+        let ran = scratch.join("ran.txt");
+        std::fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\nprintf '%s|%s\\n' \"$CLAUDE_MAC_ARGS\" \"$*\" > '{}'\nsleep 30\n",
+                ran.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let pinned = "441ac7a9-2dd2-4942-a3fa-b77d17b64255";
+        let command = format!(
+            "env LEAD_UNATTENDED=1 CLAUDE_MAC_ARGS='--resume {pinned}' {}",
+            bin.display()
+        );
+        let cwd = std::env::temp_dir().to_string_lossy().to_string();
+        let pane_id = {
+            let p = eng.panes.iter_mut().find(|p| p.slug == slug).unwrap();
+            p.command = command.clone();
+            p.cwd = cwd.clone();
+            // Bait for the other restore paths: a saved session id, and a hosted
+            // record whose conversation is on disk. Neither may rewrite the command.
+            p.agent_session = Some("11111111-2222-4333-a444-555555555555".into());
+            p.pane_id.clone()
+        };
+        let other = "99999999-8888-4777-a666-555555555555";
+        let transcript = super::agent_session::claude_transcript(&cwd, other);
+        std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        std::fs::write(&transcript, b"{}\n").unwrap();
+        let record = super::sleep::hosted_path(&pane_id).unwrap();
+        std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+        std::fs::write(&record, format!(r#"{{"session":"{other}","cwd":"{cwd}"}}"#)).unwrap();
+
+        assert!(eng.pane_restorable(&slug));
+        assert!(!eng.pane_restorable(&shell), "a bare shell still vetoes");
+        assert!(eng.sleep_workspace("other").is_err());
+
+        // The sweep leaves it alone however idle it is; a plain claude pane in
+        // another circle, as idle, is taken.
+        let now = now_ms();
+        let day = 24 * 60 * 60 * 1000;
+        eng.started_ms = now - 2 * day;
+        assert_eq!(
+            eng.auto_sleep_candidates(6 * 60 * 60 * 1000, now, &[]),
+            vec![control]
+        );
+
+        // By hand it sleeps.
+        assert_eq!(eng.sleep_workspace("lab").unwrap(), 1);
+        assert!(eng.panes.iter().any(|p| p.slug == slug && p.asleep));
+
+        // The exit that sleeping caused must not close the pane.
+        eng.handle_session_event(SessionEvent::Exited {
+            slug: slug.clone(),
+            generation: 0,
+            code: Some(130),
+        });
+        assert!(eng.panes.iter().any(|p| p.slug == slug && p.asleep));
+        assert!(eng.pane_restorable(&slug), "still restorable asleep");
+
+        // Waking runs the pane's own command: the stand-in sees the pinned
+        // arguments and nothing appended. A hosted launch would never run it,
+        // and a resume appended to the command would show in its arguments.
+        assert!(eng.wake_pane(&slug).unwrap());
+        let mut seen = String::new();
+        for _ in 0..100 {
+            if let Ok(text) = std::fs::read_to_string(&ran) {
+                seen = text;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert_eq!(seen, format!("--resume {pinned}|\n"));
+        let p = eng.panes.iter_mut().find(|p| p.slug == slug).unwrap();
+        assert!(!p.asleep && p.session.is_some());
+        assert_eq!(p.command, command);
+        if let Some(s) = p.session.take() {
+            s.shutdown();
+        }
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    });
+}
+
 /// A status-set that repeats the pane's last (state, note) changes nothing a
 /// window shows, so it isn't broadcast; a new note is.
 #[test]

@@ -282,6 +282,14 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Changed
 
+- **Circles with `claude-mac` leads can sleep now.** A pane running
+  `claude-mac` with its conversation id in the command (`CLAUDE_MAC_ARGS`
+  holding `--resume <id>`, `-r <id>` or `--session-id <id>`) counts as
+  restorable: the transcript is on the Mac, so the daemon does not look for it,
+  and waking runs the pane's own command again, which resumes that
+  conversation. Without a pinned id, and for plain shell panes, nothing
+  changes: they still keep their circle awake. This is a daemon change: the XPS
+  daemon needs the new build.
 - **The tasks card reads Invoke's list.** The card behind a lead's "☑ N"
   chip (in Classic and in the Chat header) now shows what the phone shows:
   the lead's own name for each task as the row title, with Brian's own words

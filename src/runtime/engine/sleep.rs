@@ -22,7 +22,7 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Result};
 
-use super::agent_session::{launch_with_session, transcript_exists, Agent};
+use super::agent_session::{launch_with_session, looks_like_uuid, transcript_exists, Agent};
 use super::helpers::{atomic_write_bytes, now_ms};
 use super::Engine;
 use crate::events;
@@ -173,6 +173,117 @@ pub(crate) fn hosted_launch(session: &str, cwd: &str) -> String {
     )
 }
 
+/// Split a command line into words the way a shell would: single and double
+/// quotes group, a backslash escapes, and quoted pieces join into the word
+/// around them (`NAME='a b'` is one word, `NAME=a b`). No expansion.
+fn shell_words(line: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut cur = String::new();
+    let mut in_word = false;
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => {
+                in_word = true;
+                for q in chars.by_ref() {
+                    if q == '\'' {
+                        break;
+                    }
+                    cur.push(q);
+                }
+            }
+            '"' => {
+                in_word = true;
+                while let Some(q) = chars.next() {
+                    match q {
+                        '"' => break,
+                        '\\' => cur.extend(chars.next()),
+                        _ => cur.push(q),
+                    }
+                }
+            }
+            '\\' => {
+                in_word = true;
+                cur.extend(chars.next());
+            }
+            c if c.is_whitespace() => {
+                if in_word {
+                    words.push(std::mem::take(&mut cur));
+                    in_word = false;
+                }
+            }
+            c => {
+                in_word = true;
+                cur.push(c);
+            }
+        }
+    }
+    if in_word {
+        words.push(cur);
+    }
+    words
+}
+
+/// The conversation id pinned in a `claude-mac` command, when it has one:
+/// the program (basename `claude-mac`, possibly behind `env` and `NAME=value`
+/// words) with a UUID after `--resume`, `-r` or `--session-id` (or joined to
+/// `--resume` or `--session-id` with `=`) inside its `CLAUDE_MAC_ARGS`, and no
+/// `--continue` or `-c` beside it. Rerunning that command resumes the
+/// conversation on the Mac, where the transcript lives, so the pane can be put
+/// back though this machine cannot see the transcript. No id, no answer.
+pub(crate) fn claude_mac_session(command: &str) -> Option<String> {
+    let words = shell_words(command);
+    let mut rest = words.as_slice();
+    if rest
+        .first()
+        .is_some_and(|w| w.rsplit('/').next() == Some("env"))
+    {
+        rest = &rest[1..];
+    }
+    let is_assignment = |w: &str| {
+        w.split_once('=').is_some_and(|(name, _)| {
+            name.chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
+    };
+    let mut args = None;
+    while let Some((word, tail)) = rest.split_first() {
+        if !is_assignment(word) {
+            break;
+        }
+        if let Some(v) = word.strip_prefix("CLAUDE_MAC_ARGS=") {
+            args = Some(v.to_string());
+        }
+        rest = tail;
+    }
+    if rest.first()?.rsplit('/').next() != Some("claude-mac") {
+        return None;
+    }
+    let args = shell_words(&args?);
+    // `claude-mac` treats --continue (-c) as "the latest conversation", which is
+    // no pin at all, whatever else is on the line.
+    if args.iter().any(|a| a == "--continue" || a == "-c") {
+        return None;
+    }
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        // The forms claude-mac itself pins: `--resume ID`, `-r ID`,
+        // `--session-id ID`, `--resume=ID` and `--session-id=ID` (no `-r=ID`).
+        let value = match arg.as_str() {
+            "--resume" | "-r" | "--session-id" => it.next().map(String::as_str),
+            _ => ["--resume=", "--session-id="]
+                .iter()
+                .find_map(|flag| arg.strip_prefix(flag)),
+        };
+        if let Some(id) = value.filter(|v| looks_like_uuid(v)) {
+            return Some(id.to_string());
+        }
+    }
+    None
+}
+
 /// Auto-sleep's knobs, from the daemon machine's terminal.conf:
 /// `seance-auto-sleep-idle` (default [`AUTO_SLEEP_IDLE_MS`]) and
 /// `seance-auto-sleep-skip` (circles never auto-slept).
@@ -191,6 +302,8 @@ impl Engine {
     /// * Claude typed into a shell or started by a wrapper (`lead-resume`) —
     ///   yes while it is still running there and its session record
     ///   (`hosted/<pane_id>.json`) names that live conversation.
+    /// * `claude-mac` with a conversation id pinned in its command — yes, the
+    ///   same command resumes it on the Mac.
     /// * anything else (a bare shell, another agent, an agent pane that was never
     ///   prompted) — no. Sleeping it would throw away state nothing can
     ///   rebuild, so it isn't offered.
@@ -202,6 +315,12 @@ impl Engine {
             return true;
         }
         let Some(agent) = Agent::of(&p.command) else {
+            // Claude on the Mac through `claude-mac`, its conversation id
+            // pinned in the command: running it again resumes that one. Its
+            // transcript is on the Mac, so there is nothing to look for here.
+            if claude_mac_session(&p.command).is_some() {
+                return true;
+            }
             // Claude hosted in a shell or wrapper: restorable while it is
             // still the thing running and its conversation is on disk.
             // Cheap: this runs for every pane on every state push. Sleeping
@@ -325,6 +444,9 @@ impl Engine {
         let record = hosted_record(&pane_id)
             .filter(|(id, rec_cwd)| transcript_exists(Agent::Claude, rec_cwd, id));
         let launch = match (agent, record, session_id.as_deref()) {
+            // `claude-mac` carries its own conversation id: the command comes
+            // back as it is, whatever a hosted record or session id says.
+            _ if claude_mac_session(&command).is_some() => command.clone(),
             (None, Some((id, rec_cwd)), _) => hosted_launch(&id, &rec_cwd),
             (Some(Agent::Claude), Some((id, rec_cwd)), _) if same_dir(&rec_cwd, &cwd) => {
                 // Keep it, so a cold restart resumes this one too.
@@ -411,8 +533,10 @@ impl Engine {
 
     /// Panes idle longer than `idle_ms` that can be put back exactly.
     ///
-    /// Per pane, not per circle: a circle's Mac panes and shells can't sleep,
-    /// and they shouldn't keep its idle Claude panes awake. Idle is the later
+    /// Per pane, not per circle: a circle's shells can't sleep,
+    /// and they shouldn't keep its idle Claude panes awake. A `claude-mac` pane
+    /// with a pinned conversation id sleeps by hand (`ctl sleep`) only; the
+    /// sweep leaves it up. Idle is the later
     /// of the circle's last human input and the pane's last busy change (the
     /// daemon's start when it saw none); screen output doesn't count, since a
     /// Claude status line redraws all the time. Never: a busy pane, one
@@ -425,6 +549,12 @@ impl Engine {
             .iter()
             .filter(|p| {
                 if p.asleep || p.kind == "file" || skip.contains(&p.workspace) {
+                    return false;
+                }
+                // A `claude-mac` pane is sleepable by hand only: `pane_quiet`
+                // sees the ssh under it, not the Mac, so a background server,
+                // watcher or Monitor over there would look idle and be killed.
+                if claude_mac_session(&p.command).is_some() {
                     return false;
                 }
                 let slug = p.slug.as_str();
@@ -464,7 +594,10 @@ impl Engine {
     /// or went on to ssh into another) would otherwise wake into an old one.
     /// True for every other pane. Walks /proc, so only sleeping calls it.
     fn hosted_live(&self, p: &super::EnginePane) -> bool {
-        if Agent::of(&p.command).is_some() || p.kind == "file" {
+        if Agent::of(&p.command).is_some()
+            || p.kind == "file"
+            || claude_mac_session(&p.command).is_some()
+        {
             return true;
         }
         let Some((id, _)) = hosted_record(&p.pane_id) else {
@@ -594,6 +727,98 @@ fn retheme_color(c: u32, own: (u32, u32), old: &[u32; 16], new: &[u32; 16]) -> u
         .chain(old.iter().copied().zip(new.iter().copied()))
         .find(|(o, _)| *o == c)
         .map_or(c, |(_, n)| n)
+}
+
+#[cfg(test)]
+mod claude_mac_tests {
+    use super::{claude_mac_session, shell_words};
+
+    const ID: &str = "441ac7a9-2dd2-4942-a3fa-b77d17b64255";
+
+    #[test]
+    fn words_split_like_a_shell() {
+        assert_eq!(
+            shell_words(r#"env A=1 B='x y' C="p \"q\"" d\ e"#),
+            ["env", "A=1", "B=x y", "C=p \"q\"", "d e"]
+        );
+        assert_eq!(shell_words("  "), Vec::<String>::new());
+        assert_eq!(shell_words("a''b"), ["ab"]);
+    }
+
+    #[test]
+    fn a_pinned_conversation_is_found_in_the_pane_command() {
+        let cmd = |args: &str| {
+            format!(
+                "env LEAD_UNATTENDED=1 CLAUDE_MAC_DIR=/Users/brianhanley CLAUDE_MAC_ARGS='{args}' /home/bhanley/.local/bin/claude-mac"
+            )
+        };
+        for args in [
+            format!("--resume {ID}"),
+            format!("-r {ID}"),
+            format!("--session-id {ID}"),
+            format!("--resume={ID}"),
+            format!("--session-id={ID}"),
+            format!("--dangerously-skip-permissions --resume {ID} --model opus"),
+        ] {
+            assert_eq!(
+                claude_mac_session(&cmd(&args)).as_deref(),
+                Some(ID),
+                "{args}"
+            );
+        }
+        // Double quotes, and no `env` in front.
+        assert_eq!(
+            claude_mac_session(&format!(r#"CLAUDE_MAC_ARGS="--resume {ID}" claude-mac"#))
+                .as_deref(),
+            Some(ID)
+        );
+    }
+
+    #[test]
+    fn no_pinned_id_means_not_restorable() {
+        // No id, a name instead of an id, a bare shell, another program.
+        assert_eq!(
+            claude_mac_session("env CLAUDE_MAC_ARGS='' claude-mac"),
+            None
+        );
+        assert_eq!(claude_mac_session("claude-mac"), None);
+        assert_eq!(
+            claude_mac_session("env CLAUDE_MAC_ARGS='--resume my-lead' claude-mac"),
+            None
+        );
+        assert_eq!(
+            claude_mac_session(&format!("env CLAUDE_MAC_ARGS='--resume {ID}' claude")),
+            None
+        );
+        assert_eq!(claude_mac_session("bash -l"), None);
+        // claude-mac does not pin `-r=ID`, and --continue (-c) is no pin at all,
+        // even beside an id.
+        assert_eq!(
+            claude_mac_session(&format!("env CLAUDE_MAC_ARGS='-r={ID}' claude-mac")),
+            None
+        );
+        for args in [
+            format!("--continue --resume {ID}"),
+            format!("-c --resume {ID}"),
+            "-c".to_string(),
+        ] {
+            assert_eq!(
+                claude_mac_session(&format!("env CLAUDE_MAC_ARGS='{args}' claude-mac")),
+                None,
+                "{args}"
+            );
+        }
+        // A flag with nothing after it.
+        assert_eq!(
+            claude_mac_session("env CLAUDE_MAC_ARGS='--resume' claude-mac"),
+            None
+        );
+        // The id has to be in CLAUDE_MAC_ARGS, not loose on the command line.
+        assert_eq!(
+            claude_mac_session(&format!("claude-mac --resume {ID}")),
+            None
+        );
+    }
 }
 
 #[cfg(test)]
