@@ -19,6 +19,13 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **Read ticks in the Chat layout**, as on the phone. Next to each bubble's
+  time, your notes show ✓ while sending, ✓✓ once the lead has it and ✓✓ in the
+  accent color when answered (a failed one says "not delivered" in red); a
+  lead's message gets ✓✓ in the accent once you have read it on any device.
+  Hover for what a tick means. A refresh now re-reads the newest 20 messages,
+  so a note moving from sending to got to answered repaints; opening a circle
+  reads its whole thread.
 - **The AFK button in the Chat layout.** The same AFK chip Stage and Wall show
   now sits beside the ✦ seance mark at the top of Chat's circle list: same
   state, same confirm, same switch (and absent where the afk script is not

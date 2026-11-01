@@ -37,6 +37,8 @@ const IDLE: Duration = Duration::from_secs(1);
 const LIST_W: f32 = 300.;
 /// Invoke's alerts circle is read-only: nothing to say, no lead to open.
 const ALERTS_WS: &str = "alerts";
+/// A refresh reads this many of the newest messages again, to catch status changes.
+const REFRESH_WINDOW: usize = 20;
 /// A failed read report waits this long before the next try.
 const READ_RETRY: Duration = Duration::from_secs(30);
 /// A circle with a message newer than this is Active, as on the phone.
@@ -113,6 +115,23 @@ impl ChatState {
             .map(|m| m.id)
             .filter(|id| *id > 0)
             .max()
+    }
+
+    /// Where a refresh of `ws` starts: the last `REFRESH_WINDOW` messages again,
+    /// not only the new ones, because a note's status moves on after it is sent
+    /// (sending, got, answered) and a delta of new messages alone would never
+    /// say so. A short thread is read whole.
+    fn refresh_after(&self, ws: &str) -> Option<i64> {
+        let mut ids: Vec<i64> = self
+            .threads
+            .get(ws)?
+            .messages
+            .iter()
+            .map(|m| m.id)
+            .filter(|id| *id > 0)
+            .collect();
+        ids.sort_unstable();
+        ids.len().checked_sub(REFRESH_WINDOW + 1).map(|at| ids[at])
     }
 
     pub(super) fn any_working(&self) -> bool {
@@ -401,6 +420,18 @@ fn fit_image(w: u32, h: u32) -> (f32, f32) {
     ((w * scale).round().max(1.), (h * scale).round().max(1.))
 }
 
+/// The tick for a message, as (glyph, accent color, tooltip): Brian's notes by
+/// status, a lead's messages once their id is at or under what Brian has read.
+fn tick_for(m: &Msg, read: i64) -> Option<(&'static str, bool, &'static str)> {
+    match (m.from.as_str(), m.status.as_str()) {
+        ("me", "sending") => Some(("✓", false, "Sending")),
+        ("me", "got") => Some(("✓✓", false, "The lead has it")),
+        ("me", "answered") => Some(("✓✓", true, "Answered")),
+        ("lead", _) if m.id > 0 && m.id <= read => Some(("✓✓", true, "Seen")),
+        _ => None,
+    }
+}
+
 /// A list heading: a space's name, or Active.
 fn list_label(text: String) -> gpui::Div {
     div()
@@ -418,7 +449,7 @@ impl SeanceApp {
             let Some(this) = this.upgrade() else { break };
             let (on, ws, after) = this.update(cx, |app: &mut SeanceApp, _| {
                 let ws = app.chat.selected.clone();
-                let after = ws.as_deref().and_then(|w| app.chat.last_id(w));
+                let after = ws.as_deref().and_then(|w| app.chat.refresh_after(w));
                 (app.view.mode == ViewMode::Chat, ws, after)
             });
             if !on {
@@ -615,7 +646,8 @@ impl SeanceApp {
             window.focus(&focus, cx);
         }
         let ws = ws.to_string();
-        let after = self.chat.last_id(&ws);
+        // Opening a circle reads its whole thread, so no old status is stale.
+        let after = None;
         cx.spawn(async move |this, cx| {
             let round = cx
                 .background_executor()
@@ -643,7 +675,7 @@ impl SeanceApp {
         // Shown at once; the next thread answer replaces it with the real one.
         self.chat.next_local -= 1;
         let local_id = self.chat.next_local;
-        let after = self.chat.last_id(&ws);
+        let after = self.chat.refresh_after(&ws);
         let thread = self.chat.threads.entry(ws.clone()).or_default();
         thread.messages.push(Msg {
             id: local_id,
@@ -654,6 +686,7 @@ impl SeanceApp {
             images: Vec::new(),
             choices: Vec::new(),
             picked: None,
+            status: "sending".into(),
         });
         self.chat.stick = 3;
         let thread_ws = ws.clone();
@@ -701,13 +734,14 @@ impl SeanceApp {
         // Shown at once as your message, until the thread answer has the real one.
         self.chat.next_local -= 1;
         let local_id = self.chat.next_local;
-        let after = self.chat.last_id(&ws);
+        let after = self.chat.refresh_after(&ws);
         let thread = self.chat.threads.entry(ws.clone()).or_default();
         thread.messages.push(Msg {
             id: local_id,
             from: "me".into(),
             text: choice.clone(),
             ts: now_ms(),
+            status: "sending".into(),
             ..Default::default()
         });
         self.chat.stick = 3;
@@ -1100,8 +1134,11 @@ impl SeanceApp {
             .flex_col()
             .gap_2();
         let messages = self.chat.threads.get(&ws).map(|t| t.messages.as_slice());
+        // The last message Brian has read, on any device: the lead's messages up
+        // to it show as seen.
+        let read = self.chat.threads.get(&ws).map_or(0, |t| t.read);
         for m in messages.unwrap_or_default() {
-            thread = thread.child(self.chat_bubble(m, cx));
+            thread = thread.child(self.chat_bubble(m, read, cx));
         }
         if messages.is_some_and(<[Msg]>::is_empty) {
             thread = thread.child(
@@ -1254,7 +1291,7 @@ impl SeanceApp {
     }
 
     /// Me on the right, the lead on the left, anything else centered.
-    fn chat_bubble(&self, m: &Msg, cx: &Context<Self>) -> AnyElement {
+    fn chat_bubble(&self, m: &Msg, read: i64, cx: &Context<Self>) -> AnyElement {
         let me = m.from == "me";
         let system = !me && m.from != "lead";
         let mut body = div().flex().flex_col().gap_0p5();
@@ -1348,9 +1385,13 @@ impl SeanceApp {
             .child(
                 div()
                     .mt_0p5()
+                    .flex()
+                    .items_center()
+                    .gap_1()
                     .text_xs()
                     .text_color(SeancePalette::text_faint())
-                    .child(stamp),
+                    .child(stamp)
+                    .children(self.tick_marks(m, read)),
             );
         if m.choices.is_empty() || me {
             return div()
@@ -1368,6 +1409,38 @@ impl SeanceApp {
             .child(bubble)
             .child(self.choice_pills(m, cx))
             .into_any_element()
+    }
+
+    /// Read ticks, as on the phone: one gray ✓ while a note is sending, ✓✓ once
+    /// the lead has it, ✓✓ in the accent color when answered; on a lead's
+    /// message, ✓✓ in the accent once Brian has read it. A failed note says so
+    /// in red. Hover for what it means.
+    fn tick_marks(&self, m: &Msg, read: i64) -> Vec<AnyElement> {
+        let mut out = Vec::new();
+        if m.from == "me" && m.status == "failed" {
+            out.push(
+                div()
+                    .text_color(SeancePalette::danger())
+                    .child("· not delivered")
+                    .into_any_element(),
+            );
+        }
+        if let Some((glyph, accent, tip_text)) = tick_for(m, read) {
+            out.push(
+                div()
+                    .id(SharedString::from(format!("tick-{}", m.id)))
+                    .font_semibold()
+                    .text_color(if accent {
+                        SeancePalette::violet()
+                    } else {
+                        SeancePalette::text_faint()
+                    })
+                    .tooltip(tip(tip_text))
+                    .child(glyph)
+                    .into_any_element(),
+            );
+        }
+        out
     }
 
     /// Tap-to-answer pills in a wrapping row. The first is the lead's pick, so
@@ -1555,6 +1628,62 @@ mod tests {
             .map(|c| c.ws)
             .collect();
         assert_eq!(got, ["newest", "recent", "unread-old", "unread-empty"]);
+    }
+
+    #[test]
+    fn ticks_follow_a_note_s_status_and_the_read_mark() {
+        let mine = |status: &str| Msg {
+            id: 5,
+            from: "me".into(),
+            status: status.into(),
+            ..Default::default()
+        };
+        assert_eq!(tick_for(&mine("sending"), 0), Some(("✓", false, "Sending")));
+        assert_eq!(
+            tick_for(&mine("got"), 0),
+            Some(("✓✓", false, "The lead has it"))
+        );
+        assert_eq!(
+            tick_for(&mine("answered"), 0),
+            Some(("✓✓", true, "Answered"))
+        );
+        assert_eq!(tick_for(&mine("failed"), 0), None);
+        let lead = |id| Msg {
+            id,
+            from: "lead".into(),
+            ..Default::default()
+        };
+        assert_eq!(tick_for(&lead(9), 9), Some(("✓✓", true, "Seen")));
+        assert_eq!(tick_for(&lead(10), 9), None);
+        assert_eq!(tick_for(&lead(-1), 9), None);
+    }
+
+    #[test]
+    fn a_refresh_rereads_the_newest_twenty_messages() {
+        let mut state = ChatState::default();
+        let msg = |id| Msg {
+            id,
+            ..Default::default()
+        };
+        // Short: the whole thread.
+        state.threads.insert(
+            "w".into(),
+            Thread {
+                messages: (1..=20).map(msg).collect(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(state.refresh_after("w"), None);
+        // Longer: from just before the 20th from the end; ids are not dense.
+        state.threads.insert(
+            "w".into(),
+            Thread {
+                messages: (1..=30).map(|i| msg(i * 3)).collect(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(state.refresh_after("w"), Some(30));
+        assert_eq!(state.refresh_after("none"), None);
     }
 
     #[test]
