@@ -450,6 +450,7 @@ fn run_local(args: Vec<String>) -> i32 {
         "revoke" => parse_revoke(sub_args),
         "policy" => parse_policy(sub_args),
         "rename-circle" | "rename-workspace" => parse_rename_circle(sub_args),
+        "move-pane" | "mv-pane" => parse::parse_move_pane(sub_args),
         "space" | "spaces" => {
             let mut it = sub_args.into_iter();
             let action = it.next().unwrap_or_else(|| "list".into());

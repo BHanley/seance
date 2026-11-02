@@ -1143,6 +1143,52 @@ impl Engine {
                     None => err(format!("no circle '{key}'")),
                 }
             }
+            MovePane {
+                pane,
+                workspace,
+                before,
+                scope,
+                from,
+            } => {
+                let idx = match find(self, &pane, &scope) {
+                    Ok(i) => i,
+                    Err(e) => return err(e),
+                };
+                let Some(target) = self.resolve_workspace(&workspace) else {
+                    return err(if self.workspace_key_is_ambiguous(&workspace) {
+                        format!("circle '{workspace}' is ambiguous — use its slug")
+                    } else {
+                        format!("no circle '{workspace}'")
+                    });
+                };
+                let slug = self.panes[idx].slug.clone();
+                let source = self.panes[idx].workspace.clone();
+                let before = match before {
+                    Some(b) => match find(self, &b, &None) {
+                        Ok(bi) if self.panes[bi].workspace == target => {
+                            Some(self.panes[bi].slug.clone())
+                        }
+                        Ok(_) => return err(format!("--before '{b}' is not in '{target}'")),
+                        Err(e) => return err(e),
+                    },
+                    None => None,
+                };
+                // reorder_pane is the GUI drag path and moves the selection
+                // with the pane; a ctl move must not yank the human's view.
+                let selected = self.selected_workspace.clone();
+                self.reorder_pane(&slug, &target, before.as_deref());
+                self.selected_workspace = selected;
+                self.persist();
+                self.push_state_to_all();
+                events::log(
+                    &actor(&from),
+                    Some(&target),
+                    Some(&slug),
+                    "ctl_move_pane",
+                    format!("{source} -> {target}"),
+                );
+                ok(json!({"pane": slug, "from": source, "workspace": target}))
+            }
             Sleep {
                 workspace,
                 scope,

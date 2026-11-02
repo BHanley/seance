@@ -1015,3 +1015,38 @@ fn space_ops_edit_the_rail_blob_and_keep_its_other_keys() {
         let _ = std::fs::remove_dir_all(&scratch);
     });
 }
+
+#[test]
+fn move_pane_lands_in_target_circle_and_keeps_selection() {
+    with_test_state_dir("move-pane", || {
+        let scratch = temp_scratch("move-pane");
+        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
+        let a = eng.push_stub_pane("worker-a", "lab");
+        let b = eng.push_stub_pane("worker-b", "other");
+        eng.selected_workspace = Some("lab".into());
+        let mv = |pane: &str, ws: &str, before: Option<&str>, scope: Option<&str>| {
+            ControlRequest::MovePane {
+                pane: pane.into(),
+                workspace: ws.into(),
+                before: before.map(Into::into),
+                scope: scope.map(Into::into),
+                from: None,
+            }
+        };
+
+        let r = eng.handle_control(mv(&a, "other", Some(&b), None));
+        assert!(r.ok, "{:?}", r.error);
+        let ia = eng.panes.iter().position(|p| p.slug == a).unwrap();
+        let ib = eng.panes.iter().position(|p| p.slug == b).unwrap();
+        assert_eq!(eng.panes[ia].workspace, "other");
+        assert!(ia < ib, "--before places it ahead");
+        assert_eq!(eng.selected_workspace.as_deref(), Some("lab"));
+
+        assert!(!eng.handle_control(mv(&a, "nowhere", None, None)).ok);
+        assert!(
+            !eng.handle_control(mv(&a, "lab", None, Some("lab"))).ok,
+            "pane outside caller scope"
+        );
+        assert!(!eng.handle_control(mv(&b, "lab", Some(&b), None)).ok);
+    });
+}

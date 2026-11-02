@@ -531,6 +531,19 @@ pub enum ControlRequest {
         from: Option<String>,
     },
 
+    /// Move a pane into another existing circle (slug or label), appended
+    /// unless `before` names a pane already there.
+    MovePane {
+        pane: String,
+        workspace: String,
+        #[serde(default)]
+        before: Option<String>,
+        #[serde(default)]
+        scope: Option<String>,
+        #[serde(default)]
+        from: Option<String>,
+    },
+
     /// Put a circle to sleep: every pane's process exits, its last frame is
     /// frozen, identity + claude conversation are kept. Refused unless every
     /// pane in the circle is restorable.
@@ -712,6 +725,7 @@ impl ControlRequest {
             | Self::Sleep { from, .. }
             | Self::Wake { from, .. }
             | Self::RenameCircle { from, .. }
+            | Self::MovePane { from, .. }
             | Self::Task { from, .. } => from,
         }
     }
@@ -747,6 +761,7 @@ impl ControlRequest {
                 workspace, scope, ..
             } => workspace.as_deref().or(scope.as_deref()),
             Self::List { scope, .. }
+            | Self::MovePane { scope, .. }
             | Self::Space { scope, .. }
             | Self::Send { scope, .. }
             | Self::TaskFail { scope, .. }
