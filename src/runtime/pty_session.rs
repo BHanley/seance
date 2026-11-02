@@ -521,6 +521,20 @@ impl PtySession {
         }
     }
 
+    /// Enter for text already sitting in an agent's composer. Claude's footer
+    /// (background-agent list) can hold focus and eat a bare Enter ("Cannot
+    /// open agents — you have unsent text"); a typed key hands focus back to
+    /// the composer, and space+backspace leaves its text unchanged. Enter goes
+    /// in a separate write so the TUI can't read the three bytes as a paste.
+    pub fn resubmit(&self) {
+        self.write_bytes(b" \x7f".to_vec());
+        let tx = self.io_tx.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(120));
+            tx.send(IoMsg::Write(b"\r".to_vec()));
+        });
+    }
+
     pub fn resize(&self, cols: u16, rows: u16) {
         let cols = cols.max(2);
         let rows = rows.max(2);

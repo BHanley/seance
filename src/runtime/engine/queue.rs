@@ -374,7 +374,7 @@ impl Engine {
                 let since = *f.stuck_since.get_or_insert(now);
                 if now.saturating_sub(since) >= STUCK_ENTER_MS && f.resubmits < 2 {
                     if let Some(s) = session {
-                        s.write_bytes(b"\r".to_vec());
+                        s.resubmit();
                     }
                     f.resubmits += 1;
                     f.stuck_since = None;
