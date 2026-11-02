@@ -19,6 +19,9 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- **`seance-desktop-notifications = false`** in `terminal.conf` turns off every
+  desktop banner (needs-human, ask, pane alerts, finished Claudes). Sounds and
+  clearing stale banners are untouched. Read at launch.
 - **Read ticks in the Chat layout**, as on the phone. Next to each bubble's
   time, your notes show a readable ✓ while they wait for the lead, ✓✓ in the accent
   color once the lead has seen them and when answered (a failed one says "not delivered" in red); a

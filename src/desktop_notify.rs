@@ -52,6 +52,9 @@ pub fn notify_done(pane: &str, summary: &str, body: &str) {
 /// `sound` is a macOS sound name for the banner (`default` = the system's);
 /// None is silent. Linux banners never carry one.
 fn post(last_ms: &AtomicU64, pane: Option<&str>, summary: &str, body: &str, sound: Option<&str>) {
+    if !crate::term_config::get().seance_desktop_notifications {
+        return;
+    }
     let now = Instant::now();
     let now_ms = now.elapsed().as_millis() as u64; // wrong baseline — use wall clock
     let _ = now_ms;

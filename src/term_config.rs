@@ -28,6 +28,7 @@
 //! | `seance-hud` (`ink`/`pips`/`off`) | the Mac's floating progress HUD at launch, the default until you pick one from the menu (GUI) |
 //! | `seance-lead-sprite.<circle-slug>` | a seed that swaps that circle's lead creature (GUI) |
 //! | `seance-new-circle-command` | the first pane of a circle made with Stage's "+ circle" (GUI; runs on the daemon's machine) |
+//! | `seance-desktop-notifications` (`true`/`false`, also `off`/`0`) | `false` posts no macOS/Linux banners at all; sounds and clearing stale banners are unaffected (read at launch) |
 //! | `seance-origin-gutter` (`true`/`false`, also `off`/`0`) | the 2px input-origin stripe at a terminal's left edge (GUI) |
 //!
 //! The two Stage paths are read through the daemon's fs bridge, so they name
@@ -109,6 +110,8 @@ pub struct TermConfig {
     /// `seance-new-circle-command`: what the first pane of a circle made with
     /// Stage's "+ circle" runs. None is a plain shell.
     pub seance_new_circle_command: Option<String>,
+    /// `seance-desktop-notifications = false` posts no banners.
+    pub seance_desktop_notifications: bool,
     /// `seance-origin-gutter = false` hides the input-origin stripe.
     pub seance_origin_gutter: bool,
     /// `seance-lead-sprite.<circle-slug> = SEED`: re-seeds that circle's creature.
@@ -140,6 +143,7 @@ impl Default for TermConfig {
             seance_auto_sleep_skip: Vec::new(),
             seance_hud: None,
             seance_new_circle_command: None,
+            seance_desktop_notifications: true,
             seance_origin_gutter: true,
             lead_sprites: Default::default(),
         }
@@ -284,6 +288,9 @@ fn apply(cfg: &mut TermConfig, key: &str, value: &str) {
         "seance-needs-sound" => cfg.seance_needs_sound = non_empty(value),
         "seance-hud" => cfg.seance_hud = non_empty(value),
         "seance-new-circle-command" => cfg.seance_new_circle_command = non_empty(value),
+        "seance-desktop-notifications" => {
+            cfg.seance_desktop_notifications = !matches!(value, "false" | "off" | "0")
+        }
         "seance-origin-gutter" => {
             cfg.seance_origin_gutter = !matches!(value, "false" | "off" | "0")
         }
@@ -481,6 +488,30 @@ mod tests {
             Some("claude-mac")
         );
         assert_eq!(TermConfig::default().seance_new_circle_command, None);
+    }
+
+    #[test]
+    fn reads_desktop_notifications() {
+        let dir = test_dir("banners");
+        let p = write(
+            &dir,
+            "terminal.conf",
+            "seance-desktop-notifications = false\n",
+        );
+        assert!(!load(&p).seance_desktop_notifications);
+        let p = write(
+            &dir,
+            "terminal.conf",
+            "seance-desktop-notifications = off\n",
+        );
+        assert!(!load(&p).seance_desktop_notifications);
+        let p = write(
+            &dir,
+            "terminal.conf",
+            "seance-desktop-notifications = true\n",
+        );
+        assert!(load(&p).seance_desktop_notifications);
+        assert!(TermConfig::default().seance_desktop_notifications);
     }
 
     #[test]
