@@ -424,8 +424,8 @@ fn fit_image(w: u32, h: u32) -> (f32, f32) {
 /// status, a lead's messages once their id is at or under what Brian has read.
 fn tick_for(m: &Msg, read: i64) -> Option<(&'static str, bool, &'static str)> {
     match (m.from.as_str(), m.status.as_str()) {
-        ("me", "sending") => Some(("✓", false, "Sending")),
-        ("me", "got") => Some(("✓✓", false, "The lead has it")),
+        ("me", "sending") => Some(("✓", false, "Waiting for the lead")),
+        ("me", "got") => Some(("✓✓", true, "The lead has seen it")),
         ("me", "answered") => Some(("✓✓", true, "Answered")),
         ("lead", _) if m.id > 0 && m.id <= read => Some(("✓✓", true, "Seen")),
         _ => None,
@@ -1411,8 +1411,8 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    /// Read ticks, as on the phone: one gray ✓ while a note is sending, ✓✓ once
-    /// the lead has it, ✓✓ in the accent color when answered; on a lead's
+    /// Read ticks, as on the phone: one dim ✓ while a note waits for the lead,
+    /// ✓✓ in the accent color once the lead has seen it and when answered; on a lead's
     /// message, ✓✓ in the accent once Brian has read it. A failed note says so
     /// in red. Hover for what it means.
     fn tick_marks(&self, m: &Msg, read: i64) -> Vec<AnyElement> {
@@ -1433,7 +1433,7 @@ impl SeanceApp {
                     .text_color(if accent {
                         SeancePalette::violet()
                     } else {
-                        SeancePalette::text_faint()
+                        SeancePalette::text_dim()
                     })
                     .tooltip(tip(tip_text))
                     .child(glyph)
@@ -1638,10 +1638,13 @@ mod tests {
             status: status.into(),
             ..Default::default()
         };
-        assert_eq!(tick_for(&mine("sending"), 0), Some(("✓", false, "Sending")));
+        assert_eq!(
+            tick_for(&mine("sending"), 0),
+            Some(("✓", false, "Waiting for the lead"))
+        );
         assert_eq!(
             tick_for(&mine("got"), 0),
-            Some(("✓✓", false, "The lead has it"))
+            Some(("✓✓", true, "The lead has seen it"))
         );
         assert_eq!(
             tick_for(&mine("answered"), 0),
