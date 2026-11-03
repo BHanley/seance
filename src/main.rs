@@ -196,11 +196,31 @@ fn main() {
             std::thread::sleep(std::time::Duration::from_millis(200));
         }
         eprintln!("[seance] stopped {killed} gui process(es); daemon left running");
-        // Relaunch GUI in this process by falling through — but we're still
-        // the restart-gui argv. Re-exec as plain seance.
+        // Detached (own session, no inherited stdio): callers are usually an
+        // agent's shell, and a GUI parented to it died with that shell's
+        // process group — or kept the caller's command from ever returning.
         let bin = std::env::current_exe().expect("current_exe");
-        let err = std::process::Command::new(bin).status();
-        std::process::exit(err.map(|s| s.code().unwrap_or(1)).unwrap_or(1));
+        let mut cmd = std::process::Command::new(bin);
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        unsafe {
+            use std::os::unix::process::CommandExt;
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+        match cmd.spawn() {
+            Ok(child) => {
+                eprintln!("[seance] gui relaunched (pid {})", child.id());
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("[seance] gui relaunch failed: {e}");
+                std::process::exit(1);
+            }
+        }
     }
 
     // Durable GUI stderr + panic backtraces before anything else on this path

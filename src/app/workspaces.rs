@@ -450,6 +450,17 @@ impl SeanceApp {
             .max_by_key(|a| a.priority())
     }
 
+    /// Pin a circle this window is about to create to the space on screen.
+    /// A reused slug can still carry a dead circle's `spaces.of` entry, and
+    /// reconcile only places circles that have none — so without this the new
+    /// circle inherits the old space (usually the default).
+    pub(super) fn claim_new_circle_for_current_space(&mut self, ws: &str) {
+        let space = self.current_space();
+        if self.subs_pref.spaces.move_circle(ws, &space) {
+            self.save_arrangement();
+        }
+    }
+
     pub(super) fn move_circle_to_space(&mut self, ws: &str, space: &str) {
         if self.subs_pref.spaces.move_circle(ws, space) {
             self.client.log_event(
@@ -846,6 +857,7 @@ impl SeanceApp {
             }
             n += 1;
         };
+        self.claim_new_circle_for_current_space(&name);
         let _ = self.client.create_workspace(&name);
         // Born here → looked at here; the daemon subscribes us on create.
         self.subs_pref.mark_seen(&name);

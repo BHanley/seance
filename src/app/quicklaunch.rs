@@ -596,6 +596,7 @@ impl SeanceApp {
                 taken.extend(this.workspace_touch.keys().cloned());
                 let taken_refs: Vec<&str> = taken.iter().map(|s| s.as_str()).collect();
                 let ws = crate::state::unique_slug(&entry.name, &taken_refs);
+                this.claim_new_circle_for_current_space(&ws);
                 this.spawn_internal(
                     SpawnRequest {
                         name: entry.name.clone(),
