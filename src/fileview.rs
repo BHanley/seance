@@ -149,16 +149,17 @@ fn tip(text: &'static str) -> impl Fn(&mut Window, &mut gpui::App) -> gpui::AnyV
 /// A foldable heading: caret, the heading text at its normal size, and — when
 /// collapsed — what it is hiding.
 ///
-/// The line count is the honest part. A collapsed section that leaves no trace
-/// of its size reads like the document just ends there; "12 lines" is the
-/// difference between a fold and a disappearance.
+/// The item count is the honest part. A collapsed section that leaves no trace
+/// of what it holds reads like the document just ends there; "3 open" (its
+/// unchecked task boxes) or "4 items" is the difference between a fold and a
+/// disappearance. A section with no list items shows nothing.
 fn render_fold_heading(
     head: &crate::mdfold::FoldHead,
     view: WeakEntity<FileView>,
 ) -> impl IntoElement {
     let key = head.key.clone();
     let collapsed = head.collapsed;
-    let hidden = head.hidden_lines;
+    let badge = head.badge.clone();
     div()
         .id(SharedString::from(format!("fold-{}", head.key)))
         .flex()
@@ -193,12 +194,12 @@ fn render_fold_heading(
                 .text_color(SeancePalette::text())
                 .child(head.text.clone()),
         )
-        .children(collapsed.then(|| {
+        .children((collapsed && !badge.is_empty()).then(|| {
             div()
                 .flex_none()
                 .text_xs()
                 .text_color(SeancePalette::text_faint())
-                .child(format!("{hidden} lines"))
+                .child(badge)
         }))
 }
 
