@@ -285,6 +285,10 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Changed
 
+- **A folded markdown heading counts list items, not lines.** The badge next to a
+  collapsed heading now reads "3 open" (unchecked task boxes, when the section
+  has any), "4 items" or "1 item" for the top-level list items it hides,
+  nested ones with their parent and code fences ignored; no list, no badge.
 - **Circles with `claude-mac` leads can sleep now.** A pane running
   `claude-mac` with its conversation id in the command (`CLAUDE_MAC_ARGS`
   holding `--resume <id>`, `-r <id>` or `--session-id <id>`) counts as

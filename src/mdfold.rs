@@ -47,6 +47,93 @@ impl Heading {
     }
 }
 
+/// Columns of leading whitespace, a tab counting as 4.
+fn indent_cols(line: &str) -> usize {
+    line.chars()
+        .take_while(|c| matches!(c, ' ' | '\t'))
+        .map(|c| if c == '\t' { 4 } else { 1 })
+        .sum()
+}
+
+/// A list item's marker on this line: (indent columns, checkbox state when it
+/// has one, `Some(true)` for checked). `None` when the line isn't an item.
+fn list_item(line: &str) -> Option<(usize, Option<bool>)> {
+    let indent = indent_cols(line);
+    let rest = line.trim_start_matches([' ', '\t']);
+    let after = if let Some(r) = rest.strip_prefix(['-', '*', '+']) {
+        // `- - -` / `* * *` is a rule, not an item.
+        if rest
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .all(|c| c == rest.chars().next().unwrap())
+            && rest.chars().filter(|c| !c.is_whitespace()).count() >= 3
+        {
+            return None;
+        }
+        r
+    } else {
+        let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        if !(1..=9).contains(&digits) {
+            return None;
+        }
+        rest[digits..].strip_prefix(['.', ')'])?
+    };
+    if !(after.is_empty() || after.starts_with([' ', '\t'])) {
+        return None;
+    }
+    let body = after.trim_start();
+    let task = ["[ ]", "[x]", "[X]"].iter().find_map(|m| {
+        let t = body.strip_prefix(m)?;
+        (t.is_empty() || t.starts_with([' ', '\t'])).then_some(*m != "[ ]")
+    });
+    Some((indent, task))
+}
+
+/// What a collapsed section hides, in list items: "3 open" when any top-level
+/// item is a checkbox (unchecked ones only), else "4 items" / "1 item". `None`
+/// when the body has no list. Nested items belong to their parent and fenced
+/// code is ignored.
+pub fn item_badge(body: &[&str]) -> Option<String> {
+    let mut fence: Option<(char, usize)> = None;
+    let mut items = Vec::new();
+    for line in body {
+        let t = line.trim_start_matches(' ');
+        let marker = t.chars().next().filter(|c| matches!(c, '`' | '~'));
+        if let Some(c) = marker {
+            let run = t.chars().take_while(|x| *x == c).count();
+            if run >= 3 && line.len() - t.len() <= 3 && !(c == '`' && t[run..].contains('`')) {
+                match fence {
+                    None => {
+                        fence = Some((c, run));
+                        continue;
+                    }
+                    Some((fc, fr)) if fc == c && run >= fr && t[run..].trim().is_empty() => {
+                        fence = None;
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if fence.is_some() {
+            continue;
+        }
+        if let Some(item) = list_item(line) {
+            items.push(item);
+        }
+    }
+    let top = items.iter().map(|(i, _)| *i).min()?;
+    let top: Vec<_> = items.iter().filter(|(i, _)| *i == top).collect();
+    if top.iter().any(|(_, task)| task.is_some()) {
+        let open = top.iter().filter(|(_, t)| *t == Some(false)).count();
+        return Some(format!("{open} open"));
+    }
+    Some(match top.len() {
+        1 => "1 item".to_string(),
+        n => format!("{n} items"),
+    })
+}
+
 /// Whitespace-normalize a heading's text and drop any closing `#`s.
 fn normalize(text: &str) -> String {
     let trimmed = text.trim().trim_end_matches('#').trim();
@@ -187,12 +274,13 @@ pub fn outline_keys(source: &str) -> BTreeSet<String> {
 /// Encode one heading as the fence `fileview.rs` renders itself.
 /// Fields are tab-separated; the key can't contain a tab (it is built from
 /// whitespace-normalized text), and the text is flattened for safety.
-fn head_fence(h: &Heading, collapsed: bool) -> String {
+fn head_fence(h: &Heading, collapsed: bool, badge: &str) -> String {
     format!(
-        "```{HEAD_FENCE}\n{}\t{}\t{}\t{}\t{}\n```\n",
+        "```{HEAD_FENCE}\n{}\t{}\t{}\t{}\t{}\t{}\n```\n",
         h.level,
         u8::from(collapsed),
         h.body_lines(),
+        badge,
         h.key.replace(['\t', '\n', '\r'], " "),
         h.text.replace(['\t', '\n', '\r'], " "),
     )
@@ -204,6 +292,8 @@ pub struct FoldHead {
     pub level: u8,
     pub collapsed: bool,
     pub hidden_lines: usize,
+    /// What the fold hides, in list items ("3 open", "4 items"); empty for none.
+    pub badge: String,
     pub key: String,
     pub text: String,
 }
@@ -211,16 +301,18 @@ pub struct FoldHead {
 /// Decode a `seance-h` fence body. `None` if it isn't one of ours.
 pub fn parse_head_fence(value: &str) -> Option<FoldHead> {
     let line = value.lines().next()?;
-    let mut parts = line.splitn(5, '\t');
+    let mut parts = line.splitn(6, '\t');
     let level = parts.next()?.parse::<u8>().ok()?;
     let collapsed = parts.next()? == "1";
     let hidden_lines = parts.next()?.parse::<usize>().unwrap_or(0);
+    let badge = parts.next()?.to_string();
     let key = parts.next()?.to_string();
     let text = parts.next().unwrap_or("").to_string();
     Some(FoldHead {
         level: level.clamp(1, 6),
         collapsed,
         hidden_lines,
+        badge,
         key,
         text,
     })
@@ -255,7 +347,15 @@ pub fn fold_source(source: &str, collapsed: &BTreeSet<String>) -> String {
             continue;
         }
         match head_at.get(&i) {
-            Some(h) => out.push_str(&head_fence(h, collapsed.contains(&h.key))),
+            Some(h) => {
+                let is_collapsed = collapsed.contains(&h.key);
+                let badge = if is_collapsed {
+                    item_badge(&lines[(h.line + 1).min(h.end)..h.end]).unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                out.push_str(&head_fence(h, is_collapsed, &badge));
+            }
             None => {
                 out.push_str(line);
                 out.push('\n');
@@ -396,7 +496,7 @@ beta body
             line: 4,
             end: 20,
         };
-        let fence = head_fence(&h, true);
+        let fence = head_fence(&h, true, "2 open");
         let body = fence
             .trim_start_matches(&format!("```{HEAD_FENCE}\n"))
             .trim_end_matches("```\n");
@@ -404,6 +504,7 @@ beta body
         assert_eq!(parsed.level, 3);
         assert!(parsed.collapsed);
         assert_eq!(parsed.hidden_lines, 15);
+        assert_eq!(parsed.badge, "2 open");
         assert_eq!(parsed.key, h.key);
         assert_eq!(parsed.text, h.text);
     }
@@ -486,5 +587,71 @@ beta body
         let renamed = "# T\n## Renamed\nbody\n";
         assert!(prune(&folded, renamed).is_empty());
         assert!(fold_source(renamed, &folded).contains("body"));
+    }
+
+    fn badge(body: &str) -> Option<String> {
+        item_badge(&body.lines().collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn badge_counts_plain_bullets() {
+        assert_eq!(badge("- a\n* b\n+ c\n- d\n").as_deref(), Some("4 items"));
+        assert_eq!(badge("intro\n- only\n").as_deref(), Some("1 item"));
+    }
+
+    #[test]
+    fn badge_counts_numbered_items() {
+        assert_eq!(badge("1. a\n2) b\n3. c\n").as_deref(), Some("3 items"));
+        assert_eq!(badge("2024. a year\n").as_deref(), Some("1 item"));
+    }
+
+    #[test]
+    fn badge_leaves_nested_bullets_with_their_parent() {
+        assert_eq!(
+            badge("- a\n  - a1\n  - a2\n- b\n    * deep\n").as_deref(),
+            Some("2 items")
+        );
+    }
+
+    #[test]
+    fn badge_shows_only_open_checkboxes() {
+        assert_eq!(
+            badge("- [ ] a\n- [x] b\n- [X] c\n- [ ] d\n- plain\n").as_deref(),
+            Some("2 open")
+        );
+        assert_eq!(badge("- [x] a\n- [X] b\n").as_deref(), Some("0 open"));
+    }
+
+    #[test]
+    fn badge_counts_items_that_live_in_a_subsection() {
+        assert_eq!(
+            badge("prose\n### Sub\n- one\n- two\n- three\n").as_deref(),
+            Some("3 items")
+        );
+    }
+
+    #[test]
+    fn badge_ignores_code_fences_and_rules() {
+        assert_eq!(
+            badge("```\n- x\n- y\n```\n~~~sh\n- z\n~~~\n- real\n---\n* * *\n").as_deref(),
+            Some("1 item")
+        );
+        // Inline code that starts with three backticks is not a fence.
+        assert_eq!(badge("```x``` y\n- a\n- b\n").as_deref(), Some("2 items"));
+    }
+
+    #[test]
+    fn badge_is_absent_without_a_list() {
+        assert_eq!(badge("just prose\n\n-dash word\n"), None);
+        assert_eq!(badge(""), None);
+    }
+
+    #[test]
+    fn fold_source_badges_only_collapsed_headings() {
+        let doc = "# T\n## A\n- [ ] a\n- [x] b\n## B\n- c\n";
+        let a = "T\u{1f}A";
+        let out = fold_source(doc, &set(&[a]));
+        assert!(out.contains("\t1 open\t"));
+        assert!(!out.contains("1 item"));
     }
 }
