@@ -64,6 +64,30 @@ pub struct Msg {
     /// How far one of Brian's notes has got: sending, got, answered or failed.
     #[serde(default)]
     pub status: String,
+    /// A document sent with the note (pdf, csv and the like).
+    #[serde(default)]
+    pub attachment: Option<Attachment>,
+}
+
+/// A document on a note: the file name under `/api/file/` and what to call it.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct Attachment {
+    #[serde(default)]
+    pub file: String,
+    #[serde(default)]
+    pub title: String,
+}
+
+impl Attachment {
+    /// Where the document opens (the title becomes the saved file's name).
+    pub fn url(&self) -> String {
+        format!(
+            "{}/api/file/{}?name={}",
+            base(),
+            enc(&self.file),
+            enc(&self.title)
+        )
+    }
 }
 
 impl Msg {
@@ -87,6 +111,50 @@ pub struct Thread {
     /// Claude plan usage, which every thread answer carries.
     #[serde(default)]
     pub usage: Option<Usage>,
+    /// The circle's lead is mid-turn, so Stop has something to stop.
+    #[serde(default)]
+    pub lead_busy: bool,
+}
+
+/// One `/api/search` result: a message, and the circle it is in.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct Hit {
+    #[serde(default)]
+    pub ws: String,
+    #[serde(default)]
+    pub circle: String,
+    #[serde(default)]
+    pub id: i64,
+    #[serde(default)]
+    pub from: String,
+    #[serde(default)]
+    pub ts: u64,
+    #[serde(default)]
+    pub text: String,
+}
+
+#[derive(Deserialize)]
+struct Hits {
+    #[serde(default)]
+    results: Vec<Hit>,
+}
+
+/// `/api/panes`: a pane of the circle that Brian can @-mention.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct PaneRow {
+    #[serde(default)]
+    pub slug: String,
+    #[serde(default)]
+    pub name: String,
+    /// The handle that goes after the `@`.
+    #[serde(default)]
+    pub at: String,
+    #[serde(default)]
+    pub lead: bool,
+    #[serde(default)]
+    pub busy: bool,
+    #[serde(default)]
+    pub asleep: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -249,7 +317,12 @@ fn curl(path: &str, secs: u64, post: Option<&serde_json::Value>) -> Result<Vec<u
     if let (Some(body), Some(mut stdin)) = (post, child.stdin.take()) {
         stdin.write_all(body.to_string().as_bytes())?;
     }
-    let out = child.wait_with_output()?;
+    outcome(child.wait_with_output()?)
+}
+
+/// curl's answer: its body, or the reason it failed (Invoke's own words when
+/// it refused).
+fn outcome(out: std::process::Output) -> Result<Vec<u8>> {
     if !out.status.success() {
         if let Some(said) = refusal(&out.stdout) {
             return Err(anyhow!("{said}"));
@@ -336,6 +409,106 @@ pub fn answer(ws: &str, text: &str, answers: i64) -> Result<()> {
         Some(&serde_json::json!({ "ws": ws, "text": text, "answers": answers })),
     )
     .map(|_| ())
+}
+
+/// Documents (and pictures) a note can carry, and the biggest one Invoke takes.
+const UPLOAD_EXTS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", "heic", "pdf", "csv", "tsv", "txt", "md", "json", "doc",
+    "docx", "xls", "xlsx", "ppt", "pptx", "key", "numbers", "pages", "zip",
+];
+const UPLOAD_MAX: u64 = 50 * 1024 * 1024;
+/// A 50 MB upload over the tailnet needs more than a plain request's limit.
+const UPLOAD_SECS: u64 = 300;
+
+/// Whether Invoke would take this file, before the bytes are sent.
+pub fn check_upload(path: &std::path::Path) -> Result<()> {
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    if !UPLOAD_EXTS.contains(&ext.as_str()) {
+        return Err(anyhow!("can't send .{ext} files"));
+    }
+    if std::fs::metadata(path)?.len() > UPLOAD_MAX {
+        return Err(anyhow!("that file is over 50 MB"));
+    }
+    Ok(())
+}
+
+/// Send a file as Brian's note (`text` rides along as its caption).
+pub fn send_file(ws: &str, text: &str, path: &std::path::Path) -> Result<()> {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .ok_or_else(|| anyhow!("bad file name"))?;
+    let url = format!(
+        "{}/api/image?ws={}&text={}&name={}",
+        base(),
+        enc(ws),
+        enc(text),
+        enc(&name)
+    );
+    let mut data = std::ffi::OsString::from("@");
+    data.push(path);
+    let out = Command::new("curl")
+        .args(["-sS", "--fail-with-body", "-m", &UPLOAD_SECS.to_string()])
+        .args(["-X", "POST", "-H", "content-type: application/octet-stream"])
+        .args(["-H", &format!("Origin: {}", origin(&base()))])
+        .arg("--data-binary")
+        .arg(data)
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .context("run curl")?;
+    outcome(out).map(|_| ())
+}
+
+/// Ask the circle's lead to stop its turn; a 409 says why it could not.
+pub fn stop(ws: &str) -> Result<()> {
+    post("/api/stop", serde_json::json!({ "ws": ws }))
+}
+
+/// Brian's messages and the leads' that match `q`, newest first.
+pub fn search(q: &str) -> Result<Vec<Hit>> {
+    Ok(get::<Hits>(&format!("/api/search?q={}", enc(q)), REQUEST_SECS)?.results)
+}
+
+/// Have Invoke write a summary of what Brian missed; it lands in Alerts.
+pub fn catchup() -> Result<()> {
+    post("/api/catchup", serde_json::json!({}))
+}
+
+/// The circle's panes, for @-mentions.
+pub fn panes(ws: &str) -> Result<Vec<PaneRow>> {
+    #[derive(Deserialize)]
+    struct Panes {
+        #[serde(default)]
+        panes: Vec<PaneRow>,
+    }
+    Ok(get::<Panes>(&format!("/api/panes?ws={}", enc(ws)), REQUEST_SECS)?.panes)
+}
+
+pub fn forward(id: i64, ws: &str) -> Result<()> {
+    post("/api/forward", serde_json::json!({ "id": id, "ws": ws }))
+}
+
+/// Remind Brian of a message at `at` (unix ms), or, with `lead`, have the
+/// circle's lead pick it up then. `label` is how the time was worded.
+pub fn remind(id: i64, at: u64, lead: bool, label: &str) -> Result<()> {
+    post(
+        "/api/remind",
+        serde_json::json!({ "id": id, "at": at, "lead": lead, "label": label }),
+    )
+}
+
+pub fn unread(ws: &str) -> Result<()> {
+    post("/api/unread", serde_json::json!({ "ws": ws }))
+}
+
+fn post(path: &str, body: serde_json::Value) -> Result<()> {
+    curl(path, REQUEST_SECS, Some(&body)).map(|_| ())
 }
 
 pub fn mark_read(ws: &str, id: i64) -> Result<()> {
@@ -565,6 +738,49 @@ mod tests {
         );
         assert_eq!(refusal(b"<html>nope</html>"), None);
         assert_eq!(refusal(br#"{"message": "ok"}"#), None);
+    }
+
+    #[test]
+    fn attachments_stops_and_search_hits_parse() {
+        let m: Msg = serde_json::from_str(
+            r#"{"id":4,"from":"me","text":"📎 plan.pdf","attachment":{"file":"ab.pdf","title":"plan v2.pdf"}}"#,
+        )
+        .unwrap();
+        let a = m.attachment.unwrap();
+        assert_eq!(
+            (a.file.as_str(), a.title.as_str()),
+            ("ab.pdf", "plan v2.pdf")
+        );
+        assert!(a.url().ends_with("/api/file/ab.pdf?name=plan%20v2.pdf"));
+        assert!(serde_json::from_str::<Msg>(r#"{"id":5}"#)
+            .unwrap()
+            .attachment
+            .is_none());
+        let t: Thread = serde_json::from_str(r#"{"messages":[],"lead_busy":true}"#).unwrap();
+        assert!(t.lead_busy);
+        let h: Hits = serde_json::from_str(
+            r#"{"results":[{"ws":"main","circle":"PM","id":9,"from":"lead","ts":3,"text":"hi"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(h.results[0].circle, "PM");
+        assert_eq!(h.results[0].id, 9);
+    }
+
+    #[test]
+    fn uploads_are_checked_before_they_are_sent() {
+        let dir = std::env::temp_dir().join(format!("chat-up-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ok = dir.join("Plan.PDF");
+        std::fs::write(&ok, b"x").unwrap();
+        assert!(check_upload(&ok).is_ok());
+        let bad = dir.join("run.sh");
+        std::fs::write(&bad, b"x").unwrap();
+        assert_eq!(
+            check_upload(&bad).unwrap_err().to_string(),
+            "can't send .sh files"
+        );
+        assert!(check_upload(&dir.join("gone.pdf")).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
