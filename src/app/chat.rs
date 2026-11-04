@@ -50,6 +50,10 @@ const ACTIVE_MS: u64 = 2 * 3600 * 1000;
 const PANES_TTL: Duration = Duration::from_secs(30);
 /// Catch me up waits this long after it finishes before it can be pressed again.
 const CATCHUP_COOLDOWN: Duration = Duration::from_secs(5);
+/// Search runs this long after the last keystroke.
+const SEARCH_DEBOUNCE: Duration = Duration::from_millis(250);
+/// Fewest characters a search is run for (Invoke answers nothing for one).
+const SEARCH_MIN: usize = 2;
 /// What the quick-reply chips above an empty composer send.
 const QUICK_REPLIES: [&str; 3] = ["Keep going", "Status?", "Ship it"];
 
@@ -114,6 +118,10 @@ pub(super) struct ChatState {
     search: Option<Entity<InputState>>,
     /// What the search found; none while the box is empty (the circles show).
     hits: Option<Vec<Hit>>,
+    /// Counts keystrokes in the search box, so only the last one searches.
+    search_seq: u64,
+    /// Under the search box: "No results", or why the search failed.
+    search_note: Option<String>,
     /// A message to scroll to once its thread is showing.
     jump: Option<i64>,
     /// A circle scrolled to a search result: new messages do not pin it to
@@ -503,6 +511,17 @@ fn toast(win: gpui::AnyWindowHandle, cx: &mut gpui::App, msg: String) {
     let _ = win.update(cx, |_, window, cx| {
         window.push_notification(gpui_component::notification::Notification::success(msg), cx)
     });
+}
+
+/// The words to search for, or why not: nothing typed (no message) and too
+/// short (a hint to show).
+fn search_query(raw: &str) -> Result<&str, Option<&'static str>> {
+    let q = raw.trim();
+    match q.chars().count() {
+        0 => Err(None),
+        n if n < SEARCH_MIN => Err(Some("Type at least 2 characters")),
+        _ => Ok(q),
+    }
 }
 
 /// A note that is only its document: the server words it "📎 <title>".
@@ -929,18 +948,36 @@ impl SeanceApp {
                 .is_some_and(|at| at.elapsed() < CATCHUP_COOLDOWN)
     }
 
+    /// Search once typing has paused, and only for two characters or more.
+    fn chat_search_soon(&mut self, cx: &mut Context<Self>) {
+        let seq = self.chat.search_seq;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SEARCH_DEBOUNCE).await;
+            let Some(this) = this.upgrade() else { return };
+            this.update(cx, |app: &mut SeanceApp, cx| {
+                if app.chat.search_seq == seq {
+                    app.chat_search(cx);
+                }
+            });
+        })
+        .detach();
+    }
+
     /// Search every thread; the results replace the circle list.
     fn chat_search(&mut self, cx: &mut Context<Self>) {
         let Some(input) = self.chat.search.clone() else {
             return;
         };
-        let q = input.read(cx).value().trim().to_string();
-        if q.is_empty() {
-            self.chat.hits = None;
-            cx.notify();
-            return;
-        }
-        self.chat.notice = None;
+        let q = match search_query(&input.read(cx).value()) {
+            Ok(q) => q.to_string(),
+            Err(hint) => {
+                self.chat.hits = None;
+                self.chat.search_note = hint.map(str::to_string);
+                cx.notify();
+                return;
+            }
+        };
+        self.chat.search_note = None;
         cx.spawn(async move |this, cx| {
             let asked = q.clone();
             let found = cx
@@ -953,8 +990,14 @@ impl SeanceApp {
                 let now = app.chat.search.as_ref().map(|i| i.read(cx).value());
                 if now.as_deref().map(str::trim) == Some(q.as_str()) {
                     match found {
-                        Ok(hits) => app.chat.hits = Some(hits),
-                        Err(e) => app.chat.notice = Some(e.to_string()),
+                        Ok(hits) => {
+                            if hits.is_empty() {
+                                app.chat.search_note = Some("No results".into());
+                            }
+                            app.chat.hits = Some(hits);
+                        }
+                        // Beside the box: no thread need be open to see it.
+                        Err(e) => app.chat.search_note = Some(format!("Search failed: {e}")),
                     }
                 }
                 cx.notify();
@@ -1194,14 +1237,19 @@ impl SeanceApp {
         cx.notify();
     }
 
-    /// Is the human typing in the composer? The focus pass must leave it be.
+    /// Is the human typing in the composer or the search box? The focus pass
+    /// must leave them be: it hands focus back to a terminal from any handle
+    /// it does not know, which kept the search box from holding a keystroke.
     pub(super) fn chat_input_focused(&self, window: &Window, cx: &Context<Self>) -> bool {
         self.view.mode == ViewMode::Chat
-            && self.chat.input.as_ref().is_some_and(|i| {
-                window
-                    .focused(cx)
-                    .is_some_and(|f| f == i.read(cx).focus_handle(cx))
-            })
+            && [&self.chat.input, &self.chat.search]
+                .into_iter()
+                .flatten()
+                .any(|i| {
+                    window
+                        .focused(cx)
+                        .is_some_and(|f| f == i.read(cx).focus_handle(cx))
+                })
     }
 
     pub(super) fn render_chat(
@@ -1241,9 +1289,15 @@ impl SeanceApp {
                 window,
                 |this: &mut SeanceApp, input, event: &InputEvent, _, cx| match event {
                     InputEvent::PressEnter { .. } => this.chat_search(cx),
-                    InputEvent::Change if input.read(cx).value().trim().is_empty() => {
-                        this.chat.hits = None;
-                        cx.notify();
+                    InputEvent::Change => {
+                        this.chat.search_seq += 1;
+                        if input.read(cx).value().trim().is_empty() {
+                            this.chat.hits = None;
+                            this.chat.search_note = None;
+                            cx.notify();
+                        } else {
+                            this.chat_search_soon(cx);
+                        }
                     }
                     _ => {}
                 },
@@ -1325,7 +1379,9 @@ impl SeanceApp {
             .flex_col();
         if let Some(hits) = &self.chat.hits {
             // Search results stand in for the circles.
-            col = col.child(list_label(format!("{} FOUND", hits.len())));
+            if !hits.is_empty() {
+                col = col.child(list_label(format!("{} FOUND", hits.len())));
+            }
             for h in hits {
                 col = col.child(self.chat_hit_row(h, cx));
             }
@@ -1383,6 +1439,12 @@ impl SeanceApp {
                     )
                     .child(self.render_view_switch("chat", cx))
                     .children(self.chat.search.as_ref().map(|s| Input::new(s)))
+                    .children(self.chat.search_note.as_ref().map(|n| {
+                        div()
+                            .text_xs()
+                            .text_color(SeancePalette::text_faint())
+                            .child(n.clone())
+                    }))
                     .child({
                         let locked = self.catchup_locked();
                         div()
@@ -1533,10 +1595,19 @@ impl SeanceApp {
                 .justify_center()
                 .text_sm()
                 .text_color(SeancePalette::text_faint())
+                .flex_col()
+                .gap_1()
                 .child(match &self.chat.error {
                     Some(e) => format!("Can't reach Invoke: {e}"),
                     None => "Loading circles…".to_string(),
                 })
+                // A refusal has to show even before a thread is open.
+                .children(
+                    self.chat
+                        .notice
+                        .clone()
+                        .map(|n| div().text_xs().text_color(SeancePalette::danger()).child(n)),
+                )
                 .into_any_element();
         };
         let circle = self.chat.circles.iter().find(|c| c.ws == ws);
@@ -2404,5 +2475,13 @@ mod tests {
             text: "📎 plan.pdf".into(),
             ..Default::default()
         }));
+    }
+
+    #[test]
+    fn search_waits_for_two_characters() {
+        assert_eq!(search_query("  "), Err(None));
+        assert_eq!(search_query(" a "), Err(Some("Type at least 2 characters")));
+        assert_eq!(search_query(" ab "), Ok("ab"));
+        assert_eq!(search_query("é1"), Ok("é1"));
     }
 }
