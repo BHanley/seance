@@ -12,14 +12,17 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     div, img, prelude::*, px, relative, AnyElement, Context, Entity, Focusable as _, ScrollHandle,
-    SharedString, Window,
+    SharedString, WeakEntity, Window,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui_component::text::{TextView, TextViewStyle};
 use gpui_component::{StyledExt as _, WindowExt as _};
 use regex::Regex;
 
-use crate::chat_api::{self, CircleRow, Circles, Msg, Progress, Thread, Usage, UsageWindow};
+use crate::chat_api::{
+    self, Attachment, CircleRow, Circles, Hit, Msg, PaneRow, Progress, Thread, Usage, UsageWindow,
+};
 use crate::events;
 use crate::theme::SeancePalette;
 
@@ -43,6 +46,10 @@ const REFRESH_WINDOW: usize = 20;
 const READ_RETRY: Duration = Duration::from_secs(30);
 /// A circle with a message newer than this is Active, as on the phone.
 const ACTIVE_MS: u64 = 2 * 3600 * 1000;
+/// The pane list for @-mentions is asked again after this.
+const PANES_TTL: Duration = Duration::from_secs(30);
+/// What the quick-reply chips above an empty composer send.
+const QUICK_REPLIES: [&str; 3] = ["Keep going", "Status?", "Ship it"];
 
 #[derive(Clone, Debug, PartialEq)]
 enum VideoState {
@@ -102,6 +109,21 @@ pub(super) struct ChatState {
     error: Option<String>,
     /// Claude plan usage from the last thread answer; none hides the strip.
     usage: Option<Usage>,
+    search: Option<Entity<InputState>>,
+    /// What the search found; none while the box is empty (the circles show).
+    hits: Option<Vec<Hit>>,
+    /// A message to scroll to once its thread is showing.
+    jump: Option<i64>,
+    /// A circle scrolled to a search result: new messages do not pin it to
+    /// the bottom until Brian sends something or opens another circle.
+    no_pin: Option<String>,
+    /// A circle marked unread while open: not read again until selected.
+    hold_read: Option<String>,
+    /// Each circle's panes for @-mentions, and when they were asked for.
+    panes: HashMap<String, Vec<PaneRow>>,
+    panes_at: HashMap<String, Instant>,
+    /// Why the last action Brian took was refused; a click clears it.
+    notice: Option<String>,
 }
 
 impl ChatState {
@@ -443,6 +465,122 @@ fn list_label(text: String) -> gpui::Div {
         .child(text)
 }
 
+/// The reminder choices, as the menu words them and as Invoke's `label` does.
+const REMIND_CHOICES: [(&str, &str); 4] = [
+    ("In 1 hour", "in 1 hour"),
+    ("In 3 hours", "in 3 hours"),
+    ("Tomorrow at 9 AM", "tomorrow at 9 AM"),
+    ("Monday at 9 AM", "Monday at 9 AM"),
+];
+
+/// When each of `REMIND_CHOICES` falls (unix ms), by this machine's clock.
+/// The 9 AM ones start from a point at midday so a clock change cannot move
+/// them to the wrong day.
+fn remind_times(now: u64) -> [u64; 4] {
+    const HOUR: u64 = 3600 * 1000;
+    let today = events::local_day_start_ms(now);
+    // Midnight plus 9 hours, moved back onto 9:00 on a 23 or 25 hour day.
+    let nine = |probe: u64| {
+        let at = events::local_day_start_ms(probe) + 9 * HOUR;
+        let hour = u64::from(events::local_clock(at).1);
+        (at + 9 * HOUR).saturating_sub(hour * HOUR)
+    };
+    let monday = (1..=7)
+        .map(|d| today + d * 24 * HOUR + 12 * HOUR)
+        .find(|probe| events::local_clock(*probe).0 == 1)
+        .map_or(0, nine);
+    [now + HOUR, now + 3 * HOUR, nine(today + 36 * HOUR), monday]
+}
+
+/// A note that is only its document: the server words it "📎 <title>".
+fn attachment_only(m: &Msg) -> bool {
+    m.attachment
+        .as_ref()
+        .is_some_and(|a| m.text == format!("📎 {}", a.title))
+}
+
+/// A document on a note: its title, as a link that opens it.
+fn attachment_link(id: i64, a: &Attachment) -> AnyElement {
+    let url = a.url();
+    div()
+        .id(SharedString::from(format!("bubble-file-{id}")))
+        .underline()
+        .text_color(SeancePalette::violet())
+        .cursor_pointer()
+        .on_click(move |_, _, _| crate::sysopen::open_detached(&url))
+        .child(a.title.clone())
+        .into_any_element()
+}
+
+/// A bubble's right-click menu. It reads the circle list when it opens, so
+/// no bubble holds a copy of it.
+fn bubble_menu(
+    menu: PopupMenu,
+    window: &mut Window,
+    cx: &mut Context<PopupMenu>,
+    app: &WeakEntity<SeanceApp>,
+    ws: &str,
+    m: &Msg,
+) -> PopupMenu {
+    let text = m.text.clone();
+    let mut menu = menu.item(PopupMenuItem::new("Copy text").on_click(move |_, _, cx| {
+        let _ = crate::clipboard::copy_text_to_clipboard(&text, cx);
+    }));
+    if m.id > 0 {
+        let id = m.id;
+        let (from, weak) = (ws.to_string(), app.clone());
+        menu = menu.submenu("Forward to", window, cx, move |menu, _, cx| {
+            let circles = weak
+                .read_with(cx, |a, _| a.chat.circles.clone())
+                .unwrap_or_default();
+            circles
+                .into_iter()
+                .filter(|c| c.ws != from && c.ws != ALERTS_WS)
+                .fold(menu, |menu, c| {
+                    let (weak, to) = (weak.clone(), c.ws.clone());
+                    menu.item(PopupMenuItem::new(c.name).on_click(move |_, _, cx| {
+                        let to = to.clone();
+                        let _ = weak.update(cx, |a, cx| {
+                            a.chat_call(move || chat_api::forward(id, &to), |_, _| {}, cx)
+                        });
+                    }))
+                })
+        });
+        for (lead, title) in [
+            (false, "Remind me"),
+            (true, "Have the lead pick this up later"),
+        ] {
+            if lead && ws == ALERTS_WS {
+                continue;
+            }
+            let weak = app.clone();
+            menu = menu.submenu(title, window, cx, move |menu, _, _| {
+                let times = remind_times(now_ms());
+                REMIND_CHOICES
+                    .iter()
+                    .zip(times)
+                    .fold(menu, |menu, ((shown, said), at)| {
+                        let weak = weak.clone();
+                        menu.item(PopupMenuItem::new(*shown).on_click(move |_, _, cx| {
+                            let _ = weak.update(cx, |a, cx| {
+                                a.chat_call(
+                                    move || chat_api::remind(id, at, lead, said),
+                                    |_, _| {},
+                                    cx,
+                                )
+                            });
+                        }))
+                    })
+            });
+        }
+    }
+    let (weak, ws) = (app.clone(), ws.to_string());
+    menu.item(PopupMenuItem::new("Mark unread").on_click(move |_, _, cx| {
+        let ws = ws.clone();
+        let _ = weak.update(cx, |a, cx| a.chat_unread(ws, cx));
+    }))
+}
+
 impl SeanceApp {
     pub(super) fn start_chat_poll(cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| loop {
@@ -528,7 +666,7 @@ impl SeanceApp {
             thread.messages = merged;
         }
         let newest = thread.messages.iter().map(|m| m.id).max().unwrap_or(0);
-        if before != Some(newest) {
+        if before != Some(newest) && chat.no_pin.as_deref() != Some(ws.as_str()) {
             chat.stick = 3;
         }
         // Images the thread shows: fetch each once.
@@ -581,7 +719,11 @@ impl SeanceApp {
         let Some(ws) = chat.selected.clone() else {
             return;
         };
-        if self.view.mode != ViewMode::Chat || !chat.window_active || chat.read_busy.contains(&ws) {
+        if self.view.mode != ViewMode::Chat
+            || !chat.window_active
+            || chat.read_busy.contains(&ws)
+            || chat.hold_read.as_deref() == Some(ws.as_str())
+        {
             return;
         }
         if chat
@@ -615,6 +757,8 @@ impl SeanceApp {
                 app.chat.read_busy.remove(&ws);
                 // Only a report Invoke accepted counts; a failed one is retried.
                 match sent {
+                    // Not while the circle is marked unread: that report is stale.
+                    Ok(()) if app.chat.hold_read.as_deref() == Some(ws.as_str()) => {}
                     Ok(()) => {
                         app.chat.read_sent.insert(ws, newest);
                     }
@@ -637,6 +781,13 @@ impl SeanceApp {
             self.tasks_popover = None;
             self.chat.stick = 3;
         }
+        self.chat.no_pin = None;
+        self.chat.jump = None;
+        self.chat.notice = None;
+        // Selecting a circle again is what reads one marked unread.
+        if self.chat.hold_read.as_deref() == Some(ws) {
+            self.chat.hold_read = None;
+        }
         // The lead's to-do poll follows the selected circle.
         if self.workspaces().iter().any(|w| w == ws) {
             self.selected_workspace = Some(ws.to_string());
@@ -645,34 +796,242 @@ impl SeanceApp {
             let focus = input.read(cx).focus_handle(cx);
             window.focus(&focus, cx);
         }
-        let ws = ws.to_string();
-        // Opening a circle reads its whole thread, so no old status is stale.
-        let after = None;
+        self.chat_refresh(cx);
+        cx.notify();
+    }
+
+    /// Read the selected circle's whole thread again, so no old status is stale.
+    fn chat_refresh(&mut self, cx: &mut Context<Self>) {
+        let ws = self.chat.selected.clone();
         cx.spawn(async move |this, cx| {
             let round = cx
                 .background_executor()
-                .spawn(async move { fetch_round(Some(ws), after) })
+                .spawn(async move { fetch_round(ws, None) })
                 .await;
             let Some(this) = this.upgrade() else { return };
             this.update(cx, |app: &mut SeanceApp, cx| app.apply_round(round, cx));
         })
         .detach();
+    }
+
+    /// Run one Invoke call off the UI thread. `then` runs when it went
+    /// through; a refusal shows as the notice, in Invoke's own words.
+    fn chat_call(
+        &mut self,
+        job: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
+        then: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        self.chat.notice = None;
+        cx.spawn(async move |this, cx| {
+            let done = cx.background_executor().spawn(async move { job() }).await;
+            let Some(this) = this.upgrade() else { return };
+            this.update(cx, |app: &mut SeanceApp, cx| {
+                match done {
+                    Ok(()) => then(app, cx),
+                    Err(e) => {
+                        app.chat.hold_read = None;
+                        app.chat.notice = Some(e.to_string());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Stop the open circle's lead mid-turn.
+    fn chat_stop(&mut self, ws: String, cx: &mut Context<Self>) {
+        self.chat_call(move || chat_api::stop(&ws), Self::chat_refresh, cx);
+    }
+
+    /// Mark a circle unread. An open thread would read itself again at once,
+    /// so it is held back until the circle is selected again.
+    fn chat_unread(&mut self, ws: String, cx: &mut Context<Self>) {
+        let at = ws.clone();
+        // Held before the call goes out, so no read can slip in behind it; a
+        // refusal lifts the hold again (see `chat_call`).
+        if self.chat.selected.as_deref() == Some(ws.as_str()) {
+            self.chat.hold_read = Some(ws.clone());
+        }
+        self.chat_call(
+            move || chat_api::unread(&at),
+            move |app, cx| {
+                app.chat.read_sent.remove(&ws);
+                app.chat_refresh(cx);
+            },
+            cx,
+        );
+    }
+
+    /// Ask Invoke for a catch-up summary, then open Alerts where it lands.
+    fn chat_catchup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.chat.notice = None;
+        cx.spawn_in(window, async move |this: WeakEntity<Self>, cx| {
+            let done = cx
+                .background_executor()
+                .spawn(async { chat_api::catchup() })
+                .await;
+            let _ = this.update_in(cx, |app, window, cx| {
+                match done {
+                    Ok(()) => app.chat_select(ALERTS_WS, window, cx),
+                    Err(e) => app.chat.notice = Some(e.to_string()),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Search every thread; the results replace the circle list.
+    fn chat_search(&mut self, cx: &mut Context<Self>) {
+        let Some(input) = self.chat.search.clone() else {
+            return;
+        };
+        let q = input.read(cx).value().trim().to_string();
+        if q.is_empty() {
+            self.chat.hits = None;
+            cx.notify();
+            return;
+        }
+        self.chat.notice = None;
+        cx.spawn(async move |this, cx| {
+            let asked = q.clone();
+            let found = cx
+                .background_executor()
+                .spawn(async move { chat_api::search(&asked) })
+                .await;
+            let Some(this) = this.upgrade() else { return };
+            this.update(cx, |app: &mut SeanceApp, cx| {
+                // An answer for words that have since changed is dropped.
+                let now = app.chat.search.as_ref().map(|i| i.read(cx).value());
+                if now.as_deref().map(str::trim) == Some(q.as_str()) {
+                    match found {
+                        Ok(hits) => app.chat.hits = Some(hits),
+                        Err(e) => app.chat.notice = Some(e.to_string()),
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Open a search result: its circle, scrolled to the message.
+    fn chat_open_hit(&mut self, ws: &str, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        self.chat_select(ws, window, cx);
+        self.chat.jump = Some(id);
+    }
+
+    /// The composer changed: an `@` first asks for the circle's panes.
+    fn chat_input_changed(&mut self, cx: &mut Context<Self>) {
+        let (Some(ws), Some(input)) = (self.chat.selected.clone(), self.chat.input.clone()) else {
+            return;
+        };
+        if input.read(cx).value().starts_with('@')
+            && !self
+                .chat
+                .panes_at
+                .get(&ws)
+                .is_some_and(|at| at.elapsed() < PANES_TTL)
+        {
+            self.chat.panes_at.insert(ws.clone(), Instant::now());
+            cx.spawn(async move |this, cx| {
+                let asked = ws.clone();
+                let found = cx
+                    .background_executor()
+                    .spawn(async move { chat_api::panes(&asked) })
+                    .await;
+                let Some(this) = this.upgrade() else { return };
+                this.update(cx, |app: &mut SeanceApp, cx| {
+                    match found {
+                        Ok(panes) => {
+                            app.chat.panes.insert(ws, panes);
+                        }
+                        Err(e) => {
+                            app.chat.panes_at.remove(&ws);
+                            app.chat.notice = Some(e.to_string());
+                        }
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
         cx.notify();
+    }
+
+    /// Pick a pane from the `@` suggestions.
+    fn chat_mention(&mut self, at: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(input) = self.chat.input.clone() {
+            input.update(cx, |i, cx| i.set_value(format!("@{at} "), window, cx));
+            let focus = input.read(cx).focus_handle(cx);
+            window.focus(&focus, cx);
+        }
+    }
+
+    /// Pick a file to send as a note, with whatever is typed as its caption.
+    fn chat_attach(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: None,
+        });
+        cx.spawn_in(window, async move |this: WeakEntity<Self>, cx| {
+            let Ok(Ok(Some(paths))) = picked.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let _ = this.update_in(cx, |app, window, cx| {
+                if let Err(e) = chat_api::check_upload(&path) {
+                    app.chat.notice = Some(e.to_string());
+                    cx.notify();
+                    return;
+                }
+                let (Some(ws), Some(input)) = (app.chat.selected.clone(), app.chat.input.clone())
+                else {
+                    return;
+                };
+                let caption = input.read(cx).value().trim().to_string();
+                input.update(cx, |i, cx| i.set_value("", window, cx));
+                app.chat_post(ws, caption, Some(path), cx);
+            });
+        })
+        .detach();
     }
 
     fn chat_send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (Some(ws), Some(input)) = (self.chat.selected.clone(), self.chat.input.clone()) else {
             return;
         };
-        if ws == ALERTS_WS {
-            return;
-        }
         let text = input.read(cx).value().trim().to_string();
-        if text.is_empty() {
+        if ws == ALERTS_WS || text.is_empty() {
             return;
         }
         input.update(cx, |i, cx| i.set_value("", window, cx));
-        // Shown at once; the next thread answer replaces it with the real one.
+        self.chat_post(ws, text, None, cx);
+    }
+
+    /// Send a note to `ws`'s lead, with a file if there is one. Shown at once;
+    /// the next thread answer replaces it with the real one.
+    fn chat_post(
+        &mut self,
+        ws: String,
+        text: String,
+        file: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        let shown = match (&file, text.is_empty()) {
+            (Some(path), true) => format!(
+                "📎 {}",
+                path.file_name()
+                    .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
+            ),
+            _ => text.clone(),
+        };
         self.chat.next_local -= 1;
         let local_id = self.chat.next_local;
         let after = self.chat.refresh_after(&ws);
@@ -680,22 +1039,25 @@ impl SeanceApp {
         thread.messages.push(Msg {
             id: local_id,
             from: "me".into(),
-            text: text.clone(),
+            text: shown,
             ts: now_ms(),
-            image: None,
-            images: Vec::new(),
-            choices: Vec::new(),
-            picked: None,
             status: "sending".into(),
+            ..Default::default()
         });
         self.chat.stick = 3;
+        self.chat.no_pin = None;
         let thread_ws = ws.clone();
         cx.spawn(async move |this, cx| {
             let to = ws.clone();
             let body = text.clone();
             let sent = cx
                 .background_executor()
-                .spawn(async move { chat_api::send(&to, &body) })
+                .spawn(async move {
+                    match file {
+                        Some(path) => chat_api::send_file(&to, &body, &path),
+                        None => chat_api::send(&to, &body),
+                    }
+                })
                 .await;
             let round = cx
                 .background_executor()
@@ -711,7 +1073,9 @@ impl SeanceApp {
                         t.messages.retain(|m| m.id != local_id);
                     }
                     app.chat.error = Some(format!("not sent: {e}"));
-                    app.chat.restore = Some(text);
+                    if !text.is_empty() {
+                        app.chat.restore = Some(text);
+                    }
                 }
                 cx.notify();
             });
@@ -811,8 +1175,11 @@ impl SeanceApp {
                 window,
                 |this: &mut SeanceApp, _input, event: &InputEvent, window, cx| {
                     // Enter sends; Shift+Enter adds a line (the input does that).
-                    if let InputEvent::PressEnter { shift: false, .. } = event {
-                        this.chat_send(window, cx);
+                    match event {
+                        InputEvent::PressEnter { shift: false, .. } => this.chat_send(window, cx),
+                        // Quick replies and @ suggestions follow what is typed.
+                        InputEvent::Change => this.chat_input_changed(cx),
+                        _ => {}
                     }
                 },
             )
@@ -820,6 +1187,23 @@ impl SeanceApp {
             let focus = input.read(cx).focus_handle(cx);
             window.focus(&focus, cx);
             self.chat.input = Some(input);
+        }
+        if self.chat.search.is_none() {
+            let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search chats"));
+            cx.subscribe_in(
+                &search,
+                window,
+                |this: &mut SeanceApp, input, event: &InputEvent, _, cx| match event {
+                    InputEvent::PressEnter { .. } => this.chat_search(cx),
+                    InputEvent::Change if input.read(cx).value().trim().is_empty() => {
+                        this.chat.hits = None;
+                        cx.notify();
+                    }
+                    _ => {}
+                },
+            )
+            .detach();
+            self.chat.search = Some(search);
         }
         self.chat.window_active = window.is_window_active();
         if let Some(input) = self.chat.input.clone() {
@@ -839,6 +1223,23 @@ impl SeanceApp {
             }
         }
         self.maybe_mark_read(cx);
+        // A search result waits here for its thread to arrive; it takes the
+        // frame from the pin to the bottom.
+        if let Some(id) = self.chat.jump {
+            let at = self
+                .chat
+                .selected
+                .as_ref()
+                .and_then(|ws| self.chat.threads.get(ws))
+                .and_then(|t| t.messages.iter().position(|m| m.id == id));
+            if let Some(at) = at {
+                self.chat.jump = None;
+                self.chat.stick = 0;
+                self.chat.no_pin = self.chat.selected.clone();
+                self.chat.scroll.scroll_to_item(at);
+                window.request_animation_frame();
+            }
+        }
         if self.chat.stick > 0 {
             self.chat.stick -= 1;
             self.chat.scroll.scroll_to_bottom();
@@ -876,27 +1277,35 @@ impl SeanceApp {
             .overflow_y_scroll()
             .flex()
             .flex_col();
-        // Active circles sit above the spaces, lifted out of theirs.
-        let active = active_circles(&self.chat.circles, now_ms());
-        if !active.is_empty() {
-            col = col.child(list_label("ACTIVE".to_string()));
-            for c in &active {
-                col = col.child(self.chat_circle_row(c, cx));
+        if let Some(hits) = &self.chat.hits {
+            // Search results stand in for the circles.
+            col = col.child(list_label(format!("{} FOUND", hits.len())));
+            for h in hits {
+                col = col.child(self.chat_hit_row(h, cx));
             }
-        }
-        let mut space = String::new();
-        for c in self.chat_circles_in_order() {
-            if active.iter().any(|a| a.ws == c.ws) {
-                continue;
-            }
-            let id = spaces.space_of(&c.ws).to_string();
-            if id != space {
-                if let Some(s) = spaces.list.iter().find(|s| s.id == id) {
-                    col = col.child(list_label(s.name.to_uppercase()));
+        } else {
+            // Active circles sit above the spaces, lifted out of theirs.
+            let active = active_circles(&self.chat.circles, now_ms());
+            if !active.is_empty() {
+                col = col.child(list_label("ACTIVE".to_string()));
+                for c in &active {
+                    col = col.child(self.chat_circle_row(c, cx));
                 }
-                space = id;
             }
-            col = col.child(self.chat_circle_row(&c, cx));
+            let mut space = String::new();
+            for c in self.chat_circles_in_order() {
+                if active.iter().any(|a| a.ws == c.ws) {
+                    continue;
+                }
+                let id = spaces.space_of(&c.ws).to_string();
+                if id != space {
+                    if let Some(s) = spaces.list.iter().find(|s| s.id == id) {
+                        col = col.child(list_label(s.name.to_uppercase()));
+                    }
+                    space = id;
+                }
+                col = col.child(self.chat_circle_row(&c, cx));
+            }
         }
         div()
             .w(px(LIST_W))
@@ -926,15 +1335,71 @@ impl SeanceApp {
                             // where the script is not installed.
                             .children(self.render_afk_chip("chat", cx)),
                     )
-                    .child(self.render_view_switch("chat", cx)),
+                    .child(self.render_view_switch("chat", cx))
+                    .children(self.chat.search.as_ref().map(|s| Input::new(s)))
+                    .child(
+                        div()
+                            .id("chat-catchup")
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .text_xs()
+                            .text_color(SeancePalette::text_dim())
+                            .bg(SeancePalette::surface())
+                            .hover(|s| s.text_color(SeancePalette::flame()))
+                            .cursor_pointer()
+                            .tooltip(tip("a summary of what you missed, in Alerts"))
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.chat_catchup(window, cx)),
+                            )
+                            .child("Catch me up"),
+                    ),
             )
             .child(col)
+            .into_any_element()
+    }
+
+    /// One search result: the circle and who spoke, then the words.
+    fn chat_hit_row(&self, h: &Hit, cx: &Context<Self>) -> AnyElement {
+        let (ws, id) = (h.ws.clone(), h.id);
+        let who = if h.from == "me" {
+            "you"
+        } else {
+            h.from.as_str()
+        };
+        div()
+            .id(SharedString::from(format!("chat-hit-{}-{}", h.ws, h.id)))
+            .flex_none()
+            .px_3()
+            .py_2()
+            .flex()
+            .flex_col()
+            .cursor_pointer()
+            .hover(|s| s.bg(SeancePalette::surface()))
+            .on_click(
+                cx.listener(move |this, _, window, cx| this.chat_open_hit(&ws, id, window, cx)),
+            )
+            .child(
+                div()
+                    .truncate()
+                    .text_xs()
+                    .text_color(SeancePalette::text_faint())
+                    .child(format!("{} · {who} · {}", h.circle, clock(h.ts))),
+            )
+            .child(
+                div()
+                    .line_clamp(2)
+                    .text_sm()
+                    .text_color(SeancePalette::text())
+                    .child(h.text.clone()),
+            )
             .into_any_element()
     }
 
     fn chat_circle_row(&self, c: &CircleRow, cx: &Context<Self>) -> AnyElement {
         let on = self.chat.selected.as_deref() == Some(c.ws.as_str());
         let ws = c.ws.clone();
+        let (menu_ws, weak) = (c.ws.clone(), cx.weak_entity());
         let pulse = 0.45 + 0.55 * (((now_ms() / 300) % 2) as f32);
         div()
             .id(SharedString::from(format!("chat-circle-{}", c.ws)))
@@ -948,6 +1413,13 @@ impl SeanceApp {
             .when(on, |d| d.bg(SeancePalette::surface()))
             .hover(|s| s.bg(SeancePalette::surface()))
             .on_click(cx.listener(move |this, _, window, cx| this.chat_select(&ws, window, cx)))
+            .context_menu(move |menu, _, _| {
+                let (ws, weak) = (menu_ws.clone(), weak.clone());
+                menu.item(PopupMenuItem::new("Mark unread").on_click(move |_, _, cx| {
+                    let ws = ws.clone();
+                    let _ = weak.update(cx, |a, cx| a.chat_unread(ws, cx));
+                }))
+            })
             .child(div().flex_none().w(px(30.)).flex().justify_center().child(
                 super::sprite::render(&super::sprite::for_circle(&c.ws), 2., c.working),
             ))
@@ -1070,8 +1542,30 @@ impl SeanceApp {
                     }),
             );
         let read_only = ws == ALERTS_WS;
+        let lead_busy = self.chat.threads.get(&ws).is_some_and(|t| t.lead_busy);
         let tasks_open = lead.as_deref().is_some_and(|l| self.tasks_popover_open(l));
         let chip_lead = lead.clone();
+        header = header.when(!read_only && lead_busy, |header| {
+            header.child(
+                div()
+                    .id("chat-stop")
+                    .flex_none()
+                    .px_2()
+                    .py_0p5()
+                    .rounded_sm()
+                    .text_xs()
+                    .text_color(SeancePalette::danger())
+                    .bg(SeancePalette::surface())
+                    .hover(|s| s.bg(SeancePalette::danger().opacity(0.2)))
+                    .cursor_pointer()
+                    .tooltip(tip("stop what the lead is doing"))
+                    .on_click({
+                        let ws = ws.clone();
+                        cx.listener(move |this, _, _, cx| this.chat_stop(ws.clone(), cx))
+                    })
+                    .child("■ stop"),
+            )
+        });
         header = header.when(!read_only, |header| {
             header.child(
                 div()
@@ -1168,6 +1662,23 @@ impl SeanceApp {
                     .child(format!("Invoke: {e}")),
             );
         }
+        if let Some(n) = &self.chat.notice {
+            col = col.child(
+                div()
+                    .id("chat-notice")
+                    .flex_none()
+                    .px_3()
+                    .py_1()
+                    .text_xs()
+                    .text_color(SeancePalette::danger())
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.chat.notice = None;
+                        cx.notify();
+                    }))
+                    .child(n.clone()),
+            );
+        }
         col.child(thread)
             .when(!read_only, |col| col.child(self.render_chat_composer(cx)))
             .into_any_element()
@@ -1177,29 +1688,116 @@ impl SeanceApp {
         let Some(input) = self.chat.input.as_ref() else {
             return div().into_any_element();
         };
+        let typed = input.read(cx).value().to_string();
+        let ws = self.chat.selected.clone().unwrap_or_default();
+        let chip = |id: SharedString| {
+            div()
+                .id(id)
+                .px_2()
+                .py_0p5()
+                .rounded_full()
+                .border_1()
+                .border_color(SeancePalette::border())
+                .text_xs()
+                .text_color(SeancePalette::text_dim())
+                .hover(|s| s.text_color(SeancePalette::flame()))
+                .cursor_pointer()
+        };
+        // Above the input: quick replies while it is empty, or the panes an
+        // `@` at the start can name.
+        let mut above = div().flex().flex_wrap().gap_1p5();
+        if typed.is_empty() {
+            for (i, text) in QUICK_REPLIES.into_iter().enumerate() {
+                let ws = ws.clone();
+                above = above.child(
+                    chip(SharedString::from(format!("chat-quick-{i}")))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.chat_post(ws.clone(), text.to_string(), None, cx)
+                        }))
+                        .child(text),
+                );
+            }
+        } else if let Some(typed) = typed
+            .strip_prefix('@')
+            .filter(|t| !t.contains(char::is_whitespace))
+        {
+            let typed = typed.to_lowercase();
+            let panes = self.chat.panes.get(&ws).map_or(&[][..], Vec::as_slice);
+            for (i, p) in panes
+                .iter()
+                .filter(|p| {
+                    !p.lead
+                        && (p.at.to_lowercase().starts_with(&typed)
+                            || p.name.to_lowercase().contains(&typed))
+                })
+                .take(6)
+                .enumerate()
+            {
+                let at = p.at.clone();
+                let state = if p.asleep {
+                    " · asleep"
+                } else if p.busy {
+                    " · busy"
+                } else {
+                    ""
+                };
+                above = above.child(
+                    chip(SharedString::from(format!("chat-mention-{i}")))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.chat_mention(&at, window, cx)
+                        }))
+                        .child(format!("@{} {}{state}", p.at, p.name)),
+                );
+            }
+        }
         div()
             .flex_none()
             .p_3()
             .flex()
-            .items_end()
+            .flex_col()
             .gap_2()
             .border_t_1()
             .border_color(SeancePalette::border())
-            .child(div().flex_1().min_w_0().child(Input::new(input)))
+            .child(above)
             .child(
                 div()
-                    .id("chat-send")
-                    .flex_none()
-                    .px_3()
-                    .py_1p5()
-                    .rounded_md()
-                    .text_sm()
-                    .text_color(SeancePalette::bg())
-                    .bg(SeancePalette::flame())
-                    .hover(|s| s.bg(SeancePalette::flame_dim()))
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, window, cx| this.chat_send(window, cx)))
-                    .child("Send"),
+                    .flex()
+                    .items_end()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id("chat-attach")
+                            .flex_none()
+                            .px_2()
+                            .py_1p5()
+                            .rounded_md()
+                            .text_sm()
+                            .text_color(SeancePalette::text_dim())
+                            .bg(SeancePalette::surface())
+                            .hover(|s| s.text_color(SeancePalette::flame()))
+                            .cursor_pointer()
+                            .tooltip(tip("send a file or picture"))
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.chat_attach(window, cx)),
+                            )
+                            .child("📎"),
+                    )
+                    .child(div().flex_1().min_w_0().child(Input::new(input)))
+                    .child(
+                        div()
+                            .id("chat-send")
+                            .flex_none()
+                            .px_3()
+                            .py_1p5()
+                            .rounded_md()
+                            .text_sm()
+                            .text_color(SeancePalette::bg())
+                            .bg(SeancePalette::flame())
+                            .hover(|s| s.bg(SeancePalette::flame_dim()))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, window, cx| this.chat_send(window, cx)))
+                            .child("Send"),
+                    ),
             )
             .into_any_element()
     }
@@ -1331,7 +1929,10 @@ impl SeanceApp {
                 None => frame,
             });
         }
-        if !m.text.is_empty() {
+        if let Some(a) = &m.attachment {
+            body = body.child(attachment_link(m.id, a));
+        }
+        if !m.text.is_empty() && !attachment_only(m) {
             let text = m.text.clone();
             body = body.child(
                 div()
@@ -1393,6 +1994,13 @@ impl SeanceApp {
                     .child(stamp)
                     .children(self.tick_marks(m, read)),
             );
+        let (weak, ws, msg) = (cx.weak_entity(), self.chat.selected.clone(), m.clone());
+        let bubble = bubble
+            .id(SharedString::from(format!("bubble-{}", m.id)))
+            .context_menu(move |menu, window, cx| {
+                let ws = ws.clone().unwrap_or_default();
+                bubble_menu(menu, window, cx, &weak, &ws, &msg)
+            });
         if m.choices.is_empty() || me {
             return div()
                 .flex()
@@ -1713,5 +2321,38 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(preview(&photo), "📷 photo");
+    }
+
+    #[test]
+    fn reminders_land_on_the_hour_the_menu_says() {
+        const HOUR: u64 = 3600 * 1000;
+        let now = now_ms();
+        let [hour, three, tomorrow, monday] = remind_times(now);
+        assert_eq!((hour, three), (now + HOUR, now + 3 * HOUR));
+        // Local 9:00, tomorrow (a day ahead by the calendar) and a Monday.
+        assert_eq!(events::local_clock(tomorrow).1, 9);
+        assert_eq!(events::local_clock(tomorrow).2, 0);
+        assert!(tomorrow > now && tomorrow - now <= 48 * HOUR);
+        assert_eq!(events::local_clock(monday).0, 1);
+        assert_eq!(events::local_clock(monday).1, 9);
+        assert!(monday > now && monday - now <= 8 * 24 * HOUR);
+    }
+
+    #[test]
+    fn a_note_that_is_only_its_document_shows_only_the_link() {
+        let doc = |text: &str| Msg {
+            text: text.into(),
+            attachment: Some(Attachment {
+                file: "a.pdf".into(),
+                title: "plan.pdf".into(),
+            }),
+            ..Default::default()
+        };
+        assert!(attachment_only(&doc("📎 plan.pdf")));
+        assert!(!attachment_only(&doc("📎 plan.pdf, please read")));
+        assert!(!attachment_only(&Msg {
+            text: "📎 plan.pdf".into(),
+            ..Default::default()
+        }));
     }
 }
