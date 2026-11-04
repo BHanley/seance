@@ -48,9 +48,9 @@ const READ_RETRY: Duration = Duration::from_secs(30);
 const ACTIVE_MS: u64 = 2 * 3600 * 1000;
 /// The pane list for @-mentions is asked again after this.
 const PANES_TTL: Duration = Duration::from_secs(30);
-/// What the quick-reply chips above an empty composer send.
 /// Catch me up waits this long after it finishes before it can be pressed again.
 const CATCHUP_COOLDOWN: Duration = Duration::from_secs(5);
+/// What the quick-reply chips above an empty composer send.
 const QUICK_REPLIES: [&str; 3] = ["Keep going", "Status?", "Ship it"];
 
 #[derive(Clone, Debug, PartialEq)]
@@ -497,13 +497,12 @@ fn remind_times(now: u64) -> [u64; 4] {
     [now + HOUR, now + 3 * HOUR, nine(today + 36 * HOUR), monday]
 }
 
-/// A success toast on the active window, as the other menus show one.
-fn toast(cx: &mut gpui::App, msg: String) {
-    if let Some(w) = cx.active_window() {
-        let _ = w.update(cx, |_, window, cx| {
-            window.push_notification(gpui_component::notification::Notification::success(msg), cx)
-        });
-    }
+/// A success toast on the window the menu was used in, as the other menus
+/// show one.
+fn toast(win: gpui::AnyWindowHandle, cx: &mut gpui::App, msg: String) {
+    let _ = win.update(cx, |_, window, cx| {
+        window.push_notification(gpui_component::notification::Notification::success(msg), cx)
+    });
 }
 
 /// A note that is only its document: the server words it "📎 <title>".
@@ -552,12 +551,12 @@ fn bubble_menu(
                 .filter(|c| c.ws != from && c.ws != ALERTS_WS)
                 .fold(menu, |menu, c| {
                     let (weak, to, name) = (weak.clone(), c.ws.clone(), c.name.clone());
-                    menu.item(PopupMenuItem::new(c.name).on_click(move |_, _, cx| {
-                        let (to, name) = (to.clone(), name.clone());
+                    menu.item(PopupMenuItem::new(c.name).on_click(move |_, window, cx| {
+                        let (to, name, win) = (to.clone(), name.clone(), window.window_handle());
                         let _ = weak.update(cx, |a, cx| {
                             a.chat_call(
                                 move || chat_api::forward(id, &to),
-                                move |_, cx| toast(cx, format!("Forwarded to {name}")),
+                                move |_, cx| toast(win, cx, format!("Forwarded to {name}")),
                                 cx,
                             )
                         });
@@ -579,7 +578,8 @@ fn bubble_menu(
                     .zip(times)
                     .fold(menu, |menu, ((shown, said), at)| {
                         let weak = weak.clone();
-                        menu.item(PopupMenuItem::new(*shown).on_click(move |_, _, cx| {
+                        menu.item(PopupMenuItem::new(*shown).on_click(move |_, window, cx| {
+                            let win = window.window_handle();
                             let _ = weak.update(cx, |a, cx| {
                                 a.chat_call(
                                     move || chat_api::remind(id, at, lead, said),
@@ -589,7 +589,7 @@ fn bubble_menu(
                                         } else {
                                             "Reminder set:"
                                         };
-                                        toast(cx, format!("{who} {said}"))
+                                        toast(win, cx, format!("{who} {said}"))
                                     },
                                     cx,
                                 )
