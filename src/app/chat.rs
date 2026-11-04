@@ -48,6 +48,8 @@ const READ_RETRY: Duration = Duration::from_secs(30);
 const ACTIVE_MS: u64 = 2 * 3600 * 1000;
 /// The pane list for @-mentions is asked again after this.
 const PANES_TTL: Duration = Duration::from_secs(30);
+/// Catch me up waits this long after it finishes before it can be pressed again.
+const CATCHUP_COOLDOWN: Duration = Duration::from_secs(5);
 /// What the quick-reply chips above an empty composer send.
 const QUICK_REPLIES: [&str; 3] = ["Keep going", "Status?", "Ship it"];
 
@@ -122,6 +124,9 @@ pub(super) struct ChatState {
     /// Each circle's panes for @-mentions, and when they were asked for.
     panes: HashMap<String, Vec<PaneRow>>,
     panes_at: HashMap<String, Instant>,
+    /// Catch me up is in flight, or finished at this time.
+    catchup_busy: bool,
+    catchup_done: Option<Instant>,
     /// Why the last action Brian took was refused; a click clears it.
     notice: Option<String>,
 }
@@ -492,6 +497,14 @@ fn remind_times(now: u64) -> [u64; 4] {
     [now + HOUR, now + 3 * HOUR, nine(today + 36 * HOUR), monday]
 }
 
+/// A success toast on the window the menu was used in, as the other menus
+/// show one.
+fn toast(win: gpui::AnyWindowHandle, cx: &mut gpui::App, msg: String) {
+    let _ = win.update(cx, |_, window, cx| {
+        window.push_notification(gpui_component::notification::Notification::success(msg), cx)
+    });
+}
+
 /// A note that is only its document: the server words it "📎 <title>".
 fn attachment_only(m: &Msg) -> bool {
     m.attachment
@@ -537,11 +550,15 @@ fn bubble_menu(
                 .into_iter()
                 .filter(|c| c.ws != from && c.ws != ALERTS_WS)
                 .fold(menu, |menu, c| {
-                    let (weak, to) = (weak.clone(), c.ws.clone());
-                    menu.item(PopupMenuItem::new(c.name).on_click(move |_, _, cx| {
-                        let to = to.clone();
+                    let (weak, to, name) = (weak.clone(), c.ws.clone(), c.name.clone());
+                    menu.item(PopupMenuItem::new(c.name).on_click(move |_, window, cx| {
+                        let (to, name, win) = (to.clone(), name.clone(), window.window_handle());
                         let _ = weak.update(cx, |a, cx| {
-                            a.chat_call(move || chat_api::forward(id, &to), |_, _| {}, cx)
+                            a.chat_call(
+                                move || chat_api::forward(id, &to),
+                                move |_, cx| toast(win, cx, format!("Forwarded to {name}")),
+                                cx,
+                            )
                         });
                     }))
                 })
@@ -561,11 +578,19 @@ fn bubble_menu(
                     .zip(times)
                     .fold(menu, |menu, ((shown, said), at)| {
                         let weak = weak.clone();
-                        menu.item(PopupMenuItem::new(*shown).on_click(move |_, _, cx| {
+                        menu.item(PopupMenuItem::new(*shown).on_click(move |_, window, cx| {
+                            let win = window.window_handle();
                             let _ = weak.update(cx, |a, cx| {
                                 a.chat_call(
                                     move || chat_api::remind(id, at, lead, said),
-                                    |_, _| {},
+                                    move |_, cx| {
+                                        let who = if lead {
+                                            "The lead will pick it up"
+                                        } else {
+                                            "Reminder set:"
+                                        };
+                                        toast(win, cx, format!("{who} {said}"))
+                                    },
                                     cx,
                                 )
                             });
@@ -866,6 +891,10 @@ impl SeanceApp {
 
     /// Ask Invoke for a catch-up summary, then open Alerts where it lands.
     fn chat_catchup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.catchup_locked() {
+            return;
+        }
+        self.chat.catchup_busy = true;
         self.chat.notice = None;
         cx.spawn_in(window, async move |this: WeakEntity<Self>, cx| {
             let done = cx
@@ -873,6 +902,14 @@ impl SeanceApp {
                 .spawn(async { chat_api::catchup() })
                 .await;
             let _ = this.update_in(cx, |app, window, cx| {
+                app.chat.catchup_busy = false;
+                app.chat.catchup_done = Some(Instant::now());
+                // The button comes back on its own once the wait is over.
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(CATCHUP_COOLDOWN).await;
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                })
+                .detach();
                 match done {
                     Ok(()) => app.chat_select(ALERTS_WS, window, cx),
                     Err(e) => app.chat.notice = Some(e.to_string()),
@@ -881,6 +918,15 @@ impl SeanceApp {
             });
         })
         .detach();
+    }
+
+    /// Catch me up is working, or was a moment ago.
+    fn catchup_locked(&self) -> bool {
+        self.chat.catchup_busy
+            || self
+                .chat
+                .catchup_done
+                .is_some_and(|at| at.elapsed() < CATCHUP_COOLDOWN)
     }
 
     /// Search every thread; the results replace the circle list.
@@ -1337,7 +1383,8 @@ impl SeanceApp {
                     )
                     .child(self.render_view_switch("chat", cx))
                     .children(self.chat.search.as_ref().map(|s| Input::new(s)))
-                    .child(
+                    .child({
+                        let locked = self.catchup_locked();
                         div()
                             .id("chat-catchup")
                             .px_2()
@@ -1346,14 +1393,17 @@ impl SeanceApp {
                             .text_xs()
                             .text_color(SeancePalette::text_dim())
                             .bg(SeancePalette::surface())
-                            .hover(|s| s.text_color(SeancePalette::flame()))
-                            .cursor_pointer()
                             .tooltip(tip("a summary of what you missed, in Alerts"))
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.chat_catchup(window, cx)),
-                            )
-                            .child("Catch me up"),
-                    ),
+                            .when(locked, |d| d.opacity(0.4))
+                            .when(!locked, |d| {
+                                d.hover(|s| s.text_color(SeancePalette::flame()))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.chat_catchup(window, cx)
+                                    }))
+                            })
+                            .child("Catch me up")
+                    }),
             )
             .child(col)
             .into_any_element()
@@ -1726,7 +1776,7 @@ impl SeanceApp {
             for (i, p) in panes
                 .iter()
                 .filter(|p| {
-                    !p.lead
+                    p.helper
                         && (p.at.to_lowercase().starts_with(&typed)
                             || p.name.to_lowercase().contains(&typed))
                 })
