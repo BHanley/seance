@@ -151,6 +151,9 @@ pub struct PaneRow {
     pub at: String,
     #[serde(default)]
     pub lead: bool,
+    /// A pane worth an @-mention (the lead and bare terminals are not).
+    #[serde(default)]
+    pub helper: bool,
     #[serde(default)]
     pub busy: bool,
     #[serde(default)]
@@ -764,6 +767,8 @@ mod tests {
         .unwrap();
         assert_eq!(h.results[0].circle, "PM");
         assert_eq!(h.results[0].id, 9);
+        let p: PaneRow = serde_json::from_str(r#"{"at":"MacBuilder","helper":true}"#).unwrap();
+        assert!(p.helper && !p.lead);
     }
 
     #[test]
