@@ -647,6 +647,17 @@ fn search_query(raw: &str) -> Result<&str, Option<&'static str>> {
     }
 }
 
+/// A spec card's body: the text without its first line, which is the title.
+fn spec_body(text: &str) -> &str {
+    text.split_once('\n')
+        .map_or("", |(_, rest)| rest.trim_start_matches('\n'))
+}
+
+/// Change on a spec card sends nothing: it hands the keyboard to the composer.
+fn changes_spec(m: &Msg, choice: &str) -> bool {
+    m.spec.is_some() && choice.eq_ignore_ascii_case("change")
+}
+
 /// A note that is only its document: the server words it "📎 <title>".
 fn attachment_only(m: &Msg) -> bool {
     m.attachment
@@ -2489,8 +2500,25 @@ impl SeanceApp {
         if let Some(a) = &m.attachment {
             body = body.child(attachment_link(m.id, a));
         }
-        if !m.text.is_empty() && !attachment_only(m) {
-            let text = m.text.clone();
+        let spec = m.spec.as_deref().filter(|_| !me);
+        if let Some(title) = spec {
+            body = body
+                .child(
+                    div()
+                        .text_xs()
+                        .font_semibold()
+                        .text_color(SeancePalette::violet())
+                        .child("SPEC"),
+                )
+                .child(div().font_semibold().child(title.to_string()));
+        }
+        let shown = if spec.is_some() {
+            spec_body(&m.text)
+        } else {
+            m.text.as_str()
+        };
+        if !shown.is_empty() && !attachment_only(m) {
+            let (text, markdown) = (shown.to_string(), to_markdown(shown));
             body = body.child(
                 div()
                     .id(SharedString::from(format!("bubble-text-{}", m.id)))
@@ -2510,7 +2538,7 @@ impl SeanceApp {
                     .child(
                         TextView::markdown(
                             SharedString::from(format!("bubble-md-{}", m.id)),
-                            to_markdown(&m.text),
+                            markdown,
                         )
                         .style(bubble_text_style())
                         .selectable(true),
@@ -2538,6 +2566,9 @@ impl SeanceApp {
                 SeancePalette::violet_dim()
             } else {
                 SeancePalette::surface()
+            })
+            .when(spec.is_some(), |d| {
+                d.border_1().border_color(SeancePalette::violet())
             })
             .child(body)
             .child(
@@ -2651,11 +2682,17 @@ impl SeanceApp {
                 if picked.is_some() {
                     return pill;
                 }
+                let spec_change = changes_spec(m, choice);
                 let choice = choice.clone();
                 pill.cursor_pointer()
                     .hover(|s| s.bg(SeancePalette::violet().opacity(0.25)))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.chat_answer(id, choice.clone(), cx);
+                        if spec_change {
+                            this.chat.focus_input = true;
+                            cx.notify();
+                        } else {
+                            this.chat_answer(id, choice.clone(), cx);
+                        }
                     }))
             }))
             .into_any_element()
@@ -2665,6 +2702,24 @@ impl SeanceApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_spec_body_drops_its_title_line() {
+        assert_eq!(spec_body("Title\nbody\nmore"), "body\nmore");
+        assert_eq!(spec_body("Title\n\nbody"), "body");
+        assert_eq!(spec_body("Title only"), "");
+    }
+
+    #[test]
+    fn change_only_refocuses_on_a_spec_card() {
+        let spec = Msg {
+            spec: Some("T".into()),
+            ..Default::default()
+        };
+        assert!(changes_spec(&spec, "Change"));
+        assert!(!changes_spec(&spec, "Go"));
+        assert!(!changes_spec(&Msg::default(), "Change"));
+    }
 
     #[test]
     fn markdown_reads_back_as_the_same_text() {

@@ -61,6 +61,9 @@ pub struct Msg {
     /// Answers a lead offers (from its `choice:` lines); the first is its pick.
     #[serde(default)]
     pub choices: Vec<String>,
+    /// Set on a spec card: the title, which is also the first line of `text`.
+    #[serde(default)]
+    pub spec: Option<String>,
     /// The choice that was tapped, once one has been.
     #[serde(default)]
     pub picked: Option<String>,
@@ -668,6 +671,17 @@ mod tests {
         assert_eq!(size_from_header(&webp), Some((800, 512)));
         assert_eq!(size_from_header(b"not a picture"), None);
         assert_eq!(size_from_header(b"\x89PNG"), None);
+    }
+
+    #[test]
+    fn a_spec_title_parses_and_is_optional() {
+        let m: Msg = serde_json::from_str(
+            r#"{"id":8,"from":"lead","text":"Title\nbody","spec":"Title","choices":["Go","Change"]}"#,
+        )
+        .unwrap();
+        assert_eq!(m.spec.as_deref(), Some("Title"));
+        let plain: Msg = serde_json::from_str(r#"{"id":9,"from":"lead","text":"hi"}"#).unwrap();
+        assert!(plain.spec.is_none());
     }
 
     #[test]
