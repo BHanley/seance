@@ -289,6 +289,170 @@ pub(super) fn render_move(
         .into_any_element()
 }
 
+/// Two or more panes working dance as a crew (Brian's ask): one paper cutout
+/// per pane, the same creature in its own shade, circling on a low ring. gpui
+/// has no 3D, so this fakes the web Chat's CSS ring with its numbers. Cutout
+/// cells are 2 points to its 2px, so its px read as points here.
+const CREW_CELL: f32 = 2.;
+const CREW_MAX: usize = 6;
+/// A step toward white (positive) or black per pane index, so a pane keeps
+/// its shade wherever it is in the crew. 0 is the circle's own color.
+const CREW_SHADES: [f32; CREW_MAX] = [0., 0.3, -0.3, 0.55, -0.5, 0.75];
+const ORBIT_MS: u64 = 5000;
+const SHEET_MS: u64 = 1700;
+/// Each sheet runs this far ahead of the one before it.
+const SHEET_STAGGER_MS: u64 = 450;
+const TILT_DEG: f32 = 20.;
+const SWAY_DEG: f32 = 40.;
+const HOP: f32 = 3.;
+const PERSPECTIVE: f32 = 170.;
+
+/// One cutout of the crew at a moment.
+#[derive(Debug, PartialEq)]
+pub(super) struct Cutout {
+    pub pane: u32,
+    /// Its centre from the ring's on screen, in points (y down), perspective
+    /// and hop included.
+    pub x: f32,
+    pub y: f32,
+    /// 1 at the front of the ring, -1 at the back.
+    pub near: f32,
+    /// Perspective: above 1 in front, below behind.
+    pub scale: f32,
+    /// How far the sheet is turned, in radians; it squeezes by the cosine.
+    pub sway: f32,
+    /// Its [`CREW_SHADES`] step.
+    pub shade: f32,
+}
+
+fn crew_radius(n: usize) -> f32 {
+    (4.2 * n as f32).max(15.)
+}
+
+/// Whether these working panes (indexes) make a crew: two or more.
+pub(super) fn is_crew(crew: &[u32]) -> bool {
+    crew.len() >= 2
+}
+
+/// The first [`CREW_MAX`] of `crew` (pane indexes) at `t` (unix ms), back to
+/// front so nearer cutouts are drawn over farther ones. Empty under two.
+pub(super) fn crew_at(crew: &[u32], t: u64) -> Vec<Cutout> {
+    if !is_crew(crew) {
+        return Vec::new();
+    }
+    let crew = &crew[..crew.len().min(CREW_MAX)];
+    let n = crew.len();
+    let r = crew_radius(n);
+    let tau = std::f32::consts::TAU;
+    let (tilt_sin, tilt_cos) = TILT_DEG.to_radians().sin_cos();
+    let mut cuts: Vec<Cutout> = crew
+        .iter()
+        .enumerate()
+        .map(|(i, &pane)| {
+            // Evenly spaced on the ring, which the tilt shows from above.
+            let a = tau * ((t % ORBIT_MS) as f32 / ORBIT_MS as f32 + i as f32 / n as f32);
+            let (x, z) = (r * a.sin(), r * a.cos());
+            let scale = PERSPECTIVE / (PERSPECTIVE - z * tilt_cos);
+            // Sway side to side, hopping at each upright pass.
+            let u = ((t + i as u64 * SHEET_STAGGER_MS) % SHEET_MS) as f32 / SHEET_MS as f32;
+            let sway = -SWAY_DEG.to_radians() * (tau * u).cos();
+            let hop = -HOP * (tau * u).sin().powi(2);
+            Cutout {
+                pane,
+                x: x * scale,
+                y: (z * tilt_sin + hop) * scale,
+                near: a.cos(),
+                scale,
+                sway,
+                shade: CREW_SHADES[pane as usize % CREW_MAX],
+            }
+        })
+        .collect();
+    cuts.sort_by(|a, b| a.near.total_cmp(&b.near));
+    cuts
+}
+
+/// `color` a `step` of the way to white (positive) or black (negative).
+fn shade_rgb(color: u32, step: f32) -> u32 {
+    let to = if step > 0. { 255. } else { 0. };
+    [16, 8, 0].iter().fold(0, |out, shift| {
+        let v = ((color >> shift) & 0xff) as f32;
+        out << 8 | (v + (to - v) * step.abs()).round() as u32
+    })
+}
+
+/// The header's crew from [`crew_at`]'s `cuts`. `poked` moves the whole ring
+/// through that move, as [`render_move`] does one creature.
+pub(super) fn render_crew(
+    sprite: &Sprite,
+    cuts: &[Cutout],
+    poked: Option<(usize, u64)>,
+) -> AnyElement {
+    // Half points are whole device pixels on a 2x screen, so cells meet
+    // without seams however the sheet is squeezed.
+    let snap = |v: f32| (v * 2.).round() / 2.;
+    // As tall as the lone creature, so the header keeps its height.
+    let height = SIZE as f32 * 2.5;
+    let width = 2. * crew_radius(cuts.len()) + SIZE as f32 * CREW_CELL;
+    let now = super::util::now_ms();
+    let (dx, dy) = match poked {
+        Some((mv, start)) if now.saturating_sub(start) < DANCE_MS => {
+            MOVES[mv][(now.saturating_sub(start) / 240 % 4) as usize]
+        }
+        _ => (0., 0.),
+    };
+    let ink = gpui::Hsla::from(rgb(INK));
+    let mut cells = Vec::new();
+    for cut in cuts {
+        let body = gpui::Hsla::from(rgb(shade_rgb(BODY[sprite.color], cut.shade)));
+        // Farther cutouts a little darker, for depth.
+        let body = gpui::Hsla {
+            l: body.l * (0.9 + 0.1 * cut.near),
+            ..body
+        };
+        let (cw, ch) = (
+            CREW_CELL * cut.scale * cut.sway.cos(),
+            CREW_CELL * cut.scale,
+        );
+        let left = width / 2. + cut.x - cw * SIZE as f32 / 2.;
+        let top = height / 2. + cut.y - ch * SIZE as f32 / 2.;
+        let col = |k: usize| snap(left + k as f32 * cw);
+        let row = |k: usize| snap(top + k as f32 * ch);
+        // The sheet's thin dark edge, right of each run of cells.
+        let edge = snap(cw * 0.4).max(0.5);
+        for (y, line) in sprite.cells.iter().enumerate() {
+            let at = |l: f32, w: f32| {
+                div()
+                    .absolute()
+                    .left(px(l))
+                    .top(px(row(y)))
+                    .w(px(w))
+                    .h(px(row(y + 1) - row(y)))
+            };
+            for (x, c) in line.iter().enumerate() {
+                let fill = match c {
+                    Cell::Empty => continue,
+                    Cell::Body => body,
+                    Cell::Eye => ink,
+                };
+                cells.push(at(col(x), col(x + 1) - col(x)).bg(fill));
+                if line.get(x + 1).is_none_or(|n| *n == Cell::Empty) {
+                    cells.push(at(col(x + 1), edge).bg(gpui::black().opacity(0.5)));
+                }
+            }
+        }
+    }
+    div()
+        .flex_none()
+        .relative()
+        .left(px(dx * 2.5))
+        .top(px(dy * 2.5))
+        .w(px(width))
+        .h(px(height))
+        .children(cells)
+        .into_any_element()
+}
+
 /// A circle's creature, honoring its `seance-lead-sprite.<slug>` override.
 pub(super) fn for_circle(slug: &str) -> Sprite {
     let conf = crate::term_config::get();
@@ -392,6 +556,52 @@ mod tests {
         start_party(10_000);
         assert!(partying(10_000 + PARTY_MS - 1));
         assert!(!partying(10_000 + PARTY_MS));
+    }
+
+    #[test]
+    fn crew_needs_two_and_stops_at_six() {
+        assert!(crew_at(&[], 0).is_empty());
+        assert!(crew_at(&[4], 0).is_empty());
+        assert_eq!(crew_at(&[0, 1], 0).len(), 2);
+        let big: Vec<u32> = (0..9).collect();
+        let mut panes: Vec<u32> = crew_at(&big, 0).iter().map(|c| c.pane).collect();
+        panes.sort();
+        assert_eq!(panes, [0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn crew_draws_back_to_front_as_it_turns() {
+        for t in (0..ORBIT_MS).step_by(137) {
+            let cuts = crew_at(&[0, 1, 2, 3, 4], t);
+            assert!(cuts.windows(2).all(|w| w[0].near <= w[1].near), "t={t}");
+            // Nearer is bigger and lower, as seen from above the ring.
+            let (back, front) = (&cuts[0], &cuts[4]);
+            assert!(front.scale > back.scale && front.y > back.y);
+        }
+        // Each one comes round to the front in turn.
+        let front = |t| crew_at(&[0, 1, 2], t).last().unwrap().pane;
+        let fronts: std::collections::HashSet<u32> =
+            (0..ORBIT_MS).step_by(100).map(front).collect();
+        assert_eq!(fronts.len(), 3);
+    }
+
+    #[test]
+    fn a_pane_keeps_its_shade_wherever_it_is_in_the_crew() {
+        let shade = |crew: &[u32], pane| {
+            crew_at(crew, 1234)
+                .into_iter()
+                .find(|c| c.pane == pane)
+                .unwrap()
+                .shade
+        };
+        assert_eq!(shade(&[3, 1], 3), shade(&[1, 3], 3));
+        assert_eq!(shade(&[0, 2, 3], 3), shade(&[3, 7], 3));
+        assert_ne!(shade(&[1, 3], 1), shade(&[1, 3], 3));
+        // Pane 0 wears the circle's own color.
+        assert_eq!(shade(&[0, 1], 0), 0.);
+        assert_eq!(shade_rgb(0x8fa67a, 0.), 0x8fa67a);
+        assert_eq!(shade_rgb(0x808080, 1.), 0xffffff);
+        assert_eq!(shade_rgb(0x808080, -1.), 0x000000);
     }
 
     #[test]
