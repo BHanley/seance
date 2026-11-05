@@ -192,6 +192,46 @@ impl Pokes {
     }
 }
 
+/// The party's pixel spirits: this many, each alive for [`SPIRIT_LIFE_MS`],
+/// starting one after another over the party.
+pub(super) const SPIRITS: usize = 40;
+const SPIRIT_LIFE_MS: u64 = 2500;
+
+/// Where one spirit is, `t` ms into the party: its offset in points from the
+/// creature, its size, how opaque it is, and whether it takes the accent
+/// color (else the creature's own).
+pub(super) struct Spirit {
+    pub dx: f32,
+    pub dy: f32,
+    pub size: f32,
+    pub alpha: f32,
+    pub accent: bool,
+}
+
+/// None before spirit `i` is out, and after it has faded.
+pub(super) fn spirit_at(i: usize, t: u64) -> Option<Spirit> {
+    let delay = i as u64 * (PARTY_MS - SPIRIT_LIFE_MS) / SPIRITS as u64;
+    let age = t.checked_sub(delay).filter(|a| *a < SPIRIT_LIFE_MS)?;
+    let mut rng = Rng((i as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+    let secs = age as f32 / 1000.;
+    // Out and down into the view with a little sway, like a drifting ghost.
+    let vx = rng.below(280) as f32 - 140.;
+    let vy = 20. + rng.below(170) as f32;
+    let sway = (secs * 5. + i as f32).sin() * 10.;
+    Some(Spirit {
+        dx: vx * secs + sway,
+        dy: vy * secs,
+        size: 4. + rng.below(4) as f32,
+        alpha: 1. - age as f32 / SPIRIT_LIFE_MS as f32,
+        accent: i % 2 == 0,
+    })
+}
+
+/// The creature's own body color.
+pub(super) fn body_color(sprite: &Sprite) -> gpui::Hsla {
+    rgb(BODY[sprite.color]).into()
+}
+
 /// When the party ends (unix ms); every creature dances until then.
 static PARTY_UNTIL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -352,5 +392,23 @@ mod tests {
         start_party(10_000);
         assert!(partying(10_000 + PARTY_MS - 1));
         assert!(!partying(10_000 + PARTY_MS));
+    }
+
+    #[test]
+    fn spirits_come_out_in_turn_and_fade() {
+        // None is out before the party starts or after it is over.
+        assert!((0..SPIRITS).all(|i| spirit_at(i, PARTY_MS + 1).is_none()));
+        assert!(spirit_at(SPIRITS - 1, 0).is_none());
+        // The first is out at once, and every one is seen at some point.
+        assert!(spirit_at(0, 0).is_some());
+        for i in 0..SPIRITS {
+            assert!((0..=PARTY_MS)
+                .step_by(50)
+                .any(|t| spirit_at(i, t).is_some()));
+        }
+        // It fades as it ages and keeps drifting away from the creature.
+        let (a, b) = (spirit_at(0, 100).unwrap(), spirit_at(0, 2000).unwrap());
+        assert!(a.alpha > b.alpha && b.alpha > 0.);
+        assert!(b.dx.hypot(b.dy) > a.dx.hypot(a.dy));
     }
 }

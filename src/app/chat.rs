@@ -1012,6 +1012,12 @@ impl SeanceApp {
                 (None, PARTY_LINE, PARTY_MS)
             }
         };
+        // Kept in the GUI log (~/.local/share/seance/gui.stderr.log) so a
+        // report that the egg did nothing can be checked.
+        eprintln!(
+            "[seance chat] creature poke ws={ws} at={now} {}",
+            if mv.is_none() { "-> PARTY" } else { "-> dance" }
+        );
         self.chat.egg = Some(Egg {
             ws,
             mv,
@@ -1501,6 +1507,7 @@ impl SeanceApp {
             .bg(SeancePalette::bg())
             .child(list)
             .child(thread)
+            .children(self.party_overlay())
             .into_any_element()
     }
 
@@ -1731,13 +1738,67 @@ impl SeanceApp {
             .into_any_element()
     }
 
+    /// The seance party over the Chat view: pixel spirits drifting out from the
+    /// header's creature and the line in a big centered bubble. It has no
+    /// handlers and no id, so it makes nothing to hit and clicks pass through.
+    fn party_overlay(&self) -> Option<AnyElement> {
+        let egg = self.chat.egg.as_ref().filter(|e| e.mv.is_none())?;
+        let t = now_ms().saturating_sub(egg.at);
+        if t >= super::sprite::PARTY_MS {
+            return None;
+        }
+        let body = super::sprite::body_color(&super::sprite::for_circle(&egg.ws));
+        // About where the header's creature sits.
+        let (ax, ay) = (LIST_W + 24., 20.);
+        let spirits = (0..super::sprite::SPIRITS)
+            .filter_map(|i| super::sprite::spirit_at(i, t).map(|s| (i, s)))
+            .map(|(_, s)| {
+                let color = if s.accent {
+                    SeancePalette::violet()
+                } else {
+                    body
+                };
+                div()
+                    .absolute()
+                    .left(px(ax + s.dx))
+                    .top(px(ay + s.dy))
+                    .size(px(s.size))
+                    .bg(color.opacity(s.alpha))
+            });
+        Some(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .children(spirits)
+                .child(
+                    div()
+                        .px_6()
+                        .py_4()
+                        .rounded_xl()
+                        .border_1()
+                        .border_color(SeancePalette::violet())
+                        .bg(SeancePalette::bg_elevated())
+                        .shadow_lg()
+                        .text_xl()
+                        .font_semibold()
+                        .text_color(SeancePalette::text())
+                        .child(egg.line),
+                )
+                .into_any_element(),
+        )
+    }
+
     /// The thread header's creature. Click it: it dances and says something.
     fn header_creature(&self, ws: &str, working: bool, cx: &Context<Self>) -> AnyElement {
         let now = now_ms();
         let egg = self.chat.egg.as_ref().filter(|e| e.ws == ws);
         let moving = egg.and_then(|e| e.mv.map(|mv| (mv, e.at)));
+        // A party has its own big bubble over the whole view.
         let say = egg
-            .filter(|e| now.saturating_sub(e.at) < e.ms)
+            .filter(|e| e.mv.is_some() && now.saturating_sub(e.at) < e.ms)
             .map(|e| e.line);
         let target = ws.to_string();
         div()
