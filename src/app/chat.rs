@@ -961,6 +961,9 @@ impl SeanceApp {
         // The lead's to-do poll follows the selected circle.
         if self.workspaces().iter().any(|w| w == ws) {
             self.selected_workspace = Some(ws.to_string());
+            // The tabs and pills show the circle's own space, so one picked from
+            // another space (Jump, search) has its pill lit.
+            self.rail_space = Some(self.subs_pref.spaces.space_of(ws).to_string());
             self.mark_circle_looked_at(ws);
         }
         if let Some(input) = self.chat.input.as_ref() {
