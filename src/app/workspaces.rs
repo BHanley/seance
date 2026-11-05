@@ -539,7 +539,12 @@ impl SeanceApp {
         self.rail_space = Some(id.to_string());
         self.rail_filter = RailFilter::All;
         if let Some(first) = self.visible_workspaces().into_iter().next() {
-            if self.selected_workspace.as_deref() != Some(first.as_str()) {
+            // Chat opens the circle's thread, which selects it too.
+            if self.view.mode == super::views::ViewMode::Chat {
+                if self.chat.selected.as_deref() != Some(first.as_str()) {
+                    self.chat_select(&first, window, cx);
+                }
+            } else if self.selected_workspace.as_deref() != Some(first.as_str()) {
                 self.select_workspace(&first, window, cx);
             }
         }
@@ -1046,6 +1051,15 @@ impl SeanceApp {
         name
     }
 
+    /// Opening a circle is looking at it: clears its `needs` badge and its
+    /// sticky done/needs unread. Does NOT bump touch.
+    pub(super) fn mark_circle_looked_at(&mut self, ws: &str) {
+        if self.subs_pref.mark_seen(ws) {
+            self.save_arrangement_local();
+        }
+        self.workspace_unread.remove(ws);
+    }
+
     pub(super) fn select_workspace(
         &mut self,
         workspace: &str,
@@ -1053,11 +1067,8 @@ impl SeanceApp {
         cx: &mut Context<Self>,
     ) {
         let changed = self.selected_workspace.as_deref() != Some(workspace);
-        // Selecting is looking — clears the `needs` badge. The daemon
-        // auto-subscribes on SetFocus, so nothing to ask for here.
-        if self.subs_pref.mark_seen(workspace) {
-            self.save_arrangement_local();
-        }
+        // The daemon auto-subscribes on SetFocus, so nothing to ask for here.
+        self.mark_circle_looked_at(workspace);
         // Remember which pane was active in the circle we're leaving.
         if changed {
             // The hovered pane row leaves with its circle, and a row that is
@@ -1082,8 +1093,6 @@ impl SeanceApp {
         // the rail sitting wherever it was, showing no sign of where you went.
         // Unfold first, then scroll.
         self.reveal_workspace_row(workspace);
-        // Selecting a circle clears sticky "done/needs" unread — does NOT bump touch.
-        self.workspace_unread.remove(workspace);
         // When entering a circle that was off-screen, zero local revs for its
         // panes so the daemon's full flush can't be dropped as "stale". The
         // daemon also sends FULL frames on workspace change.

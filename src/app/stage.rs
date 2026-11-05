@@ -158,8 +158,10 @@ impl SeanceApp {
         self.stage.want_lead = true;
     }
 
-    /// Repaint now and then on Stage and Wall: elapsed labels move and the
-    /// lead logs, health report, usage and Today feed come due.
+    /// Repaint now and then: elapsed labels move and the lead logs, health
+    /// report, usage and Today feed come due on Stage and Wall, and the
+    /// shared footer's usage and health on Classic and Chat while there is
+    /// a feed for it to show.
     pub(super) fn start_stage_ticker(&self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| loop {
             cx.background_executor()
@@ -167,7 +169,10 @@ impl SeanceApp {
                 .await;
             let Some(this) = this.upgrade() else { break };
             this.update(cx, |app: &mut SeanceApp, cx| {
-                if matches!(app.view.mode, ViewMode::Stage | ViewMode::Wall) {
+                let conf = crate::term_config::get();
+                let footer_feed =
+                    conf.seance_health_file.is_some() || conf.seance_usage_file.is_some();
+                if footer_feed || matches!(app.view.mode, ViewMode::Stage | ViewMode::Wall) {
                     cx.notify();
                 }
             });
@@ -282,7 +287,8 @@ impl SeanceApp {
 
     /// ctrl+shift+i: open the next pane waiting on you, in every circle and
     /// space, in the needs-you bar's order. Classic and Stage open it like
-    /// the chip's Open; the Wall only selects its circle's tile.
+    /// the chip's Open. The Wall and Chat open circles, not panes, so they
+    /// stop once per circle: the Wall selects its tile, Chat opens its thread.
     pub(super) fn jump_next_waiting(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (chips, _) = self.waiting_list();
         let pairs: Vec<(&str, Option<&str>)> = chips
@@ -290,18 +296,16 @@ impl SeanceApp {
             .map(|w| (w.circle.as_str(), w.pane.as_deref()))
             .collect();
         let wall = self.view.mode == ViewMode::Wall;
-        let mut ring = jump_ring(&pairs);
-        // The Wall opens circles, not panes: one stop per circle.
-        if wall {
-            let mut seen: Vec<String> = Vec::new();
-            ring.retain(|(c, _)| {
-                let first = !seen.contains(c);
-                seen.push(c.clone());
-                first
-            });
-        }
-        let cur = match (&self.selected_workspace, &self.active_slug) {
-            (Some(ws), _) if wall => ring.iter().find(|(c, _)| c == ws).cloned(),
+        let per_circle = wall || self.view.mode == ViewMode::Chat;
+        let ring = jump_ring(&pairs, per_circle);
+        // Chat's thread follows its own pick.
+        let shown = if self.view.mode == ViewMode::Chat {
+            &self.chat.selected
+        } else {
+            &self.selected_workspace
+        };
+        let cur = match (shown, &self.active_slug) {
+            (Some(ws), _) if per_circle => ring.iter().find(|(c, _)| c == ws).cloned(),
             (Some(ws), Some(slug)) => Some((ws.clone(), slug.clone())),
             _ => None,
         };
@@ -1422,7 +1426,7 @@ impl SeanceApp {
         snoozed: usize,
         cx: &Context<Self>,
     ) -> Option<AnyElement> {
-        if waiting.is_empty() && snoozed == 0 {
+        if !needs_shown(&waiting, snoozed) {
             return None;
         }
         let only_snoozed = waiting.is_empty();
@@ -1559,7 +1563,7 @@ impl SeanceApp {
             div()
                 .id("stage-needs")
                 .flex_none()
-                .h(px(42.))
+                .h(px(NEEDS_H))
                 .px(px(14.))
                 .flex()
                 .items_center()
@@ -2495,13 +2499,37 @@ impl SeanceApp {
             .collect()
     }
 
+    /// Whether the footer has anything to show: a usage bar or a health report.
+    fn footer_shown(&self) -> bool {
+        self.usage_fresh()
+            .is_some_and(|(u, _)| u.five_hour.is_some() || u.seven_day.is_some())
+            || self.health_facts().is_some()
+    }
+
+    /// What the rows Classic, Stage and Chat share take off the window's
+    /// height: the top row, the circle row, and the needs-you bar and
+    /// footer while they show. The Wall draws none of them.
+    pub(super) fn shared_rows_h(&self) -> f32 {
+        if self.view.mode == ViewMode::Wall {
+            return 0.;
+        }
+        let (waiting, snoozed) = self.waiting_list();
+        let needs = if needs_shown(&waiting, snoozed) {
+            NEEDS_H
+        } else {
+            0.
+        };
+        let footer = if self.footer_shown() { FOOTER_H } else { 0. };
+        self.space_tabs_h() + STRIP_H + needs + footer
+    }
+
     /// Plan usage on the left; the health report's facts and time on the right.
     pub(super) fn render_stage_footer(&self) -> Option<AnyElement> {
-        let usage = self.usage_items();
-        let facts = self.health_facts().unwrap_or_default();
-        if usage.is_empty() && facts.is_empty() {
+        if !self.footer_shown() {
             return None;
         }
+        let usage = self.usage_items();
+        let facts = self.health_facts().unwrap_or_default();
         let at = self.stage.health.as_ref().and_then(|h| h.at.clone());
         let item = |dot: Option<Hsla>, text: String| {
             div()
@@ -2515,7 +2543,7 @@ impl SeanceApp {
         Some(
             div()
                 .flex_none()
-                .h(px(28.))
+                .h(px(FOOTER_H))
                 .px(px(14.))
                 .flex()
                 .items_center()
@@ -2596,6 +2624,13 @@ fn bottom_rows(snap: &GridSnapshot, n: usize) -> Vec<String> {
 
 /// The circle row's height; the jump palette drops below it.
 pub(super) const STRIP_H: f32 = 50.;
+const NEEDS_H: f32 = 42.;
+const FOOTER_H: f32 = 28.;
+
+/// The needs-you bar shows while anything waits, snoozed panes included.
+fn needs_shown(waiting: &[Waiting], snoozed: usize) -> bool {
+    !waiting.is_empty() || snoozed > 0
+}
 
 /// The layout switch's width in the top row.
 const SWITCH_W: f32 = 170.;

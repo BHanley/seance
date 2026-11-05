@@ -348,12 +348,16 @@ pub(super) fn done_chips(
 
 /// The next-waiting key's ring: circle and pane of each needs-you bar chip,
 /// in bar order. Chips with no pane (a ctl ask from outside one) can't be
-/// jumped to, and a pane listed twice is visited once.
-pub(super) fn jump_ring(chips: &[(&str, Option<&str>)]) -> Vec<(String, String)> {
+/// jumped to, and a pane listed twice is visited once. `per_circle` keeps
+/// one stop per circle, for layouts that open circles rather than panes.
+pub(super) fn jump_ring(chips: &[(&str, Option<&str>)], per_circle: bool) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     for (circle, pane) in chips {
         let Some(pane) = pane else { continue };
-        if !out.iter().any(|(c, p)| c == circle && p == pane) {
+        if !out
+            .iter()
+            .any(|(c, p)| c == circle && (per_circle || p == pane))
+        {
             out.push((circle.to_string(), pane.to_string()));
         }
     }
@@ -864,19 +868,40 @@ The circle lead's running log, newest first. Doing / Done / Next / Waiting on.\n
 
     #[test]
     fn jump_ring_skips_paneless_chips_and_repeats() {
-        let ring = jump_ring(&[
-            ("a", Some("a-1")),
-            ("", None),
-            ("b", Some("b-2")),
-            ("a", Some("a-1")),
-            ("c", Some("c-1")),
-        ]);
+        let ring = jump_ring(
+            &[
+                ("a", Some("a-1")),
+                ("", None),
+                ("b", Some("b-2")),
+                ("a", Some("a-1")),
+                ("c", Some("c-1")),
+            ],
+            false,
+        );
         let want: Vec<(String, String)> = [("a", "a-1"), ("b", "b-2"), ("c", "c-1")]
             .iter()
             .map(|(c, p)| (c.to_string(), p.to_string()))
             .collect();
         assert_eq!(ring, want);
-        assert!(jump_ring(&[("x", None)]).is_empty());
+        assert!(jump_ring(&[("x", None)], false).is_empty());
+    }
+
+    #[test]
+    fn jump_ring_per_circle_keeps_each_circles_first_pane() {
+        let chips = [
+            ("a", Some("a-1")),
+            ("b", Some("b-1")),
+            ("a", Some("a-2")),
+            ("", None),
+        ];
+        let ring = |per_circle| -> Vec<String> {
+            jump_ring(&chips, per_circle)
+                .into_iter()
+                .map(|(c, p)| format!("{c}/{p}"))
+                .collect()
+        };
+        assert_eq!(ring(false), ["a/a-1", "b/b-1", "a/a-2"]);
+        assert_eq!(ring(true), ["a/a-1", "b/b-1"]);
     }
 
     #[test]

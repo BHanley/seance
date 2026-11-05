@@ -961,6 +961,7 @@ impl SeanceApp {
         // The lead's to-do poll follows the selected circle.
         if self.workspaces().iter().any(|w| w == ws) {
             self.selected_workspace = Some(ws.to_string());
+            self.mark_circle_looked_at(ws);
         }
         if let Some(input) = self.chat.input.as_ref() {
             let focus = input.read(cx).focus_handle(cx);

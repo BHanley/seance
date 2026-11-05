@@ -3413,7 +3413,7 @@ impl Render for SeanceApp {
                         below_w,
                     } => {
                         let h: f32 = bounds.size.height.into();
-                        let main_h = (h - 40.0).max(80.0); // rough chrome
+                        let main_h = (h - this.shared_rows_h()).max(80.0);
                         let y: f32 = ev.position.y.into();
                         let dy = (y - start_y) / main_h;
                         let sum = (above_w + below_w).max(0.3);
