@@ -97,8 +97,6 @@ struct Egg {
     mv: Option<usize>,
     at: u64,
     line: &'static str,
-    /// How long the bubble stays.
-    ms: u64,
 }
 
 /// What the quick-reply chips above an empty composer send.
@@ -195,6 +193,8 @@ pub(super) struct ChatState {
     /// Recent clicks on the header's creature, and what the last one did.
     pokes: super::sprite::Pokes,
     egg: Option<Egg>,
+    /// The five-click party, while it runs.
+    party: Option<super::sprite::Party>,
     /// When Compact was last clicked, for its cooldown.
     compact_at: Option<(String, Instant)>,
     /// Why the last action Brian took was refused; a click clears it.
@@ -1032,27 +1032,44 @@ impl SeanceApp {
     }
 
     /// A click on the header's creature: a dance move and a line, or at the
-    /// fifth click in a row a party. Frames come from a short timer, so
-    /// nothing else has to be re-rendering.
+    /// fifth click in a row a party. The bubble's frames come from a short
+    /// timer, so nothing else has to be re-rendering; the party asks for its
+    /// own in `render_chat`.
     fn chat_poke(&mut self, ws: String, cx: &mut Context<Self>) {
         use super::sprite::{Poke, LINE_MS, PARTY_LINE, PARTY_MS};
         let now = now_ms();
         // More clicks while a party runs must not end it by replacing it with
         // a dance and a line.
-        if self
-            .chat
-            .egg
-            .as_ref()
-            .is_some_and(|e| e.mv.is_none() && now.saturating_sub(e.at) < PARTY_MS)
-        {
+        if self.chat.party.as_ref().is_some_and(|p| p.on(now)) {
             eprintln!("[seance chat] creature poke ws={ws} at={now} -> ignored, party running");
             return;
         }
-        let (mv, line, ms) = match self.chat.pokes.poke(now) {
-            Poke::Dance { mv, line } => (Some(mv), line, LINE_MS),
+        let (mv, line) = match self.chat.pokes.poke(now) {
+            Poke::Dance { mv, line } => (Some(mv), line),
             Poke::Party => {
                 super::sprite::start_party(now);
-                (None, PARTY_LINE, PARTY_MS)
+                let others = self
+                    .chat
+                    .circles
+                    .iter()
+                    .filter(|c| c.ws != ws)
+                    .map(|c| super::sprite::for_circle(&c.ws));
+                self.chat.party = Some(super::sprite::Party::new(
+                    super::sprite::for_circle(&ws),
+                    others,
+                    now,
+                    &mut rand::thread_rng(),
+                ));
+                // Frames stop while the window is inactive; this redraw
+                // takes the scene down on time anyway.
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(PARTY_MS))
+                        .await;
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                })
+                .detach();
+                (None, PARTY_LINE)
             }
         };
         // Kept in the GUI log (~/.local/share/seance/gui.stderr.log) so a
@@ -1066,10 +1083,9 @@ impl SeanceApp {
             mv,
             at: now,
             line,
-            ms,
         });
         cx.spawn(async move |this, cx| {
-            let end = now_ms() + ms;
+            let end = now_ms() + LINE_MS;
             while now_ms() < end {
                 if this.update(cx, |_, cx| cx.notify()).is_err() {
                     return;
@@ -1588,7 +1604,12 @@ impl SeanceApp {
         } else {
             self.chat.crew_dance = None;
         }
-        if (crew || !self.chat.list_dancing.is_empty()) && self.chat.window_active {
+        self.chat.party = self.chat.party.take().filter(|p| p.on(now));
+        if let Some(party) = self.chat.party.as_mut() {
+            party.advance(now, &mut rand::thread_rng());
+        }
+        let party = self.chat.party.is_some();
+        if (crew || party || !self.chat.list_dancing.is_empty()) && self.chat.window_active {
             window.request_animation_frame();
         }
         let list = self.render_chat_list(items, cx);
@@ -1602,7 +1623,7 @@ impl SeanceApp {
             .bg(SeancePalette::bg())
             .child(list)
             .child(thread)
-            .children(self.party_overlay())
+            .children(self.party_overlay(window.viewport_size(), cx))
             .into_any_element()
     }
 
@@ -1824,63 +1845,78 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    /// The seance party over the Chat view: pixel spirits drifting out from the
-    /// header's creature and the line in a big centered bubble. It has no
-    /// handlers and no id, so it makes nothing to hit and clicks pass through.
-    fn party_overlay(&self) -> Option<AnyElement> {
-        let egg =
-            self.chat.egg.as_ref().filter(|e| {
-                e.mv.is_none() && self.chat.selected.as_deref() == Some(e.ws.as_str())
-            })?;
-        let t = now_ms().saturating_sub(egg.at);
-        if t >= super::sprite::PARTY_MS {
-            return None;
-        }
-        let body = super::sprite::body_color(&super::sprite::for_circle(&egg.ws));
-        // About where the header's creature sits.
-        let (ax, ay) = (LIST_W + 24., 20.);
-        let spirits = (0..super::sprite::SPIRITS)
-            .filter_map(|i| super::sprite::spirit_at(i, t).map(|s| (i, s)))
-            .map(|(_, s)| {
-                let color = if s.accent {
-                    SeancePalette::violet()
-                } else {
-                    body
-                };
+    /// The party over the Chat view: dimmed, with a purple glow, the crew
+    /// spinning in the middle and confetti falling. A click on it ends the
+    /// party early; it covers the view, so nothing under it takes the click.
+    fn party_overlay(
+        &self,
+        view: gpui::Size<gpui::Pixels>,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
+        use super::sprite::{confetti_at, party_scene, CONFETTI, GENIE};
+        let party = self.chat.party.as_ref()?;
+        let now = now_ms();
+        let t = now.saturating_sub(party.at);
+        let scene = party_scene(t)?;
+        let (w, h) = (f32::from(view.width), f32::from(view.height));
+        let confetti = (0..CONFETTI).filter_map(|i| {
+            let (x, y) = confetti_at(party.at, i, t, w, h)?;
+            Some(
                 div()
                     .absolute()
-                    .left(px(ax + s.dx))
-                    .top(px(ay + s.dy))
-                    .size(px(s.size))
-                    .bg(color.opacity(s.alpha))
-            });
-        Some(
+                    .left(px(x))
+                    .top(px(y))
+                    .size(px(6.))
+                    .bg(party.confetti_color(i)),
+            )
+        });
+        // gpui has no radial gradient: nested translucent discs instead.
+        let genie = gpui::Hsla::from(gpui::rgb(GENIE)).opacity(0.13);
+        let glow = [0.45, 0.7, 1.].into_iter().fold(div(), |inner, k| {
+            let d = w.min(h) * k;
             div()
-                .absolute()
-                .inset_0()
-                .overflow_hidden()
+                .flex_none()
+                .size(px(d))
+                .rounded_full()
+                .bg(genie)
                 .flex()
                 .items_center()
                 .justify_center()
-                // The bubble centers on the thread, not the list beside it.
-                .pl(px(LIST_W))
-                .children(spirits)
-                .child(
-                    div()
-                        .px_6()
-                        .py_4()
-                        .rounded_xl()
-                        .border_1()
-                        .border_color(SeancePalette::violet())
-                        .bg(SeancePalette::bg_elevated())
-                        .shadow_lg()
-                        .text_xl()
-                        .font_semibold()
-                        .text_color(SeancePalette::text())
-                        .child(egg.line),
-                )
+                .child(inner)
+        });
+        let centred = || {
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+        };
+        Some(
+            div()
+                .id("chat-party")
+                .absolute()
+                .inset_0()
+                .overflow_hidden()
+                .occlude()
+                .opacity(scene.fade)
+                .bg(gpui::black().opacity(0.6))
+                .on_click(cx.listener(|this, _, _, cx| this.chat_end_party(cx)))
+                .child(centred().child(glow))
+                .child(centred().child(party.render(now, w)))
+                .children(confetti)
                 .into_any_element(),
         )
+    }
+
+    /// A click on the party ends it early.
+    fn chat_end_party(&mut self, cx: &mut Context<Self>) {
+        let now = now_ms();
+        if super::sprite::end_party(&mut self.chat.party, now) {
+            super::sprite::stop_party();
+            eprintln!("[seance chat] party ended early at={now}");
+        }
+        cx.notify();
     }
 
     /// A list row's creature, or its crew while two or more dance in view.
@@ -1922,9 +1958,8 @@ impl SeanceApp {
         let now = now_ms();
         let egg = self.chat.egg.as_ref().filter(|e| e.ws == ws);
         let moving = egg.and_then(|e| e.mv.map(|mv| (mv, e.at)));
-        // A party has its own big bubble over the whole view.
         let say = egg
-            .filter(|e| e.mv.is_some() && now.saturating_sub(e.at) < e.ms)
+            .filter(|e| now.saturating_sub(e.at) < super::sprite::LINE_MS)
             .map(|e| e.line);
         let target = ws.to_string();
         let sprite = super::sprite::for_circle(ws);
