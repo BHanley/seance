@@ -48,8 +48,6 @@ const READ_RETRY: Duration = Duration::from_secs(30);
 const ACTIVE_MS: u64 = 2 * 3600 * 1000;
 /// The pane list for @-mentions is asked again after this.
 const PANES_TTL: Duration = Duration::from_secs(30);
-/// Catch me up waits this long after it finishes before it can be pressed again.
-const CATCHUP_COOLDOWN: Duration = Duration::from_secs(5);
 /// Search runs this long after the last keystroke.
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(250);
 /// Fewest characters a search is run for (Invoke answers nothing for one).
@@ -148,9 +146,6 @@ pub(super) struct ChatState {
     egg: Option<Egg>,
     /// When Compact was last clicked, for its cooldown.
     compact_at: Option<(String, Instant)>,
-    /// Catch me up is in flight, or finished at this time.
-    catchup_busy: bool,
-    catchup_done: Option<Instant>,
     /// Why the last action Brian took was refused; a click clears it.
     notice: Option<String>,
 }
@@ -968,37 +963,6 @@ impl SeanceApp {
         );
     }
 
-    /// Ask Invoke for a catch-up summary, then open Alerts where it lands.
-    fn chat_catchup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.catchup_locked() {
-            return;
-        }
-        self.chat.catchup_busy = true;
-        self.chat.notice = None;
-        cx.spawn_in(window, async move |this: WeakEntity<Self>, cx| {
-            let done = cx
-                .background_executor()
-                .spawn(async { chat_api::catchup() })
-                .await;
-            let _ = this.update_in(cx, |app, window, cx| {
-                app.chat.catchup_busy = false;
-                app.chat.catchup_done = Some(Instant::now());
-                // The button comes back on its own once the wait is over.
-                cx.spawn(async move |this, cx| {
-                    cx.background_executor().timer(CATCHUP_COOLDOWN).await;
-                    let _ = this.update(cx, |_, cx| cx.notify());
-                })
-                .detach();
-                match done {
-                    Ok(()) => app.chat_select(ALERTS_WS, window, cx),
-                    Err(e) => app.chat.notice = Some(e.to_string()),
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
     /// A click on the header's creature: a dance move and a line, or at the
     /// fifth click in a row a party. Frames come from a short timer, so
     /// nothing else has to be re-rendering.
@@ -1093,15 +1057,6 @@ impl SeanceApp {
             })
             .child("Compact")
             .into_any_element()
-    }
-
-    /// Catch me up is working, or was a moment ago.
-    fn catchup_locked(&self) -> bool {
-        self.chat.catchup_busy
-            || self
-                .chat
-                .catchup_done
-                .is_some_and(|at| at.elapsed() < CATCHUP_COOLDOWN)
     }
 
     /// Search once typing has paused, and only for two characters or more.
@@ -1607,28 +1562,7 @@ impl SeanceApp {
                             .text_xs()
                             .text_color(SeancePalette::text_faint())
                             .child(n.clone())
-                    }))
-                    .child({
-                        let locked = self.catchup_locked();
-                        div()
-                            .id("chat-catchup")
-                            .px_2()
-                            .py_1()
-                            .rounded_md()
-                            .text_xs()
-                            .text_color(SeancePalette::text_dim())
-                            .bg(SeancePalette::surface())
-                            .tooltip(tip("a summary of what you missed, in Alerts"))
-                            .when(locked, |d| d.opacity(0.4))
-                            .when(!locked, |d| {
-                                d.hover(|s| s.text_color(SeancePalette::flame()))
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.chat_catchup(window, cx)
-                                    }))
-                            })
-                            .child("Catch me up")
-                    }),
+                    })),
             )
             .child(col)
             .into_any_element()
