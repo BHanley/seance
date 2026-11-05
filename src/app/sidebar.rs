@@ -20,6 +20,18 @@ const GLYPH_W: f32 = 15.;
 const PANE_ROW_H: f32 = 22.;
 /// Time / count column, right-aligned.
 const TIME_W: f32 = 34.;
+/// The view switch's narrowest width with "classic" whole: three equal
+/// segments of the label (38.5 px at 12 px) plus padding, gaps and border.
+const SWITCH_MIN_W: f32 = 162.;
+/// The rail header's row around the switch: its padding and border, the
+/// ✦, "seance" and the gaps.
+const RAIL_MARK_W: f32 = 112.;
+
+/// The view switch fits beside "✦ seance" on a rail this wide; narrower,
+/// it takes its own row under the header.
+fn rail_switch_inline(rail_w: f32) -> bool {
+    rail_w - RAIL_MARK_W >= SWITCH_MIN_W
+}
 
 use super::actions::*;
 use super::util::{
@@ -40,10 +52,15 @@ impl SeanceApp {
             return None;
         }
         let self_id = self.window_id.clone();
-        // Stage and Wall's space row holds the ✦ when it shows; Chat's ✦ sits
-        // at the top of its circle list, with no tab row above it.
-        let top = if self.view.mode != super::views::ViewMode::Chat && self.space_tabs_shown() {
-            self.space_tabs_h() + 2.
+        // Stage's top row and Wall's space row (when it shows) hold the ✦;
+        // Chat's ✦ sits at the top of its circle list, Classic's on the rail.
+        let mark_row = match self.view.mode {
+            super::views::ViewMode::Stage => true,
+            super::views::ViewMode::Wall => self.space_tabs_shown(),
+            super::views::ViewMode::Classic | super::views::ViewMode::Chat => false,
+        };
+        let top = if mark_row {
+            super::stage::SPACE_ROW_H + 2.
         } else {
             40.
         };
@@ -1412,6 +1429,7 @@ impl SeanceApp {
         rail_rows.extend(self.render_circle_list(cx));
 
         let _ = window_active; // focus chrome reserved for future empty-window dimming
+        let switch_inline = rail_switch_inline(self.sidebar_width);
 
         div()
             .id("sidebar")
@@ -1463,12 +1481,20 @@ impl SeanceApp {
                             )
                             .child(
                                 div()
-                                    .flex_1()
+                                    .flex_none()
                                     .text_color(SeancePalette::text())
                                     .text_sm()
                                     .font_semibold()
                                     .child("seance"),
-                            ),
+                            )
+                            .when(switch_inline, |d| {
+                                d.child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .child(self.render_view_switch("rail", cx)),
+                                )
+                            }),
                     )
                     .child(
                         div()
@@ -1517,7 +1543,9 @@ impl SeanceApp {
                                     .child("+ circle"),
                             ),
                     )
-                    .child(div().pt_1().child(self.render_view_switch("rail", cx))),
+                    .when(!switch_inline, |d| {
+                        d.child(div().pt_1().child(self.render_view_switch("rail", cx)))
+                    }),
             )
             .child(self.render_rail_chips(cx))
             .child({
@@ -1637,5 +1665,19 @@ impl SeanceApp {
                         cx.notify();
                     })),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_switch_joins_the_mark_once_the_rail_fits_it() {
+        assert!(!rail_switch_inline(160.));
+        assert!(!rail_switch_inline(232.));
+        assert!(!rail_switch_inline(273.));
+        assert!(rail_switch_inline(274.));
+        assert!(rail_switch_inline(520.));
     }
 }
