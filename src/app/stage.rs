@@ -1057,7 +1057,10 @@ impl SeanceApp {
                 // New circles land in the rail's space; make that this one.
                 this.rail_space = Some(this.shown_space());
                 let name = this.create_workspace(window, cx);
-                this.stage.new_circle = Some(name);
+                // Only Stage's starts a lead; elsewhere it matches the rail's.
+                if this.view.mode == ViewMode::Stage {
+                    this.stage.new_circle = Some(name);
+                }
             }))
             .child("+ circle");
         // Over the top of what's below, so the lead terminal keeps its size
