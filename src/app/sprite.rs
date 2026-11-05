@@ -224,7 +224,7 @@ pub(super) fn render_move(
     let now = super::util::now_ms();
     let (dx, dy) = match poked {
         Some((mv, start)) if now.saturating_sub(start) < DANCE_MS => {
-            MOVES[mv][((now - start) / 240 % 4) as usize]
+            MOVES[mv][(now.saturating_sub(start) / 240 % 4) as usize]
         }
         _ if dancing || partying(now) => dance_step(sprite.phase, now / 240),
         _ => (0., 0.),
