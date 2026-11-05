@@ -900,8 +900,8 @@ impl SeanceApp {
         let circles = self.subs_pref.spaces.circles_in(&space, &self.workspaces());
         let roomy = width >= 900.;
         let jump_w = jump_box_w(roomy);
-        let switch_w = 190.;
-        // The mark sits on the space row above when that row shows.
+        // The mark sits on the space row above when that row shows, and the
+        // switch with it.
         let tabs = self.space_tabs_shown();
         let mark_w = if tabs { 0. } else { 84. + 14. };
         let add_w = 76.;
@@ -914,6 +914,7 @@ impl SeanceApp {
         };
         // Strip padding, the mark, the toggle, the jump box, "+ circle", the
         // AFK chip and the gaps.
+        let switch_w = if tabs { 0. } else { SWITCH_W + 14. };
         let avail = width - 28. - mark_w - switch_w - jump_w - 14. * 2. - add_w - 6. - afk_w;
         let labels: Vec<String> = circles.iter().map(|c| self.workspace_label(c)).collect();
         let widths: Vec<f32> = labels.iter().map(|l| pill_width(l)).collect();
@@ -1096,7 +1097,14 @@ impl SeanceApp {
             .bg(SeancePalette::bg_elevated())
             .border_b_1()
             .border_color(SeancePalette::border())
-            .when(!tabs, |d| d.child(self.render_seance_mark("stage", cx)))
+            .when(!tabs, |d| {
+                d.child(self.render_seance_mark("stage", cx)).child(
+                    div()
+                        .flex_none()
+                        .w(px(SWITCH_W))
+                        .child(self.render_view_switch("strip", cx)),
+                )
+            })
             .child(
                 div()
                     .flex_1()
@@ -1107,12 +1115,6 @@ impl SeanceApp {
                     .gap(px(6.))
                     .children(rename)
                     .when(!renaming, |d| d.children(pills).children(more).child(add)),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .w(px(switch_w))
-                    .child(self.render_view_switch("strip", cx)),
             )
             // Left of the jump box, which the jump palette drops down from.
             .children(afk)
@@ -1334,6 +1336,15 @@ impl SeanceApp {
                 .border_b_1()
                 .border_color(SeancePalette::border())
                 .child(self.render_seance_mark(key, cx))
+                // Stage's switch sits here, after the mark; Wall keeps its own.
+                .when(key == "stage", |d| {
+                    d.child(
+                        div()
+                            .flex_none()
+                            .w(px(SWITCH_W))
+                            .child(self.render_view_switch("strip", cx)),
+                    )
+                })
                 .child(
                     div()
                         .id(SharedString::from(format!("{key}-spaces")))
@@ -2593,6 +2604,9 @@ fn bottom_rows(snap: &GridSnapshot, n: usize) -> Vec<String> {
         .map(|cells| cells.iter().map(|c| c.c).collect())
         .collect()
 }
+
+/// The classic | stage | chat switch, which sits after the mark.
+const SWITCH_W: f32 = 190.;
 
 /// Stage's strip height; the jump palette drops below it.
 pub(super) const STRIP_H: f32 = 50.;
