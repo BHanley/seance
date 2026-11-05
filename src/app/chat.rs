@@ -133,7 +133,7 @@ pub(super) struct ChatState {
     panes: HashMap<String, Vec<PaneRow>>,
     panes_at: HashMap<String, Instant>,
     /// When Compact was last clicked, for its cooldown.
-    compact_at: Option<Instant>,
+    compact_at: Option<(String, Instant)>,
     /// Catch me up is in flight, or finished at this time.
     catchup_busy: bool,
     catchup_done: Option<Instant>,
@@ -990,28 +990,29 @@ impl SeanceApp {
         let Some(ws) = self.chat.selected.clone() else {
             return;
         };
-        if self.compact_locked() || ws == ALERTS_WS {
+        if self.compact_locked(&ws) || ws == ALERTS_WS {
             return;
         }
-        self.chat.compact_at = Some(Instant::now());
+        self.chat.compact_at = Some((ws.clone(), Instant::now()));
         // The button comes back on its own once the wait is over.
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(COMPACT_COOLDOWN).await;
             let _ = this.update(cx, |_, cx| cx.notify());
         })
         .detach();
-        self.chat_post(ws, "/compact".to_string(), None, cx);
+        self.chat_post(ws, "/compact".to_string(), None, false, cx);
     }
 
-    fn compact_locked(&self) -> bool {
+    fn compact_locked(&self, ws: &str) -> bool {
         self.chat
             .compact_at
-            .is_some_and(|at| at.elapsed() < COMPACT_COOLDOWN)
+            .as_ref()
+            .is_some_and(|(at_ws, at)| at_ws == ws && at.elapsed() < COMPACT_COOLDOWN)
     }
 
     /// The Compact button beside a high ctx; dimmed and dead after a click.
-    fn compact_button(&self, cx: &Context<Self>) -> AnyElement {
-        let locked = self.compact_locked();
+    fn compact_button(&self, ws: &str, cx: &Context<Self>) -> AnyElement {
+        let locked = self.compact_locked(ws);
         div()
             .id("chat-compact")
             .underline()
@@ -1174,7 +1175,7 @@ impl SeanceApp {
                 };
                 let caption = input.read(cx).value().trim().to_string();
                 input.update(cx, |i, cx| i.set_value("", window, cx));
-                app.chat_post(ws, caption, Some(path), cx);
+                app.chat_post(ws, caption, Some(path), true, cx);
             });
         })
         .detach();
@@ -1189,16 +1190,18 @@ impl SeanceApp {
             return;
         }
         input.update(cx, |i, cx| i.set_value("", window, cx));
-        self.chat_post(ws, text, None, cx);
+        self.chat_post(ws, text, None, true, cx);
     }
 
     /// Send a note to `ws`'s lead, with a file if there is one. Shown at once;
-    /// the next thread answer replaces it with the real one.
+    /// the next thread answer replaces it with the real one. `typed` says the
+    /// words came from the composer, so a failed send puts them back there.
     fn chat_post(
         &mut self,
         ws: String,
         text: String,
         file: Option<PathBuf>,
+        typed: bool,
         cx: &mut Context<Self>,
     ) {
         let shown = match (&file, text.is_empty()) {
@@ -1250,7 +1253,7 @@ impl SeanceApp {
                         t.messages.retain(|m| m.id != local_id);
                     }
                     app.chat.error = Some(format!("not sent: {e}"));
-                    if !text.is_empty() {
+                    if typed && !text.is_empty() {
                         app.chat.restore = Some(text);
                     }
                 }
@@ -1866,7 +1869,12 @@ impl SeanceApp {
             .children(usage_strip(
                 self.chat.usage.as_ref(),
                 self.chat.threads.get(&ws).and_then(|t| t.context),
-                Some(self.compact_button(cx)).filter(|_| !read_only),
+                self.chat
+                    .threads
+                    .get(&ws)
+                    .and_then(|t| t.context)
+                    .filter(|c| *c >= CTX_ORANGE && !read_only)
+                    .map(|_| self.compact_button(&ws, cx)),
             ));
         if let Some(e) = &self.chat.error {
             col = col.child(
@@ -1929,7 +1937,7 @@ impl SeanceApp {
                 above = above.child(
                     chip(SharedString::from(format!("chat-quick-{i}")))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.chat_post(ws.clone(), text.to_string(), None, cx)
+                            this.chat_post(ws.clone(), text.to_string(), None, false, cx)
                         }))
                         .child(text),
                 );
@@ -2429,9 +2437,8 @@ mod tests {
         // The lead's context alone is enough to show the strip.
         assert!(usage_strip(None, Some(28), None).is_some());
         // Calm under 30, yellow from 30, orange from 50 (Compact's threshold).
-        let heat = |c| ctx_heat(c);
         assert_eq!(
-            [heat(0), heat(29), heat(30), heat(49), heat(50), heat(100)],
+            [0, 29, 30, 49, 50, 100].map(ctx_heat),
             [
                 Heat::Calm,
                 Heat::Calm,
