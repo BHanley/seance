@@ -2065,24 +2065,12 @@ impl SeanceApp {
         if lead_busy && !mentioning {
             let stop_ws = ws.clone();
             above = above.child(
-                div()
-                    .id("chat-stop")
-                    .px_2()
-                    .py_0p5()
-                    .rounded_md()
-                    .bg(gpui::rgb(0xd92d20))
-                    .border_1()
-                    .border_color(gpui::white())
-                    .text_xs()
-                    .font_bold()
-                    .text_color(gpui::white())
-                    .hover(|s| s.opacity(0.85))
-                    .cursor_pointer()
+                chip(SharedString::from("chat-stop"))
                     .tooltip(tip("stop what the lead is doing"))
                     .on_click(
                         cx.listener(move |this, _, _, cx| this.chat_stop(stop_ws.clone(), cx)),
                     )
-                    .child("STOP"),
+                    .child("Stop"),
             );
         }
         div()
