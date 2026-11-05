@@ -178,6 +178,7 @@ impl SeanceApp {
         self.tasks_popover = None;
         if mode == ViewMode::Chat {
             self.chat.focus_input = true;
+            self.chat.arrive();
         }
         self.stage.peek = None;
         if self.overview() != was_wall {
