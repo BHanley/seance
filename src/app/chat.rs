@@ -1528,14 +1528,16 @@ impl SeanceApp {
             window.request_animation_frame();
         }
         // The header's crew orbits smoothly, so it needs every frame while
-        // it shows; the spinner's 240ms tick is too coarse.
+        // it shows; the spinner's 240ms tick is too coarse. Not in a window
+        // nobody is looking at: rebuilding the thread 60 times a second there
+        // would only burn battery.
         let crew = self
             .chat
             .selected
             .as_ref()
             .and_then(|ws| self.chat.threads.get(ws))
             .is_some_and(|t| super::sprite::is_crew(&t.crew));
-        if crew {
+        if crew && self.chat.window_active {
             window.request_animation_frame();
         }
         let list = self.render_chat_list(cx);
