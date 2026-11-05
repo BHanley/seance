@@ -2078,35 +2078,12 @@ impl SeanceApp {
         // Above the input: quick replies while it is empty, or the panes an
         // `@` at the start can name.
         let mut above = div().flex().flex_wrap().gap_1p5();
-        // Stop leads the chips while the lead works, whatever is typed, but
-        // gives way to the @ suggestions.
+        // Stop ends the row while the lead works, whatever is typed, but gives
+        // way to the @ suggestions.
         let mentioning = typed
             .strip_prefix('@')
             .is_some_and(|t| !t.contains(char::is_whitespace));
         let lead_busy = self.chat.threads.get(&ws).is_some_and(|t| t.lead_busy);
-        if lead_busy && !mentioning {
-            let stop_ws = ws.clone();
-            above = above.child(
-                div()
-                    .id("chat-stop")
-                    .px_2()
-                    .py_0p5()
-                    .rounded_md()
-                    .bg(gpui::rgb(0xd92d20))
-                    .border_1()
-                    .border_color(gpui::white())
-                    .text_xs()
-                    .font_bold()
-                    .text_color(gpui::white())
-                    .hover(|s| s.opacity(0.85))
-                    .cursor_pointer()
-                    .tooltip(tip("stop what the lead is doing"))
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| this.chat_stop(stop_ws.clone(), cx)),
-                    )
-                    .child("STOP"),
-            );
-        }
         if typed.is_empty() {
             for (i, text) in QUICK_REPLIES.into_iter().enumerate() {
                 let ws = ws.clone();
@@ -2150,6 +2127,29 @@ impl SeanceApp {
                         .child(format!("@{} {}{state}", p.at, p.name)),
                 );
             }
+        }
+        if lead_busy && !mentioning {
+            let stop_ws = ws.clone();
+            above = above.child(
+                div()
+                    .id("chat-stop")
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .bg(gpui::rgb(0xd92d20))
+                    .border_1()
+                    .border_color(gpui::white())
+                    .text_xs()
+                    .font_bold()
+                    .text_color(gpui::white())
+                    .hover(|s| s.opacity(0.85))
+                    .cursor_pointer()
+                    .tooltip(tip("stop what the lead is doing"))
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.chat_stop(stop_ws.clone(), cx)),
+                    )
+                    .child("STOP"),
+            );
         }
         div()
             .flex_none()
