@@ -149,6 +149,8 @@ pub(super) struct ChatState {
     read_retry_at: HashMap<String, Instant>,
     /// Whether this window was the active one at the last frame.
     window_active: bool,
+    /// The header crew's run of moves, while it shows.
+    crew_dance: Option<super::sprite::CrewDance>,
     /// Counts down from zero: ids for bubbles shown before Invoke has them.
     next_local: i64,
     /// Text of a send that failed, to put back in the composer.
@@ -1527,7 +1529,7 @@ impl SeanceApp {
             self.chat.scroll.scroll_to_bottom();
             window.request_animation_frame();
         }
-        // The header's crew orbits smoothly, so it needs every frame while
+        // The header's crew dances smoothly, so it needs every frame while
         // it shows; the spinner's 240ms tick is too coarse. Not in a window
         // nobody is looking at: rebuilding the thread 60 times a second there
         // would only burn battery.
@@ -1537,6 +1539,15 @@ impl SeanceApp {
             .as_ref()
             .and_then(|ws| self.chat.threads.get(ws))
             .is_some_and(|t| super::sprite::is_crew(&t.crew));
+        if crew {
+            let now = now_ms();
+            self.chat
+                .crew_dance
+                .get_or_insert_with(|| super::sprite::CrewDance::new(now))
+                .advance(now, &mut rand::thread_rng());
+        } else {
+            self.chat.crew_dance = None;
+        }
         if crew && self.chat.window_active {
             window.request_animation_frame();
         }
@@ -1833,7 +1844,11 @@ impl SeanceApp {
         let sprite = super::sprite::for_circle(ws);
         // Two or more panes working: a crew of cutouts instead of one creature.
         let crew = self.chat.threads.get(ws).map_or(&[][..], |t| &t.crew);
-        let cuts = super::sprite::crew_at(crew, now);
+        let dance = self
+            .chat
+            .crew_dance
+            .unwrap_or_else(|| super::sprite::CrewDance::new(now));
+        let cuts = super::sprite::crew_at(crew, &dance, now);
         div()
             .id("chat-creature")
             .relative()
