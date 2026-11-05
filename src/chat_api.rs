@@ -482,11 +482,6 @@ pub fn search(q: &str) -> Result<Vec<Hit>> {
     Ok(get::<Hits>(&format!("/api/search?q={}", enc(q)), REQUEST_SECS)?.results)
 }
 
-/// Have Invoke write a summary of what Brian missed; it lands in Alerts.
-pub fn catchup() -> Result<()> {
-    post("/api/catchup", serde_json::json!({}))
-}
-
 /// The circle's panes, for @-mentions.
 pub fn panes(ws: &str) -> Result<Vec<PaneRow>> {
     #[derive(Deserialize)]
