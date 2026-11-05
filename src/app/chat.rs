@@ -1527,6 +1527,17 @@ impl SeanceApp {
             self.chat.scroll.scroll_to_bottom();
             window.request_animation_frame();
         }
+        // The header's crew orbits smoothly, so it needs every frame while
+        // it shows; the spinner's 240ms tick is too coarse.
+        let crew = self
+            .chat
+            .selected
+            .as_ref()
+            .and_then(|ws| self.chat.threads.get(ws))
+            .is_some_and(|t| super::sprite::is_crew(&t.crew));
+        if crew {
+            window.request_animation_frame();
+        }
         let list = self.render_chat_list(cx);
         let thread = self.render_chat_thread(cx);
         div()
@@ -1817,18 +1828,21 @@ impl SeanceApp {
             .filter(|e| e.mv.is_some() && now.saturating_sub(e.at) < e.ms)
             .map(|e| e.line);
         let target = ws.to_string();
+        let sprite = super::sprite::for_circle(ws);
+        // Two or more panes working: a crew of cutouts instead of one creature.
+        let crew = self.chat.threads.get(ws).map_or(&[][..], |t| &t.crew);
+        let cuts = super::sprite::crew_at(crew, now);
         div()
             .id("chat-creature")
             .relative()
             .flex_none()
             .cursor_pointer()
             .on_click(cx.listener(move |this, _, _, cx| this.chat_poke(target.clone(), cx)))
-            .child(super::sprite::render_move(
-                &super::sprite::for_circle(ws),
-                2.5,
-                working,
-                moving,
-            ))
+            .child(if cuts.is_empty() {
+                super::sprite::render_move(&sprite, 2.5, working, moving)
+            } else {
+                super::sprite::render_crew(&sprite, &cuts, moving)
+            })
             .children(say.map(|line| {
                 // Deferred, so the thread below cannot paint over it.
                 gpui::deferred(

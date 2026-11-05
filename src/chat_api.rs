@@ -118,6 +118,10 @@ pub struct Thread {
     /// no status line, or Alerts).
     #[serde(default)]
     pub context: Option<u32>,
+    /// Indexes of the circle's panes that are working; two or more dance as a
+    /// crew in the header.
+    #[serde(default)]
+    pub crew: Vec<u32>,
 }
 
 /// One `/api/search` result: a message, and the circle it is in.
@@ -765,6 +769,9 @@ mod tests {
         assert_eq!(t.context, Some(28));
         let t: Thread = serde_json::from_str(r#"{"messages":[],"context":null}"#).unwrap();
         assert_eq!(t.context, None);
+        assert!(t.crew.is_empty());
+        let t: Thread = serde_json::from_str(r#"{"messages":[],"crew":[0,3]}"#).unwrap();
+        assert_eq!(t.crew, [0, 3]);
         let h: Hits = serde_json::from_str(
             r#"{"results":[{"ws":"main","circle":"PM","id":9,"from":"lead","ts":3,"text":"hi"}]}"#,
         )
