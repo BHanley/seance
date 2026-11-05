@@ -276,6 +276,8 @@ const SHEET_STAGGER_MS: u64 = 450;
 const SWAY_DEG: f32 = 40.;
 const HOP: f32 = 3.;
 const PERSPECTIVE: f32 = 170.;
+/// The party ring sits farther back on the web (`#party { perspective: 500px }`).
+const PARTY_PERSPECTIVE: f32 = 500.;
 /// Seconds to walk from one move to the next.
 const CREW_BLEND: f32 = 0.9;
 /// The first move change comes this long after the crew forms, the rest
@@ -594,12 +596,18 @@ pub(super) fn crew_at(crew: &[u32], dance: &CrewDance, now: u64) -> Vec<Cutout> 
         .take(CREW_MAX)
         .map(|&pane| (pane, CREW_SHADES[pane as usize % CREW_SHADES.len()]))
         .collect();
-    place_cuts(&crew, dance, now, crew_radius(crew.len()))
+    place_cuts(&crew, dance, now, crew_radius(crew.len()), PERSPECTIVE)
 }
 
 /// Each (crew index, shade) of `crew` dancing `dance` at `now` on a ring of
 /// radius `r`, back to front.
-fn place_cuts(crew: &[(u32, f32)], dance: &CrewDance, now: u64, r: f32) -> Vec<Cutout> {
+fn place_cuts(
+    crew: &[(u32, f32)],
+    dance: &CrewDance,
+    now: u64,
+    r: f32,
+    perspective: f32,
+) -> Vec<Cutout> {
     let n = crew.len();
     let tau = std::f32::consts::TAU;
     let ms = now.saturating_sub(dance.epoch);
@@ -608,7 +616,7 @@ fn place_cuts(crew: &[(u32, f32)], dance: &CrewDance, now: u64, r: f32) -> Vec<C
         .enumerate()
         .map(|(i, &(pane, shade))| {
             let at = dance.place(i, n, now, r);
-            let scale = PERSPECTIVE / (PERSPECTIVE - at.z);
+            let scale = perspective / (perspective - at.z);
             // Sway side to side, hopping at each upright pass.
             let u = ((ms + i as u64 * SHEET_STAGGER_MS) % SHEET_MS) as f32 / SHEET_MS as f32;
             let sway = -SWAY_DEG.to_radians() * (tau * u).cos();
@@ -830,7 +838,7 @@ impl Party {
             return Vec::new();
         };
         let crew: Vec<(u32, f32)> = (0..).zip(self.shades.iter().copied()).collect();
-        let mut cuts = place_cuts(&crew, &self.dance, now, r);
+        let mut cuts = place_cuts(&crew, &self.dance, now, r, PARTY_PERSPECTIVE);
         // gpui cannot turn the ring, so each cutout goes round its centre
         // and turns in its plane by as much; close enough for a spin.
         let (sin, cos) = scene.turn.sin_cos();
