@@ -135,8 +135,8 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   the app.
 
 - **Snooze 1h on Stage.** Needs-you and done chips, and the peek card, get
-  a **Snooze 1h** button: that pane's chip, banners, dings and purple HUD
-  row go quiet for an hour (ctrl+shift+i skips it too), then the chip comes
+  a **Snooze 1h** button: that pane's chip, banners and dings
+  go quiet for an hour (ctrl+shift+i skips it too), then the chip comes
   back if it's still waiting. Opening the pane ends it early. "N snoozed"
   at the end of the bar brings them all back. Kept across restarts in
   `~/.config/seance/view.json`.
@@ -213,17 +213,6 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   moves it into a panel on the right of its circle, one tab per file. New
   file panes open there by default, so terminals keep the grid; the button
   puts one back. Every window shares the arrangement.
-
-- **Progress HUD (macOS).** An always-on-top window that never takes focus
-  lists each pane that is working or needs you (circle, task or step,
-  elapsed time), with a hairline bar when a status note has a step count
-  like "build 3/5". Needs-you lines come first with a purple dot; finished
-  lines fade out after about 3 s and the HUD hides when nothing runs. Hover
-  for full names, click a line to open that pane on stage. Two looks: Ink
-  (bottom right, text and hairlines) and Pips (top centre, a pill of short
-  bars that opens into the list on hover). `seance-hud = ink | pips | off`
-  in `terminal.conf` (default off) picks one at launch; the Seance menu's
-  **Progress HUD** items switch it for the session.
 
 - **Lead sprites.** A circle's lead pane shows a small pixel creature in
   its title strip and beside **LEAD** on Stage, generated from the circle
@@ -305,9 +294,6 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   panes (name, task and progress line) and the lead's background agents (what
   each is doing and how long it has run). The daemon's own list is used only
   while Invoke cannot be reached.
-- The progress HUD picked from the Seance menu is kept across restarts (in
-  `~/.config/seance/view.json` on the GUI machine). `seance-hud` in
-  `terminal.conf` is the default until you pick one.
 - **A send no longer cancels a task.** `seance ctl send` to a busy pane is
   queued behind its turn (`queued behind task-N (K ahead)`) and delivered
   when it goes idle, oldest first, instead of being refused with exit 4. A

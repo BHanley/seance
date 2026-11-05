@@ -25,7 +25,6 @@
 //! | `seance-needs-sound` | macOS sound name for needs-you banners (`default` = the system's) |
 //! | `seance-auto-sleep-idle` (e.g. `6h`), `seance-auto-sleep-skip` (circle slugs, comma separated) | daemon's auto-sleep of idle Claude panes |
 //! | `seance-done-sound`, `seance-done-sound-volume` | sound when a circle lead finishes out of sight |
-//! | `seance-hud` (`ink`/`pips`/`off`) | the Mac's floating progress HUD at launch, the default until you pick one from the menu (GUI) |
 //! | `seance-lead-sprite.<circle-slug>` | a seed that swaps that circle's lead creature (GUI) |
 //! | `seance-new-circle-command` | the first pane of a circle made with Stage's "+ circle" (GUI; runs on the daemon's machine) |
 //! | `seance-desktop-notifications` (`true`/`false`, also `off`/`0`) | `false` posts no macOS/Linux banners at all; sounds and clearing stale banners are unaffected (read at launch) |
@@ -103,10 +102,6 @@ pub struct TermConfig {
     pub seance_auto_sleep_idle_ms: Option<u64>,
     /// `seance-auto-sleep-skip`: circles whose panes are never auto-slept.
     pub seance_auto_sleep_skip: Vec<String>,
-    /// `seance-hud`: which progress HUD the GUI opens with until one is
-    /// picked from the menu (`ink`, `pips`, `off`). Read by `app::hud`;
-    /// None is off.
-    pub seance_hud: Option<String>,
     /// `seance-new-circle-command`: what the first pane of a circle made with
     /// Stage's "+ circle" runs. None is a plain shell.
     pub seance_new_circle_command: Option<String>,
@@ -141,7 +136,6 @@ impl Default for TermConfig {
             seance_done_sound_volume: 0.6,
             seance_auto_sleep_idle_ms: None,
             seance_auto_sleep_skip: Vec::new(),
-            seance_hud: None,
             seance_new_circle_command: None,
             seance_desktop_notifications: true,
             seance_origin_gutter: true,
@@ -286,7 +280,6 @@ fn apply(cfg: &mut TermConfig, key: &str, value: &str) {
         "seance-health-file" => cfg.seance_health_file = non_empty(value),
         "seance-usage-file" => cfg.seance_usage_file = non_empty(value),
         "seance-needs-sound" => cfg.seance_needs_sound = non_empty(value),
-        "seance-hud" => cfg.seance_hud = non_empty(value),
         "seance-new-circle-command" => cfg.seance_new_circle_command = non_empty(value),
         "seance-desktop-notifications" => {
             cfg.seance_desktop_notifications = !matches!(value, "false" | "off" | "0")
@@ -488,6 +481,18 @@ mod tests {
             Some("claude-mac")
         );
         assert_eq!(TermConfig::default().seance_new_circle_command, None);
+    }
+
+    #[test]
+    fn a_leftover_hud_key_is_ignored() {
+        let dir = test_dir("hud-gone");
+        let p = write(
+            &dir,
+            "terminal.conf",
+            "seance-hud = ink\nseance-desktop-notifications = false\n",
+        );
+        // The key is no longer read, and the rest of the file still is.
+        assert!(!load(&p).seance_desktop_notifications);
     }
 
     #[test]
