@@ -1548,10 +1548,12 @@ impl SeanceApp {
         // times a second there would only burn battery.
         let items = self.chat_list_items();
         let now = now_ms();
-        let crews = items.iter().filter_map(|i| match i {
-            ListItem::Circle(c) => Some((c.ws.as_str(), &c.crew[..])),
-            ListItem::Label(_) => None,
-        });
+        // Every circle, not just the rows shown, so a search keeps the dances.
+        let crews = self
+            .chat
+            .circles
+            .iter()
+            .map(|c| (c.ws.as_str(), &c.crew[..]));
         super::sprite::keep_crew_dances(&mut self.chat.list_dances, crews, now);
         // The list's children in view as of its last layout; all of them
         // before it has one.

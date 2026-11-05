@@ -661,7 +661,8 @@ pub(super) fn render_crew(
     // Half points are whole device pixels on a 2x screen, so cells meet
     // without seams however the sheet is squeezed.
     let snap = |v: f32| (v * 2.).round() / 2.;
-    // As tall as the lone creature, so the header keeps its height.
+    // As tall as the lone creature at the header's size, so it keeps its
+    // height.
     let height = SIZE as f32 * 2.5 * zoom;
     let width = (2. * crew_radius(cuts.len()) + SIZE as f32 * CREW_CELL) * zoom;
     let now = super::util::now_ms();
