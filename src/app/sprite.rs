@@ -290,22 +290,240 @@ pub(super) fn render_move(
 }
 
 /// Two or more panes working dance as a crew (Brian's ask): one paper cutout
-/// per pane, the same creature in its own shade, circling on a low ring. gpui
-/// has no 3D, so this fakes the web Chat's CSS ring with its numbers. Cutout
-/// cells are 2 points to its 2px, so its px read as points here.
+/// per pane, the same creature in its own shade, running through a random
+/// string of moves. gpui has no 3D, so this fakes the web Chat's CSS ring with
+/// its numbers. Cutout cells are 2 points to its 2px, so its px read as points
+/// here.
 const CREW_CELL: f32 = 2.;
 const CREW_MAX: usize = 6;
 /// A step toward white (positive) or black per pane index, so a pane keeps
 /// its shade wherever it is in the crew. 0 is the circle's own color.
 const CREW_SHADES: [f32; CREW_MAX] = [0., 0.3, -0.3, 0.55, -0.5, 0.75];
-const ORBIT_MS: u64 = 5000;
 const SHEET_MS: u64 = 1700;
 /// Each sheet runs this far ahead of the one before it.
 const SHEET_STAGGER_MS: u64 = 450;
-const TILT_DEG: f32 = 20.;
 const SWAY_DEG: f32 = 40.;
 const HOP: f32 = 3.;
 const PERSPECTIVE: f32 = 170.;
+/// Seconds to walk from one move to the next.
+const CREW_BLEND: f32 = 0.9;
+/// The first move change comes this long after the crew forms, the rest
+/// [`MOVE_SECS`] apart.
+const FIRST_MOVE_SECS: f32 = 4.;
+const MOVE_SECS: std::ops::RangeInclusive<f32> = 3.5..=6.5;
+
+/// The crew's moves, the web Chat's `CREW_MOVES`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum CrewMove {
+    Circle,
+    Eight,
+    Conga,
+    Kickline,
+    Totem,
+    Dosado,
+    Leapfrog,
+    Burst,
+    Cartwheel,
+    Swing,
+    Whirl,
+    Flip,
+}
+
+const CREW_MOVES: [CrewMove; 12] = [
+    CrewMove::Circle,
+    CrewMove::Eight,
+    CrewMove::Conga,
+    CrewMove::Kickline,
+    CrewMove::Totem,
+    CrewMove::Dosado,
+    CrewMove::Leapfrog,
+    CrewMove::Burst,
+    CrewMove::Cartwheel,
+    CrewMove::Swing,
+    CrewMove::Whirl,
+    CrewMove::Flip,
+];
+
+/// Where a move puts one sheet: x right, y down, z toward the viewer, in
+/// points from the ring's centre; ry and rz in degrees.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Place {
+    x: f32,
+    y: f32,
+    z: f32,
+    ry: f32,
+    rz: f32,
+}
+
+/// Sheet `i` of `n` in `mv` at `t` seconds into the dance, on a ring of
+/// radius `r`.
+fn crew_place(mv: CrewMove, i: usize, n: usize, t: f32, r: f32) -> Place {
+    use std::f32::consts::{PI, TAU};
+    let (fi, fne) = (i as f32, n as f32);
+    // -1 to 1 along a line.
+    let spread = if n > 1 { 2. * fi / (fne - 1.) - 1. } else { 0. };
+    let p = |x, y, z| Place {
+        x,
+        y,
+        z,
+        ..Place::default()
+    };
+    match mv {
+        CrewMove::Circle => {
+            let a = t * 1.25 + TAU * fi / fne;
+            p(r * a.sin(), r * 0.34 * a.cos(), r * a.cos())
+        }
+        CrewMove::Eight => {
+            let a = t * 1.4 + TAU * fi / fne;
+            p(r * a.sin(), 7. * (2. * a).sin(), r * 0.6 * a.cos())
+        }
+        CrewMove::Conga => {
+            let a = t * 1.2 - fi * 0.7;
+            p(r * a.sin(), 5. * (t * 3. - fi * 1.2).sin(), 12. * a.cos())
+        }
+        CrewMove::Kickline => {
+            let a = t * 6. - fi * 0.9;
+            Place {
+                rz: 12. * a.sin(),
+                ..p(spread * r, 3. - 12. * a.sin().max(0.), 0.)
+            }
+        }
+        CrewMove::Totem => Place {
+            rz: 6. * (t * 3. + fi).sin(),
+            ..p(
+                4. * (t * 3. + fi).sin(),
+                (fi - (fne - 1.) / 2.) * (34. / fne).min(9.),
+                fi * 7.,
+            )
+        },
+        CrewMove::Dosado => {
+            let pairs = n.div_ceil(2);
+            let c = if pairs > 1 {
+                ((i / 2) as f32 / (pairs - 1) as f32 * 2. - 1.) * r * 0.7
+            } else {
+                0.
+            };
+            let a = t * 2.4 + if i % 2 == 1 { PI } else { 0. };
+            p(c + 11. * a.cos(), 2. * a.sin(), 12. * a.sin())
+        }
+        CrewMove::Leapfrog => {
+            let at = (t * 0.55 + fi / fne) % 1.;
+            if at < 0.7 {
+                return p((at / 0.7 * 2. - 1.) * r, 6., 0.);
+            }
+            let q = (at - 0.7) / 0.3;
+            let up = (PI * q).sin();
+            Place {
+                rz: -360. * q,
+                ..p((1. - q * 2.) * r, 6. - 24. * up, -10. * up)
+            }
+        }
+        CrewMove::Burst => {
+            let a = TAU * fi / fne;
+            let k = 0.3 + 0.7 * (t * 2.).sin().abs();
+            Place {
+                rz: 15. * (t * 2.).sin(),
+                ..p(r * k * a.sin(), -12. * k * a.cos(), r * k * a.cos() * 0.5)
+            }
+        }
+        CrewMove::Cartwheel => {
+            let x = r * (t * 1.2 + spread).sin();
+            Place {
+                rz: x * 16.,
+                ..p(x, 2., spread * 14.)
+            }
+        }
+        CrewMove::Swing => {
+            let a = 1.1 * (t * 2.4 + fi * 0.35).sin();
+            Place {
+                rz: -a * 40.,
+                ..p(r * a.sin() + spread * 6., 9. - 16. * a.cos(), fi * 5.)
+            }
+        }
+        CrewMove::Whirl => {
+            let a = t * 2.4 + TAU * fi / fne;
+            let k = 0.55 + 0.45 * (t * 1.3).sin();
+            Place {
+                ry: t * 180. % 360.,
+                ..p(r * k * a.sin(), r * k * 0.34 * a.cos(), r * k * a.cos())
+            }
+        }
+        CrewMove::Flip => Place {
+            ry: (t * 150. + fi * 70.) % 360.,
+            ..p(spread * r, 4. * (t * 3. + fi).sin(), 0.)
+        },
+    }
+}
+
+/// Which move the crew is dancing and when it changes, as the web Chat's
+/// `crewTick` keeps it. Starts on the circle.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct CrewDance {
+    /// When the crew formed (unix ms); times below are seconds since then.
+    epoch: u64,
+    /// The move being left; dropped once the blend is over.
+    from: CrewMove,
+    to: CrewMove,
+    began: f32,
+    next: f32,
+}
+
+impl CrewDance {
+    pub(super) fn new(now: u64) -> Self {
+        Self {
+            epoch: now,
+            from: CrewMove::Circle,
+            to: CrewMove::Circle,
+            began: 0.,
+            next: FIRST_MOVE_SECS,
+        }
+    }
+
+    fn secs(&self, now: u64) -> f32 {
+        now.saturating_sub(self.epoch) as f32 / 1000.
+    }
+
+    /// Moves on to a new move, never the one just danced, once this one's
+    /// time is up.
+    pub(super) fn advance(&mut self, now: u64, rng: &mut impl rand::Rng) {
+        let t = self.secs(now);
+        if t >= self.next {
+            self.from = self.to;
+            self.began = t;
+            self.next = t + rng.gen_range(MOVE_SECS);
+            let at = CREW_MOVES.iter().position(|m| *m == self.to).unwrap_or(0);
+            let k = rng.gen_range(0..CREW_MOVES.len() - 1);
+            self.to = CREW_MOVES[if k >= at { k + 1 } else { k }];
+        } else if self.blend(t) >= 1. {
+            self.from = self.to;
+        }
+    }
+
+    /// How far from the old move to the new at `t`, eased: 0 to exactly 1.
+    fn blend(&self, t: f32) -> f32 {
+        let b = ((t - self.began) / CREW_BLEND).clamp(0., 1.);
+        b * b * (3. - 2. * b)
+    }
+
+    /// Sheet `i` of `n` at `now`, between the old move and the new.
+    fn place(&self, i: usize, n: usize, now: u64, r: f32) -> Place {
+        let t = self.secs(now);
+        let c = crew_place(self.to, i, n, t, r);
+        let w = self.blend(t);
+        if self.from == self.to || w >= 1. {
+            return c;
+        }
+        let a = crew_place(self.from, i, n, t, r);
+        let mix = |a: f32, c: f32| a + (c - a) * w;
+        Place {
+            x: mix(a.x, c.x),
+            y: mix(a.y, c.y),
+            z: mix(a.z, c.z),
+            ry: mix(a.ry, c.ry),
+            rz: mix(a.rz, c.rz),
+        }
+    }
+}
 
 /// One cutout of the crew at a moment.
 #[derive(Debug, PartialEq)]
@@ -315,14 +533,35 @@ pub(super) struct Cutout {
     /// and hop included.
     pub x: f32,
     pub y: f32,
+    /// Toward the viewer, in points: what draws over what.
+    pub z: f32,
     /// 1 at the front of the ring, -1 at the back.
     pub near: f32,
     /// Perspective: above 1 in front, below behind.
     pub scale: f32,
-    /// How far the sheet is turned, in radians; it squeezes by the cosine.
+    /// How far the sheet is turned on its own, in radians; it squeezes by
+    /// the cosine.
     pub sway: f32,
+    /// The move's turn in the sheet's plane and about its upright, radians.
+    pub rz: f32,
+    pub ry: f32,
     /// Its [`CREW_SHADES`] step.
     pub shade: f32,
+}
+
+impl Cutout {
+    /// On screen, one cell's step along the sheet's rows and down its
+    /// columns: the sway squeezes it, rz turns it, ry squeezes it again
+    /// (past a quarter turn, mirrored), as the web's transforms nest.
+    fn axes(&self) -> ((f32, f32), (f32, f32)) {
+        let k = CREW_CELL * self.scale;
+        let (sin, cos) = self.rz.sin_cos();
+        let (squeeze, sway) = (self.ry.cos(), self.sway.cos());
+        (
+            (k * sway * cos * squeeze, k * sway * sin),
+            (-k * sin * squeeze, k * cos),
+        )
+    }
 }
 
 fn crew_radius(n: usize) -> f32 {
@@ -334,9 +573,10 @@ pub(super) fn is_crew(crew: &[u32]) -> bool {
     crew.len() >= 2
 }
 
-/// The first [`CREW_MAX`] of `crew` (pane indexes) at `t` (unix ms), back to
-/// front so nearer cutouts are drawn over farther ones. Empty under two.
-pub(super) fn crew_at(crew: &[u32], t: u64) -> Vec<Cutout> {
+/// The first [`CREW_MAX`] of `crew` (pane indexes) dancing `dance` at `now`
+/// (unix ms), back to front so nearer cutouts are drawn over farther ones.
+/// Empty under two.
+pub(super) fn crew_at(crew: &[u32], dance: &CrewDance, now: u64) -> Vec<Cutout> {
     if !is_crew(crew) {
         return Vec::new();
     }
@@ -344,31 +584,37 @@ pub(super) fn crew_at(crew: &[u32], t: u64) -> Vec<Cutout> {
     let n = crew.len();
     let r = crew_radius(n);
     let tau = std::f32::consts::TAU;
-    let (tilt_sin, tilt_cos) = TILT_DEG.to_radians().sin_cos();
+    let ms = now.saturating_sub(dance.epoch);
     let mut cuts: Vec<Cutout> = crew
         .iter()
         .enumerate()
         .map(|(i, &pane)| {
-            // Evenly spaced on the ring, which the tilt shows from above.
-            let a = tau * ((t % ORBIT_MS) as f32 / ORBIT_MS as f32 + i as f32 / n as f32);
-            let (x, z) = (r * a.sin(), r * a.cos());
-            let scale = PERSPECTIVE / (PERSPECTIVE - z * tilt_cos);
+            let at = dance.place(i, n, now, r);
+            let scale = PERSPECTIVE / (PERSPECTIVE - at.z);
             // Sway side to side, hopping at each upright pass.
-            let u = ((t + i as u64 * SHEET_STAGGER_MS) % SHEET_MS) as f32 / SHEET_MS as f32;
+            let u = ((ms + i as u64 * SHEET_STAGGER_MS) % SHEET_MS) as f32 / SHEET_MS as f32;
             let sway = -SWAY_DEG.to_radians() * (tau * u).cos();
             let hop = -HOP * (tau * u).sin().powi(2);
-            Cutout {
+            let mut cut = Cutout {
                 pane,
-                x: x * scale,
-                y: (z * tilt_sin + hop) * scale,
-                near: a.cos(),
+                x: at.x * scale,
+                y: at.y * scale,
+                z: at.z,
+                near: (at.z / r).clamp(-1., 1.),
                 scale,
                 sway,
+                rz: at.rz.to_radians(),
+                ry: at.ry.to_radians(),
                 shade: CREW_SHADES[pane as usize % CREW_MAX],
-            }
+            };
+            // The hop is up the sheet, wherever the move has turned it.
+            let (_, down) = cut.axes();
+            cut.x += down.0 * hop / CREW_CELL;
+            cut.y += down.1 * hop / CREW_CELL;
+            cut
         })
         .collect();
-    cuts.sort_by(|a, b| a.near.total_cmp(&b.near));
+    cuts.sort_by(|a, b| a.z.total_cmp(&b.z));
     cuts
 }
 
@@ -410,34 +656,43 @@ pub(super) fn render_crew(
             l: body.l * (0.9 + 0.1 * cut.near),
             ..body
         };
-        let (cw, ch) = (
-            CREW_CELL * cut.scale * cut.sway.cos(),
-            CREW_CELL * cut.scale,
-        );
-        let left = width / 2. + cut.x - cw * SIZE as f32 / 2.;
-        let top = height / 2. + cut.y - ch * SIZE as f32 / 2.;
-        let col = |k: usize| snap(left + k as f32 * cw);
-        let row = |k: usize| snap(top + k as f32 * ch);
-        // The sheet's thin dark edge, right of each run of cells.
-        let edge = snap(cw * 0.4).max(0.5);
+        // gpui cannot turn a div, so each cell stays upright and only its
+        // centre turns with the sheet; it covers its turned square's bounds,
+        // which leaves no gaps when tilted.
+        let ((ax, ay), (bx, by)) = cut.axes();
+        let (cw, ch) = (ax.abs() + bx.abs(), ay.abs() + by.abs());
+        // The sheet's thin dark edge, right of each run of cells (left once
+        // ry has mirrored the sheet).
+        let edge = snap(ax.abs() * 0.4).max(0.5);
+        let half = SIZE as f32 / 2.;
         for (y, line) in sprite.cells.iter().enumerate() {
-            let at = |l: f32, w: f32| {
-                div()
-                    .absolute()
-                    .left(px(l))
-                    .top(px(row(y)))
-                    .w(px(w))
-                    .h(px(row(y + 1) - row(y)))
-            };
             for (x, c) in line.iter().enumerate() {
                 let fill = match c {
                     Cell::Empty => continue,
                     Cell::Body => body,
                     Cell::Eye => ink,
                 };
-                cells.push(at(col(x), col(x + 1) - col(x)).bg(fill));
+                let (u, v) = (x as f32 + 0.5 - half, y as f32 + 0.5 - half);
+                let cx = width / 2. + cut.x + ax * u + bx * v;
+                let cy = height / 2. + cut.y + ay * u + by * v;
+                let (top, bottom) = (snap(cy - ch / 2.), snap(cy + ch / 2.));
+                let at = |l: f32, r: f32| {
+                    div()
+                        .absolute()
+                        .left(px(l))
+                        .top(px(top))
+                        .w(px(r - l))
+                        .h(px(bottom - top))
+                };
+                cells.push(at(snap(cx - cw / 2.), snap(cx + cw / 2.)).bg(fill));
                 if line.get(x + 1).is_none_or(|n| *n == Cell::Empty) {
-                    cells.push(at(col(x + 1), edge).bg(gpui::black().opacity(0.5)));
+                    let side = snap(cx + ax / 2.);
+                    let (l, r) = if ax < 0. {
+                        (side - edge, side)
+                    } else {
+                        (side, side + edge)
+                    };
+                    cells.push(at(l, r).bg(gpui::black().opacity(0.5)));
                 }
             }
         }
@@ -560,35 +815,133 @@ mod tests {
 
     #[test]
     fn crew_needs_two_and_stops_at_six() {
-        assert!(crew_at(&[], 0).is_empty());
-        assert!(crew_at(&[4], 0).is_empty());
-        assert_eq!(crew_at(&[0, 1], 0).len(), 2);
+        let d = CrewDance::new(0);
+        assert!(crew_at(&[], &d, 0).is_empty());
+        assert!(crew_at(&[4], &d, 0).is_empty());
+        assert_eq!(crew_at(&[0, 1], &d, 0).len(), 2);
         let big: Vec<u32> = (0..9).collect();
-        let mut panes: Vec<u32> = crew_at(&big, 0).iter().map(|c| c.pane).collect();
+        let mut panes: Vec<u32> = crew_at(&big, &d, 0).iter().map(|c| c.pane).collect();
         panes.sort();
         assert_eq!(panes, [0, 1, 2, 3, 4, 5]);
     }
 
     #[test]
     fn crew_draws_back_to_front_as_it_turns() {
-        for t in (0..ORBIT_MS).step_by(137) {
-            let cuts = crew_at(&[0, 1, 2, 3, 4], t);
-            assert!(cuts.windows(2).all(|w| w[0].near <= w[1].near), "t={t}");
+        // Before its first change of move the crew circles.
+        let d = CrewDance::new(0);
+        for t in (0..4000).step_by(137) {
+            let cuts = crew_at(&[0, 1, 2, 3, 4], &d, t);
+            assert!(cuts.windows(2).all(|w| w[0].z <= w[1].z), "t={t}");
             // Nearer is bigger and lower, as seen from above the ring.
             let (back, front) = (&cuts[0], &cuts[4]);
             assert!(front.scale > back.scale && front.y > back.y);
         }
         // Each one comes round to the front in turn.
-        let front = |t| crew_at(&[0, 1, 2], t).last().unwrap().pane;
-        let fronts: std::collections::HashSet<u32> =
-            (0..ORBIT_MS).step_by(100).map(front).collect();
+        let front = |t| crew_at(&[0, 1, 2], &d, t).last().unwrap().pane;
+        let fronts: std::collections::HashSet<u32> = (0..4000).step_by(100).map(front).collect();
         assert_eq!(fronts.len(), 3);
+    }
+
+    #[test]
+    fn crew_never_dances_a_move_twice_running() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        let mut d = CrewDance::new(0);
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..2000 {
+            let was = d.to;
+            d.advance((d.next * 1000.).ceil() as u64 + 1, &mut rng);
+            assert_ne!(d.to, was);
+            assert_eq!(d.from, was);
+            // Each move lasts 3.5 to 6.5 s.
+            assert!(
+                MOVE_SECS.contains(&(d.next - d.began)),
+                "{}",
+                d.next - d.began
+            );
+            seen.insert(d.to);
+        }
+        assert_eq!(seen.len(), CREW_MOVES.len());
+    }
+
+    #[test]
+    fn a_new_move_blends_in_then_the_old_is_dropped() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(1);
+        let mut d = CrewDance::new(0);
+        d.advance(4000, &mut rng);
+        assert_eq!((d.from, d.began), (CrewMove::Circle, 4.));
+        let (from, to) = (d.from, d.to);
+        // The first frame is all the old move, the last all the new.
+        assert_eq!(d.blend(4.), 0.);
+        assert_eq!(d.place(1, 3, 4000, 15.), crew_place(from, 1, 3, 4., 15.));
+        assert!(d.blend(4.45) > 0. && d.blend(4.45) < 1.);
+        assert_eq!(d.blend(4.9), 1.);
+        assert_eq!(d.place(1, 3, 4900, 15.), crew_place(to, 1, 3, 4.9, 15.));
+        d.advance(4900, &mut rng);
+        assert_eq!((d.from, d.to), (to, to));
+    }
+
+    #[test]
+    fn leapfrog_walks_then_jumps_over() {
+        let at = |t| crew_place(CrewMove::Leapfrog, 0, 3, t, 15.);
+        // Most of the way it walks left to right on the ground.
+        let (start, walk) = (at(0.), at(0.35 / 0.55));
+        assert_eq!((start.x, start.y, start.rz), (-15., 6., 0.));
+        assert!(walk.x > start.x && walk.y == 6. && walk.rz == 0.);
+        // Then it leaps back over the others, turning a full circle.
+        let top = at(0.85 / 0.55);
+        assert!(
+            top.x.abs() < 0.01 && top.y < -17.9 && top.z < -9.9,
+            "{top:?}"
+        );
+        assert!((top.rz + 180.).abs() < 0.1, "{top:?}");
+    }
+
+    #[test]
+    fn totem_and_dosado_place_an_odd_crew() {
+        for n in [3, 5] {
+            for t in [0., 1.3, 7.7] {
+                let all = |mv| (0..n).map(move |i| crew_place(mv, i, n, t, crew_radius(n)));
+                assert!(all(CrewMove::Totem)
+                    .chain(all(CrewMove::Dosado))
+                    .all(|p| [p.x, p.y, p.z].iter().all(|v| v.is_finite())));
+                // The totem stacks them bottom to top, nearest on top.
+                let totem: Vec<_> = all(CrewMove::Totem).collect();
+                assert!(totem.windows(2).all(|w| w[0].y < w[1].y && w[0].z < w[1].z));
+            }
+            // The odd one out of the do-si-do dances on the right end.
+            let last = crew_place(CrewMove::Dosado, n - 1, n, 0., crew_radius(n));
+            assert_eq!(last.x, crew_radius(n) * 0.7 + 11.);
+        }
+        let mut d = CrewDance::new(0);
+        d.to = CrewMove::Dosado;
+        d.from = CrewMove::Dosado;
+        assert_eq!(crew_at(&[0, 1, 2, 3, 4], &d, 2000).len(), 5);
+    }
+
+    #[test]
+    fn a_turned_sheet_squeezes_and_mirrors_past_a_quarter() {
+        let d = CrewDance::new(0);
+        let mut cut = crew_at(&[0, 1], &d, 0).remove(0);
+        cut.sway = 0.;
+        cut.scale = 1.;
+        let ((ax, ay), (bx, by)) = cut.axes();
+        assert_eq!((ax, ay, bx, by), (CREW_CELL, 0., 0., CREW_CELL));
+        cut.ry = 120f32.to_radians();
+        let ((ax, _), _) = cut.axes();
+        assert!((ax + CREW_CELL / 2.).abs() < 1e-5, "{ax}");
+        cut.ry = 0.;
+        cut.rz = 90f32.to_radians();
+        let ((ax, ay), (bx, by)) = cut.axes();
+        assert!(ax.abs() < 1e-5 && (ay - CREW_CELL).abs() < 1e-5);
+        assert!((bx + CREW_CELL).abs() < 1e-5 && by.abs() < 1e-5);
     }
 
     #[test]
     fn a_pane_keeps_its_shade_wherever_it_is_in_the_crew() {
         let shade = |crew: &[u32], pane| {
-            crew_at(crew, 1234)
+            crew_at(crew, &CrewDance::new(0), 1234)
                 .into_iter()
                 .find(|c| c.pane == pane)
                 .unwrap()
