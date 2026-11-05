@@ -132,6 +132,8 @@ pub(super) struct ChatState {
     /// Each circle's panes for @-mentions, and when they were asked for.
     panes: HashMap<String, Vec<PaneRow>>,
     panes_at: HashMap<String, Instant>,
+    /// When Compact was last clicked, for its cooldown.
+    compact_at: Option<Instant>,
     /// Catch me up is in flight, or finished at this time.
     catchup_busy: bool,
     catchup_done: Option<Instant>,
@@ -378,13 +380,49 @@ fn reset_label(ts_ms: u64, with_day: bool) -> String {
     }
 }
 
+/// Context use from which the number is yellow, and from which it is orange
+/// and Compact is offered.
+const CTX_YELLOW: u32 = 30;
+const CTX_ORANGE: u32 = 50;
+/// A Compact click is not taken again for this long.
+const COMPACT_COOLDOWN: Duration = Duration::from_secs(5);
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Heat {
+    Calm,
+    Yellow,
+    Orange,
+}
+
+impl Heat {
+    fn color(self) -> gpui::Hsla {
+        match self {
+            Self::Calm => SeancePalette::text_faint(),
+            Self::Yellow => gpui::rgb(0xe8c34a).into(),
+            Self::Orange => gpui::rgb(0xff9f43).into(),
+        }
+    }
+}
+
+fn ctx_heat(percent: u32) -> Heat {
+    match percent {
+        p if p >= CTX_ORANGE => Heat::Orange,
+        p if p >= CTX_YELLOW => Heat::Yellow,
+        _ => Heat::Calm,
+    }
+}
+
 /// The thin usage line under the thread header, like the phone's: "5h 18% ·
 /// ⟳ 12:50 PM   7d 35% · ⟳ Thu 2 AM   ctx 28%". Numbers go red from 80%, the
-/// last (ctx, the lead's own context and not the plan's) from 30%. None when
-/// nothing is known.
-fn usage_strip(u: Option<&Usage>, context: Option<u32>) -> Option<AnyElement> {
-    let part = |label: &str, used: f64, hot_at: f64, resets: Option<(u64, bool)>| {
-        let hot = used >= hot_at;
+/// last (ctx, the lead's own context and not the plan's) turns yellow from 30%
+/// and orange from 50%, never red; from 50% `compact` (a button) follows it.
+/// None when nothing is known.
+fn usage_strip(
+    u: Option<&Usage>,
+    context: Option<u32>,
+    compact: Option<AnyElement>,
+) -> Option<AnyElement> {
+    let part = |label: &str, used: f64, color: gpui::Hsla, resets: Option<(u64, bool)>| {
         div()
             .flex()
             .items_center()
@@ -393,24 +431,28 @@ fn usage_strip(u: Option<&Usage>, context: Option<u32>) -> Option<AnyElement> {
             .child(
                 div()
                     .font_semibold()
-                    .text_color(if hot {
-                        SeancePalette::danger()
-                    } else {
-                        SeancePalette::text_faint()
-                    })
+                    .text_color(color)
                     .child(format!("{}%", used.round() as i64)),
             )
             .children(resets.map(|(at, with_day)| format!("· ⟳ {}", reset_label(at, with_day))))
     };
     let window = |label: &str, w: &UsageWindow, with_day: bool| {
-        part(label, w.used, 80., w.resets.map(|at| (at, with_day)))
+        let color = if w.used >= 80. {
+            SeancePalette::danger()
+        } else {
+            SeancePalette::text_faint()
+        };
+        part(label, w.used, color, w.resets.map(|at| (at, with_day)))
     };
     let parts: Vec<_> = [
         u.and_then(|u| u.five_hour.as_ref())
             .map(|w| window("5h", w, false)),
         u.and_then(|u| u.seven_day.as_ref())
             .map(|w| window("7d", w, true)),
-        context.map(|c| part("ctx", f64::from(c), 30., None)),
+        context.map(|c| {
+            part("ctx", f64::from(c), ctx_heat(c).color(), None)
+                .when(c >= CTX_ORANGE, |d| d.children(compact))
+        }),
     ]
     .into_iter()
     .flatten()
@@ -941,6 +983,48 @@ impl SeanceApp {
             });
         })
         .detach();
+    }
+
+    /// Send `/compact` to the open circle's lead, as the composer would.
+    fn chat_compact(&mut self, cx: &mut Context<Self>) {
+        let Some(ws) = self.chat.selected.clone() else {
+            return;
+        };
+        if self.compact_locked() || ws == ALERTS_WS {
+            return;
+        }
+        self.chat.compact_at = Some(Instant::now());
+        // The button comes back on its own once the wait is over.
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(COMPACT_COOLDOWN).await;
+            let _ = this.update(cx, |_, cx| cx.notify());
+        })
+        .detach();
+        self.chat_post(ws, "/compact".to_string(), None, cx);
+    }
+
+    fn compact_locked(&self) -> bool {
+        self.chat
+            .compact_at
+            .is_some_and(|at| at.elapsed() < COMPACT_COOLDOWN)
+    }
+
+    /// The Compact button beside a high ctx; dimmed and dead after a click.
+    fn compact_button(&self, cx: &Context<Self>) -> AnyElement {
+        let locked = self.compact_locked();
+        div()
+            .id("chat-compact")
+            .underline()
+            .text_color(SeancePalette::text_dim())
+            .tooltip(tip("send /compact to the lead"))
+            .when(locked, |d| d.opacity(0.4))
+            .when(!locked, |d| {
+                d.hover(|s| s.text_color(SeancePalette::flame()))
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| this.chat_compact(cx)))
+            })
+            .child("Compact")
+            .into_any_element()
     }
 
     /// Catch me up is working, or was a moment ago.
@@ -1782,6 +1866,7 @@ impl SeanceApp {
             .children(usage_strip(
                 self.chat.usage.as_ref(),
                 self.chat.threads.get(&ws).and_then(|t| t.context),
+                Some(self.compact_button(cx)).filter(|_| !read_only),
             ));
         if let Some(e) = &self.chat.error {
             col = col.child(
@@ -2331,8 +2416,8 @@ mod tests {
 
     #[test]
     fn usage_strip_hides_without_windows() {
-        assert!(usage_strip(Some(&Usage::default()), None).is_none());
-        assert!(usage_strip(None, None).is_none());
+        assert!(usage_strip(Some(&Usage::default()), None, None).is_none());
+        assert!(usage_strip(None, None, None).is_none());
         let one = Usage {
             five_hour: Some(UsageWindow {
                 used: 18.,
@@ -2340,9 +2425,22 @@ mod tests {
             }),
             seven_day: None,
         };
-        assert!(usage_strip(Some(&one), None).is_some());
+        assert!(usage_strip(Some(&one), None, None).is_some());
         // The lead's context alone is enough to show the strip.
-        assert!(usage_strip(None, Some(28)).is_some());
+        assert!(usage_strip(None, Some(28), None).is_some());
+        // Calm under 30, yellow from 30, orange from 50 (Compact's threshold).
+        let heat = |c| ctx_heat(c);
+        assert_eq!(
+            [heat(0), heat(29), heat(30), heat(49), heat(50), heat(100)],
+            [
+                Heat::Calm,
+                Heat::Calm,
+                Heat::Yellow,
+                Heat::Yellow,
+                Heat::Orange,
+                Heat::Orange
+            ]
+        );
     }
 
     #[test]
