@@ -147,7 +147,7 @@ fn dance_step(phase: u64, beat: u64) -> (f32, f32) {
 /// line each time, and five pokes within [`POKE_WINDOW_MS`] throw a party.
 pub(super) const DANCE_MS: u64 = 960;
 pub(super) const LINE_MS: u64 = 2400;
-pub(super) const PARTY_MS: u64 = 5000;
+pub(super) const PARTY_MS: u64 = 7000;
 const POKE_WINDOW_MS: u64 = 3000;
 const PARTY_POKES: usize = 5;
 pub(super) const PARTY_LINE: &str = "A seance party! The spirits are out.";
@@ -168,7 +168,7 @@ const LINES: [&str; 10] = [
 pub(super) enum Poke {
     /// Play `MOVES[mv]` and say `line`.
     Dance { mv: usize, line: &'static str },
-    /// Every creature dances for [`PARTY_MS`].
+    /// A party scene over Chat for [`PARTY_MS`], and every creature dances.
     Party,
 }
 
@@ -192,41 +192,6 @@ impl Pokes {
     }
 }
 
-/// The party's pixel spirits: this many, each alive for [`SPIRIT_LIFE_MS`],
-/// starting one after another over the party.
-pub(super) const SPIRITS: usize = 40;
-const SPIRIT_LIFE_MS: u64 = 2500;
-
-/// Where one spirit is, `t` ms into the party: its offset in points from the
-/// creature, its size, how opaque it is, and whether it takes the accent
-/// color (else the creature's own).
-pub(super) struct Spirit {
-    pub dx: f32,
-    pub dy: f32,
-    pub size: f32,
-    pub alpha: f32,
-    pub accent: bool,
-}
-
-/// None before spirit `i` is out, and after it has faded.
-pub(super) fn spirit_at(i: usize, t: u64) -> Option<Spirit> {
-    let delay = i as u64 * (PARTY_MS - SPIRIT_LIFE_MS) / SPIRITS as u64;
-    let age = t.checked_sub(delay).filter(|a| *a < SPIRIT_LIFE_MS)?;
-    let mut rng = Rng((i as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
-    let secs = age as f32 / 1000.;
-    // Out and down into the view with a little sway, like a drifting ghost.
-    let vx = rng.below(280) as f32 - 140.;
-    let vy = 20. + rng.below(170) as f32;
-    let sway = (secs * 5. + i as f32).sin() * 10.;
-    Some(Spirit {
-        dx: vx * secs + sway,
-        dy: vy * secs,
-        size: 4. + rng.below(4) as f32,
-        alpha: 1. - age as f32 / SPIRIT_LIFE_MS as f32,
-        accent: i % 2 == 0,
-    })
-}
-
 /// The creature's own body color.
 pub(super) fn body_color(sprite: &Sprite) -> gpui::Hsla {
     rgb(BODY[sprite.color]).into()
@@ -237,6 +202,11 @@ static PARTY_UNTIL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64:
 
 pub(super) fn start_party(now: u64) {
     PARTY_UNTIL.store(now + PARTY_MS, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A click ended the party early.
+pub(super) fn stop_party() {
+    PARTY_UNTIL.store(0, std::sync::atomic::Ordering::Relaxed);
 }
 
 fn partying(now: u64) -> bool {
@@ -306,12 +276,15 @@ const SHEET_STAGGER_MS: u64 = 450;
 const SWAY_DEG: f32 = 40.;
 const HOP: f32 = 3.;
 const PERSPECTIVE: f32 = 170.;
+/// The party ring sits farther back on the web (`#party { perspective: 500px }`).
+const PARTY_PERSPECTIVE: f32 = 500.;
 /// Seconds to walk from one move to the next.
 const CREW_BLEND: f32 = 0.9;
 /// The first move change comes this long after the crew forms, the rest
 /// [`MOVE_SECS`] apart.
 const FIRST_MOVE_SECS: f32 = 4.;
 const MOVE_SECS: std::ops::RangeInclusive<f32> = 3.5..=6.5;
+const PARTY_MOVE_SECS: f32 = 1.5;
 
 /// The crew's moves, the web Chat's `CREW_MOVES`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -467,6 +440,8 @@ pub(super) struct CrewDance {
     to: CrewMove,
     began: f32,
     next: f32,
+    /// The party's: a new move every [`PARTY_MOVE_SECS`].
+    fast: bool,
 }
 
 impl CrewDance {
@@ -477,6 +452,16 @@ impl CrewDance {
             to: CrewMove::Circle,
             began: 0.,
             next: FIRST_MOVE_SECS,
+            fast: false,
+        }
+    }
+
+    /// The party's dance, the web's `data-fast` ring.
+    fn fast(now: u64) -> Self {
+        Self {
+            next: PARTY_MOVE_SECS,
+            fast: true,
+            ..Self::new(now)
         }
     }
 
@@ -491,7 +476,11 @@ impl CrewDance {
         if t >= self.next {
             self.from = self.to;
             self.began = t;
-            self.next = t + rng.gen_range(MOVE_SECS);
+            self.next = t + if self.fast {
+                PARTY_MOVE_SECS
+            } else {
+                rng.gen_range(MOVE_SECS)
+            };
             let at = CREW_MOVES.iter().position(|m| *m == self.to).unwrap_or(0);
             let k = rng.gen_range(0..CREW_MOVES.len() - 1);
             self.to = CREW_MOVES[if k >= at { k + 1 } else { k }];
@@ -602,17 +591,32 @@ pub(super) fn crew_at(crew: &[u32], dance: &CrewDance, now: u64) -> Vec<Cutout> 
     if !is_crew(crew) {
         return Vec::new();
     }
-    let crew = &crew[..crew.len().min(CREW_MAX)];
+    let crew: Vec<(u32, f32)> = crew
+        .iter()
+        .take(CREW_MAX)
+        .map(|&pane| (pane, CREW_SHADES[pane as usize % CREW_SHADES.len()]))
+        .collect();
+    place_cuts(&crew, dance, now, crew_radius(crew.len()), PERSPECTIVE)
+}
+
+/// Each (crew index, shade) of `crew` dancing `dance` at `now` on a ring of
+/// radius `r`, back to front.
+fn place_cuts(
+    crew: &[(u32, f32)],
+    dance: &CrewDance,
+    now: u64,
+    r: f32,
+    perspective: f32,
+) -> Vec<Cutout> {
     let n = crew.len();
-    let r = crew_radius(n);
     let tau = std::f32::consts::TAU;
     let ms = now.saturating_sub(dance.epoch);
     let mut cuts: Vec<Cutout> = crew
         .iter()
         .enumerate()
-        .map(|(i, &pane)| {
+        .map(|(i, &(pane, shade))| {
             let at = dance.place(i, n, now, r);
-            let scale = PERSPECTIVE / (PERSPECTIVE - at.z);
+            let scale = perspective / (perspective - at.z);
             // Sway side to side, hopping at each upright pass.
             let u = ((ms + i as u64 * SHEET_STAGGER_MS) % SHEET_MS) as f32 / SHEET_MS as f32;
             let sway = -SWAY_DEG.to_radians() * (tau * u).cos();
@@ -627,7 +631,7 @@ pub(super) fn crew_at(crew: &[u32], dance: &CrewDance, now: u64) -> Vec<Cutout> 
                 sway,
                 rz: at.rz.to_radians(),
                 ry: at.ry.to_radians(),
-                shade: CREW_SHADES[pane as usize % CREW_SHADES.len()],
+                shade,
             };
             // The hop is up the sheet, wherever the move has turned it.
             let (_, down) = cut.axes();
@@ -658,9 +662,6 @@ pub(super) fn render_crew(
     poked: Option<(usize, u64)>,
     zoom: f32,
 ) -> AnyElement {
-    // Half points are whole device pixels on a 2x screen, so cells meet
-    // without seams however the sheet is squeezed.
-    let snap = |v: f32| (v * 2.).round() / 2.;
     // As tall as the lone creature at the header's size, so it keeps its
     // height.
     let height = SIZE as f32 * 2.5 * zoom;
@@ -672,9 +673,22 @@ pub(super) fn render_crew(
         }
         _ => (0., 0.),
     };
+    crew_box(std::slice::from_ref(sprite), cuts, width, height, zoom)
+        .left(px(dx * 2.5 * zoom))
+        .top(px(dy * 2.5 * zoom))
+        .into_any_element()
+}
+
+/// `cuts` drawn in a `width` by `height` box, each from `sprites` by its
+/// crew index (wrapping).
+fn crew_box(sprites: &[Sprite], cuts: &[Cutout], width: f32, height: f32, zoom: f32) -> gpui::Div {
+    // Half points are whole device pixels on a 2x screen, so cells meet
+    // without seams however the sheet is squeezed.
+    let snap = |v: f32| (v * 2.).round() / 2.;
     let ink = gpui::Hsla::from(rgb(INK));
     let mut cells = Vec::new();
     for cut in cuts {
+        let sprite = &sprites[cut.pane as usize % sprites.len()];
         let body = gpui::Hsla::from(rgb(shade_rgb(BODY[sprite.color], cut.shade)));
         // Farther cutouts a little darker, for depth.
         let body = gpui::Hsla {
@@ -745,18 +759,209 @@ pub(super) fn render_crew(
     div()
         .flex_none()
         .relative()
-        .left(px(dx * 2.5 * zoom))
-        .top(px(dy * 2.5 * zoom))
         .w(px(width))
         .h(px(height))
         .children(cells)
-        .into_any_element()
 }
 
 /// A circle's creature, honoring its `seance-lead-sprite.<slug>` override.
 pub(super) fn for_circle(slug: &str) -> Sprite {
     let conf = crate::term_config::get();
     generate(conf.lead_sprites.get(slug).map_or(slug, String::as_str))
+}
+
+/// How many creatures dance at the party, under how many pieces of
+/// confetti.
+const PARTY_CREW: usize = 8;
+pub(super) const CONFETTI: usize = 140;
+/// The ring's radius before it is scaled up, at most.
+const PARTY_R: f32 = 60.;
+/// Spinning in, and out again at the end.
+const PARTY_SPIN_MS: u64 = PARTY_MS * 12 / 100;
+/// The scene fades in this long, and out over the last [`PARTY_FADE_OUT_MS`].
+const PARTY_FADE_IN_MS: u64 = PARTY_MS * 8 / 100;
+const PARTY_FADE_OUT_MS: u64 = PARTY_MS / 10;
+/// Lamp gold and genie purple, between the creatures' own colors.
+const LAMP: u32 = 0xe9a03a;
+pub(super) const GENIE: u32 = 0x7c5cff;
+
+/// The five-click party over Chat, the web Chat's `eggParty`: the circles'
+/// creatures spin in big, run through the crew's moves with a new one every
+/// [`PARTY_MOVE_SECS`] under falling confetti, then spin away. A click ends
+/// it.
+pub(super) struct Party {
+    /// When it began (unix ms).
+    pub at: u64,
+    sprites: Vec<Sprite>,
+    shades: Vec<f32>,
+    dance: CrewDance,
+}
+
+impl Party {
+    /// `home` (this circle's creature) and `others` (the other circles').
+    pub(super) fn new(
+        home: Sprite,
+        others: impl IntoIterator<Item = Sprite>,
+        now: u64,
+        rng: &mut impl rand::Rng,
+    ) -> Self {
+        let (sprites, shades) = party_slots(home, others, rng).into_iter().unzip();
+        Self {
+            at: now,
+            sprites,
+            shades,
+            dance: CrewDance::fast(now),
+        }
+    }
+
+    pub(super) fn on(&self, now: u64) -> bool {
+        now.saturating_sub(self.at) < PARTY_MS
+    }
+
+    pub(super) fn advance(&mut self, now: u64, rng: &mut impl rand::Rng) {
+        self.dance.advance(now, rng);
+    }
+
+    /// Confetti piece `i`'s color: lamp gold, genie purple or a creature's.
+    pub(super) fn confetti_color(&self, i: usize) -> gpui::Hsla {
+        match i % 4 {
+            0 => rgb(LAMP).into(),
+            1 => rgb(GENIE).into(),
+            _ => body_color(&self.sprites[i % self.sprites.len()]),
+        }
+    }
+
+    /// The crew at `now` on a ring of radius `r`, spun and scaled as the
+    /// scene is.
+    fn cuts(&self, now: u64, r: f32) -> Vec<Cutout> {
+        let Some(scene) = party_scene(now.saturating_sub(self.at)) else {
+            return Vec::new();
+        };
+        let crew: Vec<(u32, f32)> = (0..).zip(self.shades.iter().copied()).collect();
+        let mut cuts = place_cuts(&crew, &self.dance, now, r, PARTY_PERSPECTIVE);
+        // gpui cannot turn the ring, so each cutout goes round its centre
+        // and turns in its plane by as much; close enough for a spin.
+        let (sin, cos) = scene.turn.sin_cos();
+        for c in &mut cuts {
+            let (x, y) = (c.x, c.y);
+            c.x = scene.grow * (x * cos - y * sin);
+            c.y = scene.grow * (x * sin + y * cos);
+            c.scale *= scene.grow;
+            c.rz += scene.turn;
+        }
+        cuts
+    }
+
+    /// The crew, sized for a view `view_w` points wide as the web sizes it.
+    pub(super) fn render(&self, now: u64, view_w: f32) -> AnyElement {
+        let zoom = (view_w / 150.).min(2.6);
+        let r = PARTY_R.min(view_w * 0.32 / zoom);
+        let side = SIZE as f32 * CREW_CELL;
+        crew_box(
+            &self.sprites,
+            &self.cuts(now, r),
+            (2. * r + side) * zoom,
+            side * zoom,
+            zoom,
+        )
+        .into_any_element()
+    }
+}
+
+/// The party's crew, slot by slot: `home` first, then the other circles'
+/// distinct creatures shuffled, up to [`PARTY_CREW`], then `home` again
+/// until it is full. Home wears [`CREW_SHADES`] by slot, the others their own
+/// color.
+fn party_slots(
+    home: Sprite,
+    others: impl IntoIterator<Item = Sprite>,
+    rng: &mut impl rand::Rng,
+) -> Vec<(Sprite, f32)> {
+    use rand::seq::SliceRandom;
+    let mut rest: Vec<Sprite> = Vec::new();
+    for s in others {
+        if s != home && !rest.contains(&s) {
+            rest.push(s);
+        }
+    }
+    rest.shuffle(rng);
+    rest.truncate(PARTY_CREW - 1);
+    let fill = PARTY_CREW - 1 - rest.len();
+    std::iter::once(home.clone())
+        .chain(rest)
+        .chain(std::iter::repeat_n(home.clone(), fill))
+        .enumerate()
+        .map(|(i, s)| {
+            let shade = if s == home {
+                CREW_SHADES[i % CREW_SHADES.len()]
+            } else {
+                0.
+            };
+            (s, shade)
+        })
+        .collect()
+}
+
+/// The scene `t` ms into the party: how opaque it is, and how grown (0 to 1)
+/// and turned (radians) the crew's ring is.
+#[derive(Debug, PartialEq)]
+pub(super) struct Scene {
+    pub fade: f32,
+    pub grow: f32,
+    pub turn: f32,
+}
+
+/// None once the party is over.
+pub(super) fn party_scene(t: u64) -> Option<Scene> {
+    if t >= PARTY_MS {
+        return None;
+    }
+    let fade = if t < PARTY_FADE_IN_MS {
+        t as f32 / PARTY_FADE_IN_MS as f32
+    } else {
+        ((PARTY_MS - t) as f32 / PARTY_FADE_OUT_MS as f32).min(1.)
+    };
+    let ease = |b: f32| b * b * (3. - 2. * b);
+    let spin = 200f32.to_radians();
+    let (grow, turn) = if t < PARTY_SPIN_MS {
+        let e = ease(t as f32 / PARTY_SPIN_MS as f32);
+        (e, -spin * (1. - e))
+    } else if t >= PARTY_MS - PARTY_SPIN_MS {
+        let e = ease((t - (PARTY_MS - PARTY_SPIN_MS)) as f32 / PARTY_SPIN_MS as f32);
+        (1. - e, spin * e)
+    } else {
+        (1., 0.)
+    };
+    Some(Scene { fade, grow, turn })
+}
+
+/// Confetti piece `i` of [`CONFETTI`], `t` ms into the party `seed` began,
+/// over a view `w` by `h` points: its top left, or None before it starts
+/// falling, after it has fallen past the bottom, and once the party is over.
+/// Each starts in its own 0 to 4.2 s and falls for 1.6 to 3.2 s, drifting up
+/// to 60 points either way, as the web's `partyFall`.
+pub(super) fn confetti_at(seed: u64, i: usize, t: u64, w: f32, h: f32) -> Option<(f32, f32)> {
+    if t >= PARTY_MS {
+        return None;
+    }
+    let mut rng = Rng((seed ^ (i as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15)) | 1);
+    let left = rng.below(1001) as f32 / 1000. * w;
+    let drift = rng.below(121) as f32 - 60.;
+    let fall = 1600 + rng.below(1601) as u64;
+    let delay = rng.below(4201) as u64;
+    let age = t.checked_sub(delay).filter(|a| *a < fall)?;
+    let p = age as f32 / fall as f32;
+    Some((left + drift * p, -12. + p * 1.1 * h))
+}
+
+/// A click on the party. On the header's creature it is one more poke and
+/// ignored, as those are while a party runs; anywhere else it ends the
+/// party. True if that party was still on, so ended early.
+pub(super) fn click_party(party: &mut Option<Party>, now: u64, on_creature: bool) -> bool {
+    if on_creature && party.as_ref().is_some_and(|p| p.on(now)) {
+        return false;
+    }
+    party.take().is_some_and(|p| p.on(now))
 }
 
 #[cfg(test)]
@@ -845,7 +1050,7 @@ mod tests {
     }
 
     #[test]
-    fn every_line_comes_up_and_the_party_runs_five_seconds() {
+    fn every_line_comes_up_and_the_party_runs_seven_seconds() {
         let mut seen = std::collections::HashSet::new();
         for i in 0..400 {
             if let Poke::Dance { line, .. } = Pokes::default().poke(i * 7_919) {
@@ -856,6 +1061,9 @@ mod tests {
         start_party(10_000);
         assert!(partying(10_000 + PARTY_MS - 1));
         assert!(!partying(10_000 + PARTY_MS));
+        start_party(10_000);
+        stop_party();
+        assert!(!partying(10_001));
     }
 
     #[test]
@@ -1042,20 +1250,136 @@ mod tests {
     }
 
     #[test]
-    fn spirits_come_out_in_turn_and_fade() {
-        // None is out before the party starts or after it is over.
-        assert!((0..SPIRITS).all(|i| spirit_at(i, PARTY_MS + 1).is_none()));
-        assert!(spirit_at(SPIRITS - 1, 0).is_none());
-        // The first is out at once, and every one is seen at some point.
-        assert!(spirit_at(0, 0).is_some());
-        for i in 0..SPIRITS {
-            assert!((0..=PARTY_MS)
-                .step_by(50)
-                .any(|t| spirit_at(i, t).is_some()));
+    fn the_party_spins_in_holds_then_spins_out() {
+        let at = |t| party_scene(t).unwrap();
+        // From nothing, turned back, and faded out.
+        assert_eq!((at(0).grow, at(0).fade), (0., 0.));
+        assert!((at(0).turn + 200f32.to_radians()).abs() < 1e-5);
+        let mid = at(PARTY_SPIN_MS / 2);
+        assert!(mid.grow > 0. && mid.grow < 1. && mid.turn < 0.);
+        // Steady and fully shown between the spins.
+        for t in (PARTY_SPIN_MS..PARTY_MS - PARTY_SPIN_MS).step_by(250) {
+            assert_eq!((at(t).grow, at(t).turn), (1., 0.), "t={t}");
         }
-        // It fades as it ages and keeps drifting away from the creature.
-        let (a, b) = (spirit_at(0, 100).unwrap(), spirit_at(0, 2000).unwrap());
-        assert!(a.alpha > b.alpha && b.alpha > 0.);
-        assert!(b.dx.hypot(b.dy) > a.dx.hypot(a.dy));
+        assert_eq!(at(PARTY_MS / 2).fade, 1.);
+        // Spinning away the other way, and gone at seven seconds.
+        let out = at(PARTY_MS - PARTY_SPIN_MS / 2);
+        assert!(out.grow > 0. && out.grow < 1. && out.turn > 0.);
+        assert!(at(PARTY_MS - 1).grow < 0.01 && at(PARTY_MS - 1).fade < 0.01);
+        assert_eq!(PARTY_MS, 7000);
+        assert!(party_scene(PARTY_MS).is_none() && party_scene(PARTY_MS + 5000).is_none());
+    }
+
+    #[test]
+    fn the_party_crew_changes_move_every_second_and_a_half() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(3);
+        let mut d = CrewDance::fast(1_000);
+        let mut changes = Vec::new();
+        for now in (1_000..1_000 + PARTY_MS).step_by(16) {
+            let was = d.to;
+            d.advance(now, &mut rng);
+            if d.to != was {
+                changes.push(now - 1_000);
+            }
+        }
+        // At 1.5, 3, 4.5 and 6 s, to the nearest frame.
+        assert_eq!(changes.len(), 4, "{changes:?}");
+        for (k, at) in changes.iter().enumerate() {
+            let due = 1_500 * (k as u64 + 1);
+            assert!(*at >= due && *at < due + 16 * (k as u64 + 1), "{changes:?}");
+        }
+        // Never the same move twice running.
+        let mut d = CrewDance::fast(0);
+        for _ in 0..500 {
+            let was = d.to;
+            d.advance((d.next * 1000.).ceil() as u64 + 1, &mut rng);
+            assert_ne!(d.to, was);
+            assert!((d.next - d.began - PARTY_MOVE_SECS).abs() < 1e-3);
+        }
+    }
+
+    #[test]
+    fn confetti_falls_in_view_for_the_party_only() {
+        let (w, h) = (900., 600.);
+        for i in 0..CONFETTI {
+            assert_eq!(
+                confetti_at(42, i, 2_000, w, h),
+                confetti_at(42, i, 2_000, w, h)
+            );
+            // Every piece falls at some point, and none after the party.
+            let seen: Vec<_> = (0..PARTY_MS)
+                .step_by(10)
+                .filter_map(|t| confetti_at(42, i, t, w, h))
+                .collect();
+            assert!(!seen.is_empty(), "piece {i}");
+            for (x, y) in seen {
+                assert!((-60. ..=w + 60.).contains(&x), "{x}");
+                assert!((-12. ..=1.1 * h - 12.).contains(&y), "{y}");
+            }
+            assert!(confetti_at(42, i, PARTY_MS, w, h).is_none());
+        }
+    }
+
+    #[test]
+    fn the_party_crew_is_eight_with_home_first_and_shaded() {
+        use rand::SeedableRng;
+        let home = generate("home");
+        let others = ["a", "b", "c"].map(generate);
+        let mut rng = rand::rngs::StdRng::seed_from_u64(9);
+        // Repeats and home itself among the others are dropped, then home
+        // fills the rest, shaded by slot.
+        let mut given = others.to_vec();
+        given.extend([others[0].clone(), home.clone()]);
+        let slots = party_slots(home.clone(), given, &mut rng);
+        assert_eq!(slots.len(), PARTY_CREW);
+        assert_eq!(slots[0], (home.clone(), 0.));
+        for o in &others {
+            assert_eq!(slots.iter().filter(|(s, _)| s == o).count(), 1);
+        }
+        for (i, (s, shade)) in slots.iter().enumerate() {
+            let want = if *s == home {
+                CREW_SHADES[i % CREW_SHADES.len()]
+            } else {
+                0.
+            };
+            assert_eq!(*shade, want, "slot {i}");
+        }
+        assert!(slots[4..].iter().all(|(s, _)| *s == home));
+        // More circles than slots: no repeats, and the rng picks the order.
+        let many: Vec<Sprite> = (0..12).map(|i| generate(&format!("c{i}"))).collect();
+        let pick = |seed| {
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            party_slots(home.clone(), many.clone(), &mut rng)
+        };
+        let a = pick(1);
+        assert_eq!(a.len(), PARTY_CREW);
+        assert_eq!(a.iter().filter(|(s, _)| *s == home).count(), 1);
+        assert_eq!(a, pick(1));
+        assert!((2..20).any(|seed| pick(seed) != a));
+    }
+
+    #[test]
+    fn a_click_ends_the_party_early() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0);
+        let start = |rng: &mut rand::rngs::StdRng| {
+            Some(Party::new(generate("home"), [generate("a")], 10_000, rng))
+        };
+        let mut party = start(&mut rng);
+        // A click on the header's creature is an ignored poke.
+        assert!(!click_party(&mut party, 11_000, true));
+        assert!(party.is_some());
+        assert!(click_party(&mut party, 12_000, false));
+        assert!(party.is_none());
+        // Over already, or none: nothing ended early.
+        let mut party = start(&mut rng);
+        assert!(!click_party(&mut party, 10_000 + PARTY_MS, false));
+        assert!(party.is_none());
+        assert!(!click_party(&mut None, 12_000, false));
+        // The crew is gone once the party is over.
+        let party = start(&mut rng).unwrap();
+        assert_eq!(party.cuts(12_000, PARTY_R).len(), PARTY_CREW);
+        assert!(party.cuts(10_000 + PARTY_MS, PARTY_R).is_empty());
     }
 }
