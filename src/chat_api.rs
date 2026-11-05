@@ -34,6 +34,9 @@ pub struct CircleRow {
     pub unread: u32,
     #[serde(default)]
     pub working: bool,
+    /// Its crew, as [`Thread::crew`]: two or more dance in its list row.
+    #[serde(default)]
+    pub crew: Vec<u32>,
     #[serde(default)]
     pub last: Option<Msg>,
 }
@@ -118,8 +121,9 @@ pub struct Thread {
     /// no status line, or Alerts).
     #[serde(default)]
     pub context: Option<u32>,
-    /// Indexes of the circle's panes that are working; two or more dance as a
-    /// crew in the header.
+    /// Who dances in the circle's crew: its busy panes by their place in the
+    /// circle, then running subagents numbered after every pane. Two or more
+    /// dance as a crew in the header.
     #[serde(default)]
     pub crew: Vec<u32>,
 }
@@ -694,7 +698,7 @@ mod tests {
     #[test]
     fn circles_parse_with_a_missing_last_message() {
         let c: Circles = serde_json::from_str(
-            r#"{"circles":[{"ws":"main","name":"PM","unread":2,"working":true,
+            r#"{"circles":[{"ws":"main","name":"PM","unread":2,"working":true,"crew":[0,4,9],
             "last":{"from":"lead","text":"hi","ts":5,"image":null}},
             {"ws":"b","name":"B","last":null}],"v":20,"afk":{"on":true}}"#,
         )
@@ -703,6 +707,8 @@ mod tests {
         assert_eq!(c.circles[0].unread, 2);
         assert_eq!(c.circles[0].last.as_ref().unwrap().text, "hi");
         assert!(c.circles[1].last.is_none() && !c.circles[1].working);
+        assert_eq!(c.circles[0].crew, [0, 4, 9]);
+        assert!(c.circles[1].crew.is_empty());
     }
 
     #[test]

@@ -296,8 +296,9 @@ pub(super) fn render_move(
 /// here.
 const CREW_CELL: f32 = 2.;
 const CREW_MAX: usize = 6;
-/// A step toward white (positive) or black per pane index, so a pane keeps
-/// its shade wherever it is in the crew. 0 is the circle's own color.
+/// A step toward white (positive) or black per crew index, wrapping past
+/// six, so a dancer keeps its shade wherever it is in the crew. 0 is the
+/// circle's own color.
 const CREW_SHADES: [f32; CREW_MAX] = [0., 0.3, -0.3, 0.55, -0.5, 0.75];
 const SHEET_MS: u64 = 1700;
 /// Each sheet runs this far ahead of the one before it.
@@ -528,6 +529,8 @@ impl CrewDance {
 /// One cutout of the crew at a moment.
 #[derive(Debug, PartialEq)]
 pub(super) struct Cutout {
+    /// Its crew index: a pane's place in the circle, or a subagent's number
+    /// after the panes.
     pub pane: u32,
     /// Its centre from the ring's on screen, in points (y down), perspective
     /// and hop included.
@@ -568,12 +571,31 @@ fn crew_radius(n: usize) -> f32 {
     (4.2 * n as f32).max(15.)
 }
 
-/// Whether these working panes (indexes) make a crew: two or more.
+/// Whether these dancers (busy panes, then running subagents) make a crew:
+/// two or more.
 pub(super) fn is_crew(crew: &[u32]) -> bool {
     crew.len() >= 2
 }
 
-/// The first [`CREW_MAX`] of `crew` (pane indexes) dancing `dance` at `now`
+/// One dance per circle whose crew is two or more, as the web Chat keeps one
+/// per list row: made when the crew forms, kept while it lasts, dropped when
+/// it falls under two or the circle goes.
+pub(super) fn keep_crew_dances<'a>(
+    dances: &mut std::collections::HashMap<String, CrewDance>,
+    crews: impl IntoIterator<Item = (&'a str, &'a [u32])>,
+    now: u64,
+) {
+    let mut kept = std::collections::HashMap::new();
+    for (ws, crew) in crews {
+        if is_crew(crew) {
+            let dance = dances.remove(ws).unwrap_or_else(|| CrewDance::new(now));
+            kept.insert(ws.to_string(), dance);
+        }
+    }
+    *dances = kept;
+}
+
+/// The first [`CREW_MAX`] of `crew` (crew indexes) dancing `dance` at `now`
 /// (unix ms), back to front so nearer cutouts are drawn over farther ones.
 /// Empty under two.
 pub(super) fn crew_at(crew: &[u32], dance: &CrewDance, now: u64) -> Vec<Cutout> {
@@ -605,7 +627,7 @@ pub(super) fn crew_at(crew: &[u32], dance: &CrewDance, now: u64) -> Vec<Cutout> 
                 sway,
                 rz: at.rz.to_radians(),
                 ry: at.ry.to_radians(),
-                shade: CREW_SHADES[pane as usize % CREW_MAX],
+                shade: CREW_SHADES[pane as usize % CREW_SHADES.len()],
             };
             // The hop is up the sheet, wherever the move has turned it.
             let (_, down) = cut.axes();
@@ -627,19 +649,22 @@ fn shade_rgb(color: u32, step: f32) -> u32 {
     })
 }
 
-/// The header's crew from [`crew_at`]'s `cuts`. `poked` moves the whole ring
-/// through that move, as [`render_move`] does one creature.
+/// A crew from [`crew_at`]'s `cuts`, `zoom` times the header's size. `poked`
+/// moves the whole ring through that move, as [`render_move`] does one
+/// creature.
 pub(super) fn render_crew(
     sprite: &Sprite,
     cuts: &[Cutout],
     poked: Option<(usize, u64)>,
+    zoom: f32,
 ) -> AnyElement {
     // Half points are whole device pixels on a 2x screen, so cells meet
     // without seams however the sheet is squeezed.
     let snap = |v: f32| (v * 2.).round() / 2.;
-    // As tall as the lone creature, so the header keeps its height.
-    let height = SIZE as f32 * 2.5;
-    let width = 2. * crew_radius(cuts.len()) + SIZE as f32 * CREW_CELL;
+    // As tall as the lone creature at the header's size, so it keeps its
+    // height.
+    let height = SIZE as f32 * 2.5 * zoom;
+    let width = (2. * crew_radius(cuts.len()) + SIZE as f32 * CREW_CELL) * zoom;
     let now = super::util::now_ms();
     let (dx, dy) = match poked {
         Some((mv, start)) if now.saturating_sub(start) < DANCE_MS => {
@@ -660,21 +685,39 @@ pub(super) fn render_crew(
         // centre turns with the sheet; it covers its turned square's bounds,
         // which leaves no gaps when tilted.
         let ((ax, ay), (bx, by)) = cut.axes();
+        let (ax, ay, bx, by) = (ax * zoom, ay * zoom, bx * zoom, by * zoom);
         let (cw, ch) = (ax.abs() + bx.abs(), ay.abs() + by.abs());
+        // Unturned in its plane, a row's cells share a line, so a run of one
+        // fill is one div; turned, each cell is placed on its own.
+        let merge = cut.rz == 0.;
         // The sheet's thin dark edge, right of each run of cells (left once
         // ry has mirrored the sheet).
         let edge = snap(ax.abs() * 0.4).max(0.5);
         let half = SIZE as f32 / 2.;
+        let centre = |x: usize, y: usize| {
+            let (u, v) = (x as f32 + 0.5 - half, y as f32 + 0.5 - half);
+            (
+                width / 2. + cut.x * zoom + ax * u + bx * v,
+                height / 2. + cut.y * zoom + ay * u + by * v,
+            )
+        };
         for (y, line) in sprite.cells.iter().enumerate() {
+            let mut start = 0;
             for (x, c) in line.iter().enumerate() {
+                if x == 0 || line[x - 1] != *c {
+                    start = x;
+                }
                 let fill = match c {
                     Cell::Empty => continue,
                     Cell::Body => body,
                     Cell::Eye => ink,
                 };
-                let (u, v) = (x as f32 + 0.5 - half, y as f32 + 0.5 - half);
-                let cx = width / 2. + cut.x + ax * u + bx * v;
-                let cy = height / 2. + cut.y + ay * u + by * v;
+                // Drawn at its run's last cell.
+                if merge && line.get(x + 1) == Some(c) {
+                    continue;
+                }
+                let (from, _) = centre(if merge { start } else { x }, y);
+                let (cx, cy) = centre(x, y);
                 let (top, bottom) = (snap(cy - ch / 2.), snap(cy + ch / 2.));
                 let at = |l: f32, r: f32| {
                     div()
@@ -684,7 +727,9 @@ pub(super) fn render_crew(
                         .w(px(r - l))
                         .h(px(bottom - top))
                 };
-                cells.push(at(snap(cx - cw / 2.), snap(cx + cw / 2.)).bg(fill));
+                // A mirrored sheet runs right to left.
+                let (l, r) = (from.min(cx) - cw / 2., from.max(cx) + cw / 2.);
+                cells.push(at(snap(l), snap(r)).bg(fill));
                 if line.get(x + 1).is_none_or(|n| *n == Cell::Empty) {
                     let side = snap(cx + ax / 2.);
                     let (l, r) = if ax < 0. {
@@ -700,8 +745,8 @@ pub(super) fn render_crew(
     div()
         .flex_none()
         .relative()
-        .left(px(dx * 2.5))
-        .top(px(dy * 2.5))
+        .left(px(dx * 2.5 * zoom))
+        .top(px(dy * 2.5 * zoom))
         .w(px(width))
         .h(px(height))
         .children(cells)
@@ -823,6 +868,45 @@ mod tests {
         let mut panes: Vec<u32> = crew_at(&big, &d, 0).iter().map(|c| c.pane).collect();
         panes.sort();
         assert_eq!(panes, [0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn subagents_past_the_panes_keep_a_wrapping_shade() {
+        // Subagents are numbered after every pane, so indexes run past six.
+        let d = CrewDance::new(0);
+        let cuts = crew_at(&[2, 9, 14], &d, 0);
+        let mut panes: Vec<u32> = cuts.iter().map(|c| c.pane).collect();
+        panes.sort();
+        assert_eq!(panes, [2, 9, 14]);
+        // 2 and 14 share a shade, as on the web.
+        for c in &cuts {
+            assert_eq!(c.shade, CREW_SHADES[c.pane as usize % 6]);
+        }
+        // The six taken are the first six listed, not the six lowest.
+        let mut panes: Vec<u32> = crew_at(&[25, 3, 7, 8, 12, 20, 0], &d, 0)
+            .iter()
+            .map(|c| c.pane)
+            .collect();
+        panes.sort();
+        assert_eq!(panes, [3, 7, 8, 12, 20, 25]);
+    }
+
+    #[test]
+    fn each_circle_keeps_its_own_dance_while_its_crew_lasts() {
+        let mut dances = std::collections::HashMap::new();
+        keep_crew_dances(
+            &mut dances,
+            [("a", &[0, 1][..]), ("b", &[3][..]), ("c", &[][..])],
+            100,
+        );
+        assert_eq!(dances.keys().collect::<Vec<_>>(), ["a"]);
+        // A later round keeps a's dance as it was and starts c's.
+        keep_crew_dances(&mut dances, [("a", &[0, 7][..]), ("c", &[1, 2][..])], 900);
+        assert_eq!(dances["a"], CrewDance::new(100));
+        assert_eq!(dances["c"], CrewDance::new(900));
+        // Under two, or gone from the list: dropped.
+        keep_crew_dances(&mut dances, [("a", &[0][..])], 1000);
+        assert!(dances.is_empty());
     }
 
     #[test]
