@@ -291,8 +291,8 @@ pub(super) fn render_move(
 
 /// Two or more panes working dance as a crew (Brian's ask): one paper cutout
 /// per pane, the same creature in its own shade, circling on a low ring. gpui
-/// has no 3D, so this fakes the web Chat's CSS one with its numbers, in points
-/// for cutouts of [`CREW_CELL`]-point cells (the web's are 2px).
+/// has no 3D, so this fakes the web Chat's CSS ring with its numbers. Cutout
+/// cells are 2 points to its 2px, so its px read as points here.
 const CREW_CELL: f32 = 2.;
 const CREW_MAX: usize = 6;
 /// A step toward white (positive) or black per pane index, so a pane keeps
