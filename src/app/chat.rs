@@ -54,6 +54,17 @@ const CATCHUP_COOLDOWN: Duration = Duration::from_secs(5);
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(250);
 /// Fewest characters a search is run for (Invoke answers nothing for one).
 const SEARCH_MIN: usize = 2;
+/// What a click on the header's creature set going: its circle, the move it
+/// plays (none for a party) from `at`, and the line in its bubble.
+struct Egg {
+    ws: String,
+    mv: Option<usize>,
+    at: u64,
+    line: &'static str,
+    /// How long the bubble stays.
+    ms: u64,
+}
+
 /// What the quick-reply chips above an empty composer send.
 const QUICK_REPLIES: [&str; 3] = ["Keep going", "Status?", "Ship it"];
 
@@ -132,6 +143,9 @@ pub(super) struct ChatState {
     /// Each circle's panes for @-mentions, and when they were asked for.
     panes: HashMap<String, Vec<PaneRow>>,
     panes_at: HashMap<String, Instant>,
+    /// Recent clicks on the header's creature, and what the last one did.
+    pokes: super::sprite::Pokes,
+    egg: Option<Egg>,
     /// When Compact was last clicked, for its cooldown.
     compact_at: Option<(String, Instant)>,
     /// Catch me up is in flight, or finished at this time.
@@ -985,6 +999,42 @@ impl SeanceApp {
         .detach();
     }
 
+    /// A click on the header's creature: a dance move and a line, or at the
+    /// fifth click in a row a party. Frames come from a short timer, so
+    /// nothing else has to be re-rendering.
+    fn chat_poke(&mut self, ws: String, cx: &mut Context<Self>) {
+        use super::sprite::{Poke, LINE_MS, PARTY_LINE, PARTY_MS};
+        let now = now_ms();
+        let (mv, line, ms) = match self.chat.pokes.poke(now) {
+            Poke::Dance { mv, line } => (Some(mv), line, LINE_MS),
+            Poke::Party => {
+                super::sprite::start_party(now);
+                (None, PARTY_LINE, PARTY_MS)
+            }
+        };
+        self.chat.egg = Some(Egg {
+            ws,
+            mv,
+            at: now,
+            line,
+            ms,
+        });
+        cx.spawn(async move |this, cx| {
+            let end = now_ms() + ms;
+            while now_ms() < end {
+                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    return;
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(120))
+                    .await;
+            }
+            let _ = this.update(cx, |_, cx| cx.notify());
+        })
+        .detach();
+        cx.notify();
+    }
+
     /// Send `/compact` to the open circle's lead, as the composer would.
     fn chat_compact(&mut self, cx: &mut Context<Self>) {
         let Some(ws) = self.chat.selected.clone() else {
@@ -1681,6 +1731,51 @@ impl SeanceApp {
             .into_any_element()
     }
 
+    /// The thread header's creature. Click it: it dances and says something.
+    fn header_creature(&self, ws: &str, working: bool, cx: &Context<Self>) -> AnyElement {
+        let now = now_ms();
+        let egg = self.chat.egg.as_ref().filter(|e| e.ws == ws);
+        let moving = egg.and_then(|e| e.mv.map(|mv| (mv, e.at)));
+        let say = egg
+            .filter(|e| now.saturating_sub(e.at) < e.ms)
+            .map(|e| e.line);
+        let target = ws.to_string();
+        div()
+            .id("chat-creature")
+            .relative()
+            .flex_none()
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _, _, cx| this.chat_poke(target.clone(), cx)))
+            .child(super::sprite::render_move(
+                &super::sprite::for_circle(ws),
+                2.5,
+                working,
+                moving,
+            ))
+            .children(say.map(|line| {
+                // Deferred, so the thread below cannot paint over it.
+                gpui::deferred(
+                    div()
+                        .absolute()
+                        .top(px(34.))
+                        .left(px(0.))
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(SeancePalette::border())
+                        .bg(SeancePalette::bg_elevated())
+                        .shadow_lg()
+                        .text_xs()
+                        .text_color(SeancePalette::text())
+                        .whitespace_nowrap()
+                        .child(line),
+                )
+                .with_priority(5)
+            }))
+            .into_any_element()
+    }
+
     fn render_chat_thread(&self, cx: &Context<Self>) -> AnyElement {
         let Some(ws) = self.chat.selected.clone() else {
             return div()
@@ -1730,11 +1825,7 @@ impl SeanceApp {
             .gap_3()
             .border_b_1()
             .border_color(SeancePalette::border())
-            .child(super::sprite::render(
-                &super::sprite::for_circle(&ws),
-                2.5,
-                working,
-            ))
+            .child(self.header_creature(&ws, working, cx))
             .child(
                 div()
                     .flex_1()

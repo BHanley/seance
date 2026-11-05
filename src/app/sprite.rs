@@ -143,17 +143,91 @@ fn dance_step(phase: u64, beat: u64) -> (f32, f32) {
     MOVES[mv][(beat % 4) as usize]
 }
 
+/// Poking the creature (a click on it in Chat's header): one dance move and a
+/// line each time, and five pokes within [`POKE_WINDOW_MS`] throw a party.
+pub(super) const DANCE_MS: u64 = 960;
+pub(super) const LINE_MS: u64 = 2400;
+pub(super) const PARTY_MS: u64 = 5000;
+const POKE_WINDOW_MS: u64 = 3000;
+const PARTY_POKES: usize = 5;
+pub(super) const PARTY_LINE: &str = "A seance party! The spirits are out.";
+const LINES: [&str; 10] = [
+    "Who summoned me?",
+    "The spirits say: ship it.",
+    "Knock once for yes.",
+    "I saw nothing.",
+    "Boo.",
+    "The lamp is warm tonight.",
+    "Your tokens are in another castle.",
+    "I only dance when you're not looking.",
+    "Have you tried /compact?",
+    "The veil is thin. So is the XPS's RAM.",
+];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Poke {
+    /// Play `MOVES[mv]` and say `line`.
+    Dance { mv: usize, line: &'static str },
+    /// Every creature dances for [`PARTY_MS`].
+    Party,
+}
+
+/// Recent pokes (unix ms).
+#[derive(Default)]
+pub(super) struct Pokes(Vec<u64>);
+
+impl Pokes {
+    pub(super) fn poke(&mut self, now: u64) -> Poke {
+        self.0.retain(|t| now.saturating_sub(*t) <= POKE_WINDOW_MS);
+        self.0.push(now);
+        if self.0.len() >= PARTY_POKES {
+            self.0.clear();
+            return Poke::Party;
+        }
+        let mut rng = Rng(now.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+        Poke::Dance {
+            mv: rng.below(MOVES.len() as u64),
+            line: LINES[rng.below(LINES.len() as u64)],
+        }
+    }
+}
+
+/// When the party ends (unix ms); every creature dances until then.
+static PARTY_UNTIL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(super) fn start_party(now: u64) {
+    PARTY_UNTIL.store(now + PARTY_MS, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn partying(now: u64) -> bool {
+    now < PARTY_UNTIL.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The sprite as a grid of `cell`-point squares. Whole device pixels keep it
 /// crisp: 1.5 and 2.5 points land on 3 and 5 pixels on a 2x screen.
 /// `dancing` steps it through [`MOVES`] on the wall clock; the sidebar spinner's
 /// 240ms tick already re-renders while any circle works, so it costs no frames.
 pub(super) fn render(sprite: &Sprite, cell: f32, dancing: bool) -> AnyElement {
+    render_move(sprite, cell, dancing, None)
+}
+
+/// [`render`], and with `poked` (a move and when it began) the creature plays
+/// that move once, on any circle, working or not. A party dances them all.
+pub(super) fn render_move(
+    sprite: &Sprite,
+    cell: f32,
+    dancing: bool,
+    poked: Option<(usize, u64)>,
+) -> AnyElement {
     let body = rgb(BODY[sprite.color]);
     let ink = rgb(INK);
-    let (dx, dy) = if dancing {
-        dance_step(sprite.phase, super::util::now_ms() / 240)
-    } else {
-        (0., 0.)
+    let now = super::util::now_ms();
+    let (dx, dy) = match poked {
+        Some((mv, start)) if now.saturating_sub(start) < DANCE_MS => {
+            MOVES[mv][(now.saturating_sub(start) / 240 % 4) as usize]
+        }
+        _ if dancing || partying(now) => dance_step(sprite.phase, now / 240),
+        _ => (0., 0.),
     };
     div()
         .flex_none()
@@ -245,5 +319,38 @@ mod tests {
             assert_eq!(eyes, 2, "{slug}");
             assert!(s.cells[9].contains(&Cell::Body), "{slug}: has legs");
         }
+    }
+
+    #[test]
+    fn five_pokes_in_three_seconds_throw_a_party() {
+        let mut p = Pokes::default();
+        for i in 0..4 {
+            assert!(matches!(p.poke(1_000 + i * 500), Poke::Dance { mv, .. } if mv < MOVES.len()));
+        }
+        assert_eq!(p.poke(3_000), Poke::Party);
+        // The count starts over after a party.
+        assert!(matches!(p.poke(3_100), Poke::Dance { .. }));
+    }
+
+    #[test]
+    fn slow_pokes_never_party() {
+        let mut p = Pokes::default();
+        for i in 0..20 {
+            assert!(matches!(p.poke(i * 1_000), Poke::Dance { .. }));
+        }
+    }
+
+    #[test]
+    fn every_line_comes_up_and_the_party_runs_five_seconds() {
+        let mut seen = std::collections::HashSet::new();
+        for i in 0..400 {
+            if let Poke::Dance { line, .. } = Pokes::default().poke(i * 7_919) {
+                seen.insert(line);
+            }
+        }
+        assert_eq!(seen.len(), LINES.len());
+        start_party(10_000);
+        assert!(partying(10_000 + PARTY_MS - 1));
+        assert!(!partying(10_000 + PARTY_MS));
     }
 }
