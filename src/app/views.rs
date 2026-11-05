@@ -3,8 +3,7 @@
 //! window keeps its own, switched from the toggle, ctrl+shift+t or
 //! `ctl layout`, and the last pick is saved on this machine
 //! (`~/.config/seance/view.json`), never in the daemon's shared layout. The
-//! same file keeps the progress HUD picked from the Seance menu (`hud`)
-//! and whether Wall shows every space (`wall_all`).
+//! same file keeps whether Wall shows every space (`wall_all`).
 //!
 //! Stage (`stage.rs`) and Wall (`wall.rs`) take the rail and grid's place:
 //! on Stage the pane on stage is the only place its terminal renders, and
