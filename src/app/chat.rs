@@ -66,12 +66,22 @@ fn follow_step(
     let from_bottom = now.1 + now.0;
     let by_hand =
         seen.is_some_and(|(off, max)| (off - now.0).abs() > 0.5 && (max - now.1).abs() < 0.5);
-    let pinned = if by_hand {
+    let grew = seen.is_none_or(|(_, max)| (max - now.1).abs() >= 0.5);
+    let mut pinned = if by_hand {
         from_bottom <= NEAR_BOTTOM
     } else {
         pinned
     };
-    (pinned, pinned && !held && from_bottom > 0.5)
+    // A resize or shrink can clamp him onto the bottom without a scroll.
+    if !by_hand && from_bottom <= 0.5 {
+        pinned = true;
+    }
+    // Only a change of range scrolls down; a small scroll by hand near the
+    // bottom stays where he put it.
+    (
+        pinned,
+        pinned && !held && !by_hand && grew && from_bottom > 0.5,
+    )
 }
 
 /// Search runs this long after the last keystroke.
@@ -217,6 +227,7 @@ impl ChatState {
         self.stick = 3;
         self.unpinned = false;
         self.no_pin = None;
+        self.jump = None;
     }
 
     pub(super) fn any_working(&self) -> bool {
@@ -2776,17 +2787,34 @@ mod tests {
         // Back within 80 points of the bottom: pinned again.
         assert_eq!(
             follow_step(false, false, Some((-500., 900.)), (-850., 900.)),
-            (true, true)
+            (true, false)
         );
-        // A little scroll that stays near the bottom does not unpin.
+        // A little scroll up stays pinned but is not undone.
         assert_eq!(
-            follow_step(true, false, Some((-900., 900.)), (-860., 900.)),
-            (true, true)
+            follow_step(true, false, Some((-900., 900.)), (-880., 900.)),
+            (true, false)
         );
+        // Past the bottom (overscroll): pinned, nothing to scroll.
+        assert_eq!(
+            follow_step(true, false, Some((-900., 900.)), (-930., 900.)),
+            (true, false)
+        );
+        // Clamped onto the bottom by a resize while unpinned: pinned again.
+        assert_eq!(
+            follow_step(false, false, Some((-500., 900.)), (-1000., 1000.)),
+            (true, false)
+        );
+        // First frame: pinned and off the bottom, scroll down.
+        assert_eq!(follow_step(true, false, None, (0., 400.)), (true, true));
         // A search result being shown: never scrolled, whatever grows.
         assert_eq!(
             follow_step(true, true, Some((-100., 900.)), (-100., 1000.)),
             (true, false)
+        );
+        // A hand scroll while a result is shown still tracks the pin.
+        assert_eq!(
+            follow_step(true, true, Some((-900., 900.)), (-300., 900.)),
+            (false, false)
         );
         // At the bottom already: nothing to do.
         assert_eq!(
