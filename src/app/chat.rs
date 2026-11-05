@@ -379,11 +379,12 @@ fn reset_label(ts_ms: u64, with_day: bool) -> String {
 }
 
 /// The thin usage line under the thread header, like the phone's: "5h 18% ·
-/// ⟳ 12:50 PM   7d 35% · ⟳ Thu 2 AM". Numbers go red from 80%. None when
-/// neither window is known.
-fn usage_strip(u: &Usage) -> Option<AnyElement> {
-    let part = |label: &str, w: &UsageWindow, with_day: bool| {
-        let hot = w.used >= 80.;
+/// ⟳ 12:50 PM   7d 35% · ⟳ Thu 2 AM   ctx 28%". Numbers go red from 80%. The
+/// last is the lead's context, which is its own and not the plan's. None when
+/// nothing is known.
+fn usage_strip(u: Option<&Usage>, context: Option<u32>) -> Option<AnyElement> {
+    let part = |label: &str, used: f64, resets: Option<(u64, bool)>| {
+        let hot = used >= 80.;
         div()
             .flex()
             .items_center()
@@ -397,16 +398,19 @@ fn usage_strip(u: &Usage) -> Option<AnyElement> {
                     } else {
                         SeancePalette::text_faint()
                     })
-                    .child(format!("{}%", w.used.round() as i64)),
+                    .child(format!("{}%", used.round() as i64)),
             )
-            .children(
-                w.resets
-                    .map(|at| format!("· ⟳ {}", reset_label(at, with_day))),
-            )
+            .children(resets.map(|(at, with_day)| format!("· ⟳ {}", reset_label(at, with_day))))
+    };
+    let window = |label: &str, w: &UsageWindow, with_day: bool| {
+        part(label, w.used, w.resets.map(|at| (at, with_day)))
     };
     let parts: Vec<_> = [
-        u.five_hour.as_ref().map(|w| part("5h", w, false)),
-        u.seven_day.as_ref().map(|w| part("7d", w, true)),
+        u.and_then(|u| u.five_hour.as_ref())
+            .map(|w| window("5h", w, false)),
+        u.and_then(|u| u.seven_day.as_ref())
+            .map(|w| window("7d", w, true)),
+        context.map(|c| part("ctx", f64::from(c), None)),
     ]
     .into_iter()
     .flatten()
@@ -1775,7 +1779,10 @@ impl SeanceApp {
             .flex()
             .flex_col()
             .child(header)
-            .children(self.chat.usage.as_ref().and_then(usage_strip));
+            .children(usage_strip(
+                self.chat.usage.as_ref(),
+                self.chat.threads.get(&ws).and_then(|t| t.context),
+            ));
         if let Some(e) = &self.chat.error {
             col = col.child(
                 div()
@@ -2324,7 +2331,8 @@ mod tests {
 
     #[test]
     fn usage_strip_hides_without_windows() {
-        assert!(usage_strip(&Usage::default()).is_none());
+        assert!(usage_strip(Some(&Usage::default()), None).is_none());
+        assert!(usage_strip(None, None).is_none());
         let one = Usage {
             five_hour: Some(UsageWindow {
                 used: 18.,
@@ -2332,7 +2340,9 @@ mod tests {
             }),
             seven_day: None,
         };
-        assert!(usage_strip(&one).is_some());
+        assert!(usage_strip(Some(&one), None).is_some());
+        // The lead's context alone is enough to show the strip.
+        assert!(usage_strip(None, Some(28)).is_some());
     }
 
     #[test]
