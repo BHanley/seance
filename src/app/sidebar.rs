@@ -3,7 +3,7 @@
 //! the host-bridge widget strip (claude accounts) above the summon footer.
 
 use gpui::{div, prelude::*, px, Context, SharedString, Window};
-use gpui_component::{input::Input, menu::ContextMenuExt as _, StyledExt as _, WindowExt as _};
+use gpui_component::{input::Input, menu::ContextMenuExt as _, WindowExt as _};
 
 use crate::control::ControlRequest;
 use crate::pane::PaneBody;
@@ -40,9 +40,8 @@ impl SeanceApp {
             return None;
         }
         let self_id = self.window_id.clone();
-        // Stage and Wall's space row holds the ✦ when it shows; Chat's ✦ sits
-        // at the top of its circle list, with no tab row above it.
-        let top = if self.view.mode != super::views::ViewMode::Chat && self.space_tabs_shown() {
+        // The top row holds the ✦ when it shows (always, but on the Wall).
+        let top = if self.space_tabs_shown() {
             self.space_tabs_h() + 2.
         } else {
             40.
@@ -1425,8 +1424,8 @@ impl SeanceApp {
             .border_r_1()
             .border_color(SeancePalette::border())
             .child(
-                // Brand header: the name on top, the new-space/circle buttons
-                // tucked under it so a narrow rail never squeezes either.
+                // The new-space/circle buttons; the ✦ mark and the layout
+                // switch sit in the top row every layout shares.
                 div()
                     .flex_none()
                     .px_3()
@@ -1437,39 +1436,6 @@ impl SeanceApp {
                     .gap_0p5()
                     .border_b_1()
                     .border_color(SeancePalette::border())
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .id("gui-census")
-                                    .px_1()
-                                    .rounded_md()
-                                    .text_color(SeancePalette::flame_dim())
-                                    .text_lg()
-                                    .cursor_pointer()
-                                    .hover(|s| {
-                                        s.text_color(SeancePalette::flame())
-                                            .bg(SeancePalette::surface())
-                                    })
-                                    .tooltip(tip("connected guis · theme"))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.gui_menu_open = !this.gui_menu_open;
-                                        cx.notify();
-                                    }))
-                                    .child("✦"),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_color(SeancePalette::text())
-                                    .text_sm()
-                                    .font_semibold()
-                                    .child("seance"),
-                            ),
-                    )
                     .child(
                         div()
                             .flex()
@@ -1516,8 +1482,7 @@ impl SeanceApp {
                                     ))
                                     .child("+ circle"),
                             ),
-                    )
-                    .child(div().pt_1().child(self.render_view_switch("rail", cx))),
+                    ),
             )
             .child(self.render_rail_chips(cx))
             .child({

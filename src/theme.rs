@@ -138,6 +138,13 @@ fn from_hex(c: &schemes::Chrome) -> Chrome {
     }
 }
 
+/// Card corner radius every layout shares (Stage's lead and crew cards,
+/// Classic's pane tiles).
+pub const CARD_RADIUS: f32 = 10.;
+/// A card or panel header's padding, Stage's lead card's.
+pub const HEADER_PAD_X: f32 = 14.;
+pub const HEADER_PAD_Y: f32 = 10.;
+
 /// The active scheme's palette. Each associated fn returns a `gpui::Hsla`.
 ///
 /// These are the load-bearing colors the seance app references directly for

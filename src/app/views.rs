@@ -216,8 +216,9 @@ impl SeanceApp {
         }
     }
 
-    /// Classic · Stage · Chat. Narrow enough for the slimmest rail: the
-    /// segments share the width and the labels are one word.
+    /// Classic · Stage · Chat, in the top row after the ✦ mark (and in the
+    /// Wall's header): the segments share the width and the labels are one
+    /// word.
     pub(super) fn render_view_switch(&self, key: &str, cx: &Context<Self>) -> gpui::AnyElement {
         let current = self.view.mode;
         div()

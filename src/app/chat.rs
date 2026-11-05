@@ -24,7 +24,7 @@ use crate::chat_api::{
     self, Attachment, CircleRow, Circles, Hit, Msg, PaneRow, Progress, Thread, Usage, UsageWindow,
 };
 use crate::events;
-use crate::theme::SeancePalette;
+use crate::theme::{SeancePalette, HEADER_PAD_X, HEADER_PAD_Y};
 
 use super::lead_tasks::clock;
 use super::util::{now_ms, tip};
@@ -126,7 +126,7 @@ const VIDEO_SECS: u64 = 900;
 #[derive(Default)]
 pub(super) struct ChatState {
     circles: Vec<CircleRow>,
-    selected: Option<String>,
+    pub(super) selected: Option<String>,
     threads: HashMap<String, Thread>,
     progress: HashMap<String, Progress>,
     /// Invoke's change counter as of the last round.
@@ -945,7 +945,7 @@ impl SeanceApp {
         .detach();
     }
 
-    fn chat_select(&mut self, ws: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn chat_select(&mut self, ws: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.chat.selected.as_deref() != Some(ws) {
             self.chat.selected = Some(ws.to_string());
             self.tasks_popover = None;
@@ -1712,19 +1712,6 @@ impl SeanceApp {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            // The ✦ opens the same menu as in Classic and Stage:
-                            // the connected guis and the theme list.
-                            .child(self.render_seance_mark("chat", cx))
-                            // The AFK chip as Stage and Wall draw it; nothing
-                            // where the script is not installed.
-                            .children(self.render_afk_chip("chat", cx)),
-                    )
-                    .child(self.render_view_switch("chat", cx))
                     .children(self.chat.search.as_ref().map(|s| Input::new(s)))
                     .children(self.chat.search_note.as_ref().map(|n| {
                         div()
@@ -2062,13 +2049,15 @@ impl SeanceApp {
             .and_then(|l| self.lead_tasks.get(l))
             .map_or(0, |d| d.open_count());
 
+        // Stage's lead card header: same padding and ground.
         let mut header = div()
             .flex_none()
-            .px_3()
-            .py_2()
+            .px(px(HEADER_PAD_X))
+            .py(px(HEADER_PAD_Y))
             .flex()
             .items_center()
             .gap_3()
+            .bg(SeancePalette::bg_elevated())
             .border_b_1()
             .border_color(SeancePalette::border())
             .child(self.header_creature(&ws, working, cx))

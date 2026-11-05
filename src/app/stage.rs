@@ -20,7 +20,7 @@ use gpui_component::{input::Input, menu::ContextMenuExt as _, ActiveTheme as _, 
 use crate::gui_client::fs_not_found;
 use crate::pane::{Pane, PaneBody};
 use crate::runtime::snapshot::GridSnapshot;
-use crate::theme::SeancePalette;
+use crate::theme::{SeancePalette, CARD_RADIUS, HEADER_PAD_X, HEADER_PAD_Y};
 
 use super::actions::{ActDeleteSpace, ActRenameSpace, ActSpaceDefault};
 use super::stage_parse::{
@@ -259,8 +259,8 @@ impl SeanceApp {
         self.set_active(slug, window, cx);
     }
 
-    /// A chip's Open: the pane on stage, and a done chip's circle seen even
-    /// when it was already selected.
+    /// A chip's Open: the pane on stage (on Chat, its circle's thread), and
+    /// a done chip's circle seen even when it was already selected.
     fn open_chip(
         &mut self,
         ws: &str,
@@ -272,6 +272,10 @@ impl SeanceApp {
         self.stage.peek = None;
         if done {
             self.workspace_unread.remove(ws);
+        }
+        if self.view.mode == ViewMode::Chat {
+            self.chat_select(ws, window, cx);
+            return;
         }
         self.stage_show(ws, slug, window, cx);
     }
@@ -399,6 +403,16 @@ impl SeanceApp {
             .unwrap_or(0);
         let next = (cur as i32 + delta).rem_euclid(list.len() as i32) as usize;
         self.set_active(&list[next], window, cx);
+    }
+
+    /// A circle picked from the circle row or the jump palette: on Chat its
+    /// thread opens, elsewhere it is selected.
+    pub(super) fn pick_circle(&mut self, ws: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.view.mode == ViewMode::Chat {
+            self.chat_select(ws, window, cx);
+        } else {
+            self.select_workspace(ws, window, cx);
+        }
     }
 
     pub(super) fn open_jump(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -800,7 +814,8 @@ impl SeanceApp {
         (out, snoozed.len())
     }
 
-    /// The whole Stage layout, in place of the rail and grid.
+    /// Stage's content, in place of the rail and grid; the shared rows
+    /// around it are drawn by the root.
     pub(super) fn render_stage(
         &mut self,
         window: &mut Window,
@@ -815,9 +830,7 @@ impl SeanceApp {
         let crew_w = if width >= 1200. { 330. } else { 260. };
         let show_crew = !fold || self.stage.crew_open;
 
-        let tabs = self.render_space_tabs("stage", cx);
-        let top = self.render_stage_top(width, cx);
-        let (chips, snoozed) = self.waiting_list();
+        let (chips, _) = self.waiting_list();
         // A peek card whose chip went (seen, its pane closed, its circle
         // gone or selected) closes with it.
         let peeked = self.stage.peek.as_ref().and_then(|p| {
@@ -833,7 +846,6 @@ impl SeanceApp {
                 None
             }
         };
-        let needs = self.render_stage_needs(chips, snoozed, cx);
         let lead_el = self.render_stage_lead(on_stage.as_deref(), lead.as_deref(), fold, cx);
         let crew_el = show_crew.then(|| {
             let crew = self.render_stage_crew(on_stage.as_deref(), crew_w, cx);
@@ -849,7 +861,7 @@ impl SeanceApp {
                 .right(px(10.))
                 .bottom(px(10.))
                 .p(px(8.))
-                .rounded(px(10.))
+                .rounded(px(CARD_RADIUS))
                 .bg(SeancePalette::bg())
                 .border_1()
                 .border_color(SeancePalette::border())
@@ -857,64 +869,48 @@ impl SeanceApp {
                 .child(crew)
                 .into_any_element()
         });
-        let footer = self.render_stage_footer();
 
         div()
             .id("stage")
+            .relative()
             .flex_1()
             .h_full()
             .min_w_0()
             .min_h_0()
             .flex()
-            .flex_col()
+            .flex_row()
+            .gap(px(10.))
+            .p(px(10.))
             .bg(SeancePalette::bg())
-            .child(self.render_daemon_error_bar(cx))
-            .children(tabs)
-            .child(top)
-            .children(needs)
-            .child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .flex_row()
-                    .gap(px(10.))
-                    .p(px(10.))
-                    .child(lead_el)
-                    .children(crew_el)
-                    .children(peek),
-            )
-            .children(footer)
+            .child(lead_el)
+            .children(crew_el)
+            .children(peek)
             .into_any_element()
     }
 
-    /// ✦ mark and AFK chip (unless the space row holds them), circle pills,
-    /// the layout toggle and the jump box. With "+N more" open, the circles that don't
-    /// fit get a row of their own underneath.
-    fn render_stage_top(&mut self, width: f32, cx: &Context<Self>) -> AnyElement {
-        let rename = self.render_rename_field();
+    /// The circle row every layout shares: circle pills and the jump box.
+    /// With "+N more" open, the circles that don't fit get a row of their
+    /// own underneath.
+    pub(super) fn render_stage_top(&mut self, width: f32, cx: &Context<Self>) -> AnyElement {
+        // Classic's rail holds the rename field; one input drawn twice
+        // would fight over the keyboard.
+        let rename = (self.view.mode != ViewMode::Classic)
+            .then(|| self.render_rename_field())
+            .flatten();
         let renaming = rename.is_some();
-        let selected = self.selected_workspace.clone();
+        // Chat's thread follows its own pick.
+        let selected = if self.view.mode == ViewMode::Chat {
+            self.chat.selected.clone()
+        } else {
+            self.selected_workspace.clone()
+        };
         let space = self.shown_space();
         let circles = self.subs_pref.spaces.circles_in(&space, &self.workspaces());
         let roomy = width >= 900.;
         let jump_w = jump_box_w(roomy);
-        let switch_w = 190.;
-        // The mark sits on the space row above when that row shows.
-        let tabs = self.space_tabs_shown();
-        let mark_w = if tabs { 0. } else { 84. + 14. };
         let add_w = 76.;
-        // The AFK chip moves up there too.
-        let afk = (!tabs).then(|| self.render_afk_chip("stage", cx)).flatten();
-        let afk_w = if afk.is_some() {
-            super::afk::AFK_W + 14.
-        } else {
-            0.
-        };
-        // Strip padding, the mark, the toggle, the jump box, "+ circle", the
-        // AFK chip and the gaps.
-        let avail = width - 28. - mark_w - switch_w - jump_w - 14. * 2. - add_w - 6. - afk_w;
+        // Strip padding, the jump box, "+ circle" and the gaps.
+        let avail = width - 28. - jump_w - 14. - add_w - 6.;
         let labels: Vec<String> = circles.iter().map(|c| self.workspace_label(c)).collect();
         let widths: Vec<f32> = labels.iter().map(|l| pill_width(l)).collect();
         let sel_idx = selected
@@ -991,7 +987,7 @@ impl SeanceApp {
                     }
                 }))
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    this.select_workspace(&ws, window, cx);
+                    this.pick_circle(&ws, window, cx);
                     this.stage.want_lead = true;
                     cx.notify();
                 }))
@@ -1096,7 +1092,6 @@ impl SeanceApp {
             .bg(SeancePalette::bg_elevated())
             .border_b_1()
             .border_color(SeancePalette::border())
-            .when(!tabs, |d| d.child(self.render_seance_mark("stage", cx)))
             .child(
                 div()
                     .flex_1()
@@ -1108,14 +1103,7 @@ impl SeanceApp {
                     .children(rename)
                     .when(!renaming, |d| d.children(pills).children(more).child(add)),
             )
-            .child(
-                div()
-                    .flex_none()
-                    .w(px(switch_w))
-                    .child(self.render_view_switch("strip", cx)),
-            )
-            // Left of the jump box, which the jump palette drops down from.
-            .children(afk)
+            // The jump palette drops down from it.
             .child(render_jump_box("stage-jump", roomy, cx));
         div()
             .flex_none()
@@ -1149,13 +1137,13 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    /// Stage and Wall draw their row of space tabs when it would hold two
-    /// or more: a tab per space with circles, plus the one on show even if
-    /// empty, so an empty space always has a way out. Classic's rail lists
-    /// every space.
+    /// Classic, Stage and Chat always draw the top row, so switching layout
+    /// moves nothing above the content. The Wall draws it when it would
+    /// hold two or more tabs: a tab per space with circles, plus the one on
+    /// show even if empty, so an empty space always has a way out.
     pub(super) fn space_tabs_shown(&self) -> bool {
-        if self.view.mode == ViewMode::Classic {
-            return false;
+        if self.view.mode != ViewMode::Wall {
+            return true;
         }
         let ordered = self.workspaces();
         let shown = self.shown_space();
@@ -1177,11 +1165,11 @@ impl SeanceApp {
         }
     }
 
-    /// Stage and Wall's space row: a tab per space with the mark its rail
-    /// row has (needs you, working, done), the one on show underlined.
-    /// Empty spaces get no tab unless on show. Wall leads with an All tab.
-    /// Scrolls sideways when the tabs don't fit; the AFK chip ends the row.
-    /// None when there would be fewer than two.
+    /// The top row: the ✦ mark, the layout switch (not on the Wall), then a
+    /// tab per space with the mark its rail row has (needs you, working,
+    /// done), the one on show underlined. Empty spaces get no tab unless on
+    /// show. Wall leads with an All tab. Scrolls sideways when the tabs
+    /// don't fit; the AFK chip ends the row. None when not shown.
     pub(super) fn render_space_tabs(
         &mut self,
         key: &str,
@@ -1334,6 +1322,14 @@ impl SeanceApp {
                 .border_b_1()
                 .border_color(SeancePalette::border())
                 .child(self.render_seance_mark(key, cx))
+                .when(!wall, |d| {
+                    d.child(
+                        div()
+                            .flex_none()
+                            .w(px(SWITCH_W))
+                            .child(self.render_view_switch(key, cx)),
+                    )
+                })
                 .child(
                     div()
                         .id(SharedString::from(format!("{key}-spaces")))
@@ -1417,7 +1413,7 @@ impl SeanceApp {
 
     /// "Needs you · N" and a chip per waiting pane, every circle, then
     /// "Done · N" and a chip per finished one. Hidden when there are none.
-    fn render_stage_needs(
+    pub(super) fn render_stage_needs(
         &self,
         waiting: Vec<Waiting>,
         snoozed: usize,
@@ -1497,7 +1493,8 @@ impl SeanceApp {
                 let slug_for_snooze = slug.clone();
                 let ws = w.circle.clone();
                 let done = w.done;
-                if done {
+                // The peek card is drawn on Stage only.
+                if done && self.view.mode == ViewMode::Stage {
                     let (ws, slug) = (ws.clone(), slug.clone());
                     chip = chip
                         .cursor_pointer()
@@ -1708,7 +1705,7 @@ impl SeanceApp {
             .flex_col()
             .gap(px(8.))
             .p(px(12.))
-            .rounded(px(10.))
+            .rounded(px(CARD_RADIUS))
             .bg(SeancePalette::bg_elevated())
             .border_1()
             .border_color(SeancePalette::success())
@@ -1780,7 +1777,7 @@ impl SeanceApp {
             .min_h_0()
             .flex()
             .flex_col()
-            .rounded(px(10.))
+            .rounded(px(CARD_RADIUS))
             .border_1()
             .border_color(SeancePalette::border())
             .overflow_hidden();
@@ -2069,8 +2066,8 @@ impl SeanceApp {
             .child(
                 div()
                     .flex_none()
-                    .px(px(14.))
-                    .py(px(10.))
+                    .px(px(HEADER_PAD_X))
+                    .py(px(HEADER_PAD_Y))
                     .flex()
                     .flex_col()
                     .gap(px(6.))
@@ -2144,7 +2141,7 @@ impl SeanceApp {
                     .flex_none()
                     .px(px(12.))
                     .py(px(11.))
-                    .rounded(px(10.))
+                    .rounded(px(CARD_RADIUS))
                     .border_1()
                     .border_color(SeancePalette::border())
                     .flex()
@@ -2368,7 +2365,7 @@ impl SeanceApp {
                     div()
                         .flex_1()
                         .min_h_0()
-                        .rounded(px(10.))
+                        .rounded(px(CARD_RADIUS))
                         .bg(SeancePalette::bg_elevated())
                         .border_1()
                         .border_color(SeancePalette::border())
@@ -2496,7 +2493,7 @@ impl SeanceApp {
     }
 
     /// Plan usage on the left; the health report's facts and time on the right.
-    fn render_stage_footer(&self) -> Option<AnyElement> {
+    pub(super) fn render_stage_footer(&self) -> Option<AnyElement> {
         let usage = self.usage_items();
         let facts = self.health_facts().unwrap_or_default();
         if usage.is_empty() && facts.is_empty() {
@@ -2594,8 +2591,11 @@ fn bottom_rows(snap: &GridSnapshot, n: usize) -> Vec<String> {
         .collect()
 }
 
-/// Stage's strip height; the jump palette drops below it.
+/// The circle row's height; the jump palette drops below it.
 pub(super) const STRIP_H: f32 = 50.;
+
+/// The layout switch's width in the top row.
+const SWITCH_W: f32 = 170.;
 
 /// The jump box's width: "⌕ Jump" and the shortcut, or just ⌕ when the
 /// window is narrow.

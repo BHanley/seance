@@ -193,8 +193,9 @@ impl SeanceApp {
                 let items = self.jump_items(query);
                 if let Some((ws, _)) = items.get(*selected).cloned() {
                     // `select_workspace` reveals the row in the rail, so a jump
-                    // lands the same way ctrl+page cycling does.
-                    self.select_workspace(&ws, window, cx);
+                    // lands the same way ctrl+page cycling does; on Chat the
+                    // circle's thread opens.
+                    self.pick_circle(&ws, window, cx);
                     self.close_palette(window, cx);
                 }
             }
@@ -240,12 +241,14 @@ impl SeanceApp {
             };
         let n = items.len();
         let sel = if n == 0 { 0 } else { selected.min(n - 1) };
-        // Stage and Wall have a jump box at the right of their top bar: the
-        // jump palette drops down from it rather than sitting mid-screen.
+        // Every layout has a jump box at the right of its circle row (the
+        // Wall's header): the jump palette drops down from it rather than
+        // sitting mid-screen.
         let header = match self.view.mode {
-            ViewMode::Stage => Some(super::stage::STRIP_H + self.stage.pills_row_h),
             ViewMode::Wall => Some(super::wall::HEADER_H),
-            ViewMode::Classic | ViewMode::Chat => None,
+            ViewMode::Classic | ViewMode::Stage | ViewMode::Chat => {
+                Some(super::stage::STRIP_H + self.stage.pills_row_h)
+            }
         }
         .filter(|_| matches!(self.palette, PaletteMode::Jump { .. }));
         let top = match header {

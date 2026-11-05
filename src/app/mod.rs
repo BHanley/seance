@@ -2976,21 +2976,6 @@ impl SeanceApp {
 
     // ---- rendering ----
 
-    fn focus_pane_slug(&mut self, slug: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.active_slug = Some(slug.to_string());
-        if let Some(p) = self.panes.iter().find(|p| p.slug == slug) {
-            let ws = p.workspace.clone();
-            if self.selected_workspace.as_deref() != Some(ws.as_str()) {
-                self.selected_workspace = Some(ws.clone());
-            }
-            let _ = self.client.set_focus(Some(slug.to_string()), Some(ws));
-        }
-        self.focus_pane_if_possible(slug, cx);
-        self.pending_focus = Some(slug.to_string());
-        let _ = window;
-        cx.notify();
-    }
-
     fn inject_prompt_into_active(&mut self, body: &str, cx: &mut Context<Self>) {
         // A palette left open across a switch to the Wall must not type
         // into a pane nobody can see.
@@ -3108,9 +3093,7 @@ impl Render for SeanceApp {
                 .map(|e| e.into_any_element())
                 .collect();
             let shelf_el = self.render_minimize_shelf(active, cx).into_any_element();
-            let stage_el = self.render_stage_strip(active, cx).into_any_element();
             let awaken_el = self.render_awaken_bar(cx);
-            let daemon_err_el = self.render_daemon_error_bar(cx);
             let t2 = std::time::Instant::now();
             let tiles_el = self.render_tiles(active, cx).into_any_element();
             let t3 = std::time::Instant::now();
@@ -3131,22 +3114,84 @@ impl Render for SeanceApp {
                     .overflow_hidden()
                     .flex()
                     .flex_col()
-                    // Above everything: if the daemon won't have us, nothing
-                    // below this line is going to explain itself.
-                    .child(daemon_err_el)
                     .children(asks_el)
                     .child(shelf_el)
-                    .child(stage_el)
                     .child(awaken_el)
                     .child(tiles_el)
                     .into_any_element(),
             ]
         };
 
+        // The rows Classic, Stage and Chat share, so a layout switch changes
+        // only the content between them. The Wall keeps its own header.
+        let framed = !walled;
+        let (daemon_err, top, circles, needs, footer) = if framed {
+            self.health_feed(cx);
+            let width: f32 = window.viewport_size().width.into();
+            let (chips, snoozed) = self.waiting_list();
+            (
+                // Above everything: if the daemon won't have us, nothing
+                // below this line is going to explain itself.
+                Some(self.render_daemon_error_bar(cx)),
+                self.render_space_tabs("top", cx),
+                Some(self.render_stage_top(width, cx)),
+                self.render_stage_needs(chips, snoozed, cx),
+                self.render_stage_footer(),
+            )
+        } else {
+            (None, None, None, None, None)
+        };
+        let drawer = match &self.drawer {
+            // The Wall fills the window, as the overview always did.
+            _ if walled => None,
+            // The pad and activity drawers cover the dock panel while open.
+            // Stage shows the circle's files in its own column instead.
+            Drawer::Closed if staged => None,
+            Drawer::Closed => self.render_dock_panel(cx),
+            Drawer::Activity => Some(
+                div()
+                    .flex_none()
+                    .w(px(400.))
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .border_l_1()
+                    .border_color(SeancePalette::border())
+                    .bg(SeancePalette::bg_elevated())
+                    .child(drawer_close_bar("activity", cx))
+                    .child(
+                        div()
+                            .id("activity-drawer")
+                            .flex_1()
+                            .overflow_y_scroll()
+                            .child(self.render_activity()),
+                    )
+                    .into_any_element(),
+            ),
+            Drawer::Pad { slug } => {
+                let slug = slug.clone();
+                Some(
+                    div()
+                        .flex_none()
+                        .w(px(420.))
+                        .h_full()
+                        .flex()
+                        .flex_col()
+                        .border_l_1()
+                        .border_color(SeancePalette::border())
+                        .bg(SeancePalette::bg_elevated())
+                        .child(drawer_close_bar("pad", cx))
+                        .child(self.render_pad_drawer(&slug, cx))
+                        .into_any_element(),
+                )
+            }
+        };
+
         div()
             .id("seance-root")
             .size_full()
             .flex()
+            .flex_col()
             .bg(SeancePalette::bg())
             .track_focus(&self.focus_handle)
             // Capture phase: app chords + palette win before focused terminal.
@@ -3395,7 +3440,20 @@ impl Render for SeanceApp {
                     this.finish_layout_resize(cx);
                 }),
             )
-            .children(body)
+            .children(daemon_err)
+            .children(top)
+            .children(circles)
+            .children(needs)
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .flex()
+                    .children(body)
+                    .children(drawer),
+            )
+            .children(footer)
             // Below the (deferred) menu dropdown, above everything else — the
             // click-away catcher for an open host menu.
             .children(self.render_host_menu_scrim(window, cx))
@@ -3403,51 +3461,6 @@ impl Render for SeanceApp {
             .children(self.render_quicklaunch_editor(cx))
             .children(self.render_gui_menu(cx))
             .children(self.render_tasks_popover(window, cx))
-            .children(match &self.drawer {
-                // The Wall fills the window, as the overview always did.
-                _ if walled => None,
-                // The pad and activity drawers cover the dock panel while open.
-                // Stage shows the circle's files in its own column instead.
-                Drawer::Closed if staged => None,
-                Drawer::Closed => self.render_dock_panel(cx),
-                Drawer::Activity => Some(
-                    div()
-                        .flex_none()
-                        .w(px(400.))
-                        .h_full()
-                        .flex()
-                        .flex_col()
-                        .border_l_1()
-                        .border_color(SeancePalette::border())
-                        .bg(SeancePalette::bg_elevated())
-                        .child(drawer_close_bar("activity", cx))
-                        .child(
-                            div()
-                                .id("activity-drawer")
-                                .flex_1()
-                                .overflow_y_scroll()
-                                .child(self.render_activity()),
-                        )
-                        .into_any_element(),
-                ),
-                Drawer::Pad { slug } => {
-                    let slug = slug.clone();
-                    Some(
-                        div()
-                            .flex_none()
-                            .w(px(420.))
-                            .h_full()
-                            .flex()
-                            .flex_col()
-                            .border_l_1()
-                            .border_color(SeancePalette::border())
-                            .bg(SeancePalette::bg_elevated())
-                            .child(drawer_close_bar("pad", cx))
-                            .child(self.render_pad_drawer(&slug, cx))
-                            .into_any_element(),
-                    )
-                }
-            })
             // gpui-component queues toasts on the Root but draws them only where
             // a view renders this layer; without it every "copied" toast was lost.
             .children(gpui_component::Root::render_notification_layer(window, cx))

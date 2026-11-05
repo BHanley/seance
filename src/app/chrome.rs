@@ -1,6 +1,6 @@
 //! Pane chrome, overlays, and strips for the SeanceApp view: the per-pane
 //! tile (`render_pane`), the drawer close bar, the grimoire help window, and
-//! the minimize / asks / activity / stage strips.
+//! the minimize / asks / activity strips.
 
 use std::time::Duration;
 
@@ -220,9 +220,6 @@ impl SeanceApp {
             }))
             .into_any_element()
     }
-    /// Stage strip — only when something needs the human.
-    /// Human-only shells stay clean (no second roster). Shows chips for
-    /// needs-human / blocked / risky in the selected workspace.
     /// The awaken bar: a sleeping circle's panes still show what they were
     /// showing, greyed, and this sits ABOVE them so none of that content is
     /// covered. Only rendered when the selected circle is asleep.
@@ -330,104 +327,6 @@ impl SeanceApp {
                     .text_color(SeancePalette::text())
                     .child(format!("daemon refused this connection — {err}")),
             )
-            .into_any_element()
-    }
-
-    pub(super) fn render_stage_strip(
-        &self,
-        window_active: bool,
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
-        let ws = self.selected_workspace.clone();
-        let mut rows: Vec<(&Pane, Option<&PaneStatus>)> = self
-            .panes
-            .iter()
-            .filter(|p| ws.as_ref().is_none_or(|w| p.workspace == *w))
-            .map(|p| (p, self.statuses.get(&p.slug)))
-            .filter(|(_, st)| {
-                matches!(
-                    st.map(|s| s.state.as_str()),
-                    Some("needs-human" | "blocked" | "risky")
-                )
-            })
-            .collect();
-        rows.sort_by_key(|(p, st)| {
-            let urgency = match st.map(|s| s.state.as_str()) {
-                Some("needs-human") => 0,
-                Some("blocked") | Some("risky") => 1,
-                _ => 2,
-            };
-            (urgency, p.name.clone())
-        });
-        if rows.is_empty() {
-            return div().flex_none().into_any_element();
-        }
-        let active = if window_active {
-            self.active_slug.clone()
-        } else {
-            None
-        };
-        div()
-            .id("stage-strip")
-            .flex_none()
-            .w_full()
-            .px_1()
-            .pt_1()
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .gap_1()
-            .children(rows.into_iter().map(|(pane, st)| {
-                let slug = pane.slug.clone();
-                let is_active = active.as_deref() == Some(slug.as_str());
-                let state = st.map(|s| s.state.as_str()).unwrap_or("-");
-                let note = st.and_then(|s| s.note.as_deref()).unwrap_or("");
-                let color = status_color(state);
-                let label = if note.is_empty() {
-                    format!("{} · {state}", pane.name)
-                } else {
-                    let n = if note.len() > 28 {
-                        let mut end = 28;
-                        while end > 0 && !note.is_char_boundary(end) {
-                            end -= 1;
-                        }
-                        format!("{}…", &note[..end])
-                    } else {
-                        note.to_string()
-                    };
-                    format!("{} · {state} · {n}", pane.name)
-                };
-                div()
-                    .id(SharedString::from(format!("stage-{slug}")))
-                    .flex_none()
-                    .px_2()
-                    .py_0p5()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(if is_active {
-                        SeancePalette::flame()
-                    } else {
-                        SeancePalette::border()
-                    })
-                    .bg(SeancePalette::surface())
-                    .text_xs()
-                    .text_color(color)
-                    .cursor_pointer()
-                    .hover(|s| s.bg(SeancePalette::border()))
-                    .tooltip(tip("click focus + pad drawer · double-click zoom"))
-                    .on_click(
-                        cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                            if event.click_count() >= 2 {
-                                this.toggle_zoom(&slug, cx);
-                            } else {
-                                this.focus_pane_slug(&slug, window, cx);
-                                this.open_pad_drawer(&slug, cx);
-                            }
-                        }),
-                    )
-                    .child(label)
-                    .into_any_element()
-            }))
             .into_any_element()
     }
 }
@@ -576,7 +475,7 @@ pub(super) fn render_pane(
         .overflow_hidden()
         .flex()
         .flex_col()
-        .rounded_md()
+        .rounded(px(crate::theme::CARD_RADIUS))
         // Always 2px border so focus only recolors — never reflows terminal
         // cols (border_1 → border_2 used to steal a cell of width).
         .border_2()
