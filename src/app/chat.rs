@@ -48,6 +48,42 @@ const READ_RETRY: Duration = Duration::from_secs(30);
 const ACTIVE_MS: u64 = 2 * 3600 * 1000;
 /// The pane list for @-mentions is asked again after this.
 const PANES_TTL: Duration = Duration::from_secs(30);
+/// Within this many points of the bottom, the thread counts as at the bottom.
+const NEAR_BOTTOM: f32 = 80.;
+
+/// Follow the bottom as the web app does. `now` is the scroll offset (zero or
+/// negative) and the scroll range as the last frame laid them out; `seen` is
+/// the same a frame earlier. A change of offset with the range unchanged is
+/// Brian scrolling (growth moves the range, not the offset). Returns whether
+/// the thread is pinned and whether to scroll it down: only while pinned, and
+/// never while `held` (a search result is being shown).
+fn follow_step(
+    pinned: bool,
+    held: bool,
+    seen: Option<(f32, f32)>,
+    now: (f32, f32),
+) -> (bool, bool) {
+    let from_bottom = now.1 + now.0;
+    let by_hand =
+        seen.is_some_and(|(off, max)| (off - now.0).abs() > 0.5 && (max - now.1).abs() < 0.5);
+    let grew = seen.is_none_or(|(_, max)| (max - now.1).abs() >= 0.5);
+    let mut pinned = if by_hand {
+        from_bottom <= NEAR_BOTTOM
+    } else {
+        pinned
+    };
+    // A resize or shrink can clamp him onto the bottom without a scroll.
+    if !by_hand && from_bottom <= 0.5 {
+        pinned = true;
+    }
+    // Only a change of range scrolls down; a small scroll by hand near the
+    // bottom stays where he put it.
+    (
+        pinned,
+        pinned && !held && !by_hand && grew && from_bottom > 0.5,
+    )
+}
+
 /// Search runs this long after the last keystroke.
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(250);
 /// Fewest characters a search is run for (Invoke answers nothing for one).
@@ -99,6 +135,12 @@ pub(super) struct ChatState {
     scroll: ScrollHandle,
     /// Frames left to pin the thread to its newest message.
     stick: u8,
+    /// Brian scrolled up to read: new messages and growth leave the thread
+    /// where it is until he is back near the bottom or opens a circle.
+    unpinned: bool,
+    /// Scroll offset and range as the last frame saw them, to tell his
+    /// scrolling from the content growing.
+    seen: Option<(f32, f32)>,
     /// Highest id Invoke confirmed read, per circle.
     read_sent: HashMap<String, i64>,
     /// Circles with a read report in flight.
@@ -178,6 +220,14 @@ impl ChatState {
             .collect();
         ids.sort_unstable();
         ids.len().checked_sub(REFRESH_WINDOW + 1).map(|at| ids[at])
+    }
+
+    /// Coming back to Chat: open at the newest message again.
+    pub(super) fn arrive(&mut self) {
+        self.stick = 3;
+        self.unpinned = false;
+        self.no_pin = None;
+        self.jump = None;
     }
 
     pub(super) fn any_working(&self) -> bool {
@@ -727,6 +777,7 @@ impl SeanceApp {
             chat.circles = c.circles;
         }
         if chat.selected.is_none() {
+            chat.stick = 3;
             chat.selected = self
                 .selected_workspace
                 .clone()
@@ -765,7 +816,9 @@ impl SeanceApp {
             thread.messages = merged;
         }
         let newest = thread.messages.iter().map(|m| m.id).max().unwrap_or(0);
-        if before != Some(newest) && chat.no_pin.as_deref() != Some(ws.as_str()) {
+        // New messages follow the bottom, but never pull him away from older
+        // ones he is reading.
+        if before != Some(newest) && !chat.unpinned && chat.no_pin.as_deref() != Some(ws.as_str()) {
             chat.stick = 3;
         }
         // Images the thread shows: fetch each once.
@@ -878,9 +931,9 @@ impl SeanceApp {
         if self.chat.selected.as_deref() != Some(ws) {
             self.chat.selected = Some(ws.to_string());
             self.tasks_popover = None;
-            self.chat.stick = 3;
         }
-        self.chat.no_pin = None;
+        // Opening a circle, or clicking the open one, shows its newest message.
+        self.chat.arrive();
         self.chat.jump = None;
         self.chat.notice = None;
         // Selecting a circle again is what reads one marked unread.
@@ -1246,8 +1299,7 @@ impl SeanceApp {
             status: "sending".into(),
             ..Default::default()
         });
-        self.chat.stick = 3;
-        self.chat.no_pin = None;
+        self.chat.arrive();
         let thread_ws = ws.clone();
         cx.spawn(async move |this, cx| {
             let to = ws.clone();
@@ -1310,7 +1362,7 @@ impl SeanceApp {
             status: "sending".into(),
             ..Default::default()
         });
-        self.chat.stick = 3;
+        self.chat.arrive();
         let thread_ws = ws.clone();
         cx.spawn(async move |this, cx| {
             let (to, text) = (ws.clone(), choice);
@@ -1457,8 +1509,21 @@ impl SeanceApp {
                 window.request_animation_frame();
             }
         }
+        // Follow the bottom while pinned: images, chips and new messages change
+        // the thread's size after the pin frames are over.
+        let now = (
+            f32::from(self.chat.scroll.offset().y),
+            f32::from(self.chat.scroll.max_offset().y),
+        );
+        let held = self.chat.no_pin.is_some() || self.chat.jump.is_some();
+        let (pinned, down) = follow_step(!self.chat.unpinned, held, self.chat.seen, now);
+        self.chat.unpinned = !pinned;
+        self.chat.seen = Some(now);
         if self.chat.stick > 0 {
             self.chat.stick -= 1;
+            self.chat.scroll.scroll_to_bottom();
+            window.request_animation_frame();
+        } else if down {
             self.chat.scroll.scroll_to_bottom();
             window.request_animation_frame();
         }
@@ -2700,5 +2765,61 @@ mod tests {
         assert_eq!(search_query(" a "), Err(Some("Type at least 2 characters")));
         assert_eq!(search_query(" ab "), Ok("ab"));
         assert_eq!(search_query("é1"), Ok("é1"));
+    }
+
+    #[test]
+    fn the_thread_follows_the_bottom_until_he_scrolls_up() {
+        // (offset, range): pinned and the content grew, offset unchanged.
+        assert_eq!(
+            follow_step(true, false, Some((-900., 900.)), (-900., 1000.)),
+            (true, true)
+        );
+        // He scrolled up by hand: range unchanged, offset moved well off the bottom.
+        assert_eq!(
+            follow_step(true, false, Some((-900., 900.)), (-500., 900.)),
+            (false, false)
+        );
+        // Then new content arrives: unpinned, so nothing pulls him down.
+        assert_eq!(
+            follow_step(false, false, Some((-500., 900.)), (-500., 1000.)),
+            (false, false)
+        );
+        // Back within 80 points of the bottom: pinned again.
+        assert_eq!(
+            follow_step(false, false, Some((-500., 900.)), (-850., 900.)),
+            (true, false)
+        );
+        // A little scroll up stays pinned but is not undone.
+        assert_eq!(
+            follow_step(true, false, Some((-900., 900.)), (-880., 900.)),
+            (true, false)
+        );
+        // Past the bottom (overscroll): pinned, nothing to scroll.
+        assert_eq!(
+            follow_step(true, false, Some((-900., 900.)), (-930., 900.)),
+            (true, false)
+        );
+        // Clamped onto the bottom by a resize while unpinned: pinned again.
+        assert_eq!(
+            follow_step(false, false, Some((-500., 900.)), (-1000., 1000.)),
+            (true, false)
+        );
+        // First frame: pinned and off the bottom, scroll down.
+        assert_eq!(follow_step(true, false, None, (0., 400.)), (true, true));
+        // A search result being shown: never scrolled, whatever grows.
+        assert_eq!(
+            follow_step(true, true, Some((-100., 900.)), (-100., 1000.)),
+            (true, false)
+        );
+        // A hand scroll while a result is shown still tracks the pin.
+        assert_eq!(
+            follow_step(true, true, Some((-900., 900.)), (-300., 900.)),
+            (false, false)
+        );
+        // At the bottom already: nothing to do.
+        assert_eq!(
+            follow_step(true, false, Some((-900., 900.)), (-900., 900.)),
+            (true, false)
+        );
     }
 }
