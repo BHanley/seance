@@ -34,7 +34,6 @@ mod alerts;
 mod chat;
 mod chrome;
 mod dock;
-pub mod hud;
 mod layout;
 mod lead_tasks;
 mod menus;

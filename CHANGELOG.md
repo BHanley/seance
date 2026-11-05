@@ -372,6 +372,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Removed
 
+- **The Progress HUD** (the Ink and Pips floating window), with its three
+  Seance menu items, the `seance-hud` key in `terminal.conf` and the `hud`
+  value in `~/.config/seance/view.json`. Its rows were not accurate. An old
+  `terminal.conf` or `view.json` that still has them loads as before and the
+  leftover value is ignored.
 - PR links, gone everywhere: the PTY scraper, the per-circle link list and
   its dismissals, the `pr_watch.json` watcher, `ctl pr-link`, the header PR
   chips and the `PRs (N)` board in both GUIs (and the phone circle menu).

@@ -79,24 +79,11 @@ fn decode(text: &str) -> ViewMode {
         .unwrap_or_default()
 }
 
-/// The HUD last picked from the menu; None in a file from before it was kept.
-fn hud_of(text: &str) -> Option<String> {
-    serde_json::from_str::<serde_json::Value>(text)
-        .ok()?
-        .get("hud")?
-        .as_str()
-        .map(str::to_string)
-}
-
 fn wall_all_of(text: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(text)
         .ok()
         .and_then(|v| v.get("wall_all")?.as_bool())
         .unwrap_or(false)
-}
-
-pub(super) fn saved_hud() -> Option<String> {
-    hud_of(&std::fs::read_to_string(config_path()).ok()?)
 }
 
 fn save_key(key: &str, value: impl Into<serde_json::Value>) {
@@ -113,10 +100,6 @@ fn save_key(key: &str, value: impl Into<serde_json::Value>) {
 
 fn save(mode: ViewMode) {
     save_key("layout", mode.id());
-}
-
-pub(super) fn save_hud(id: &str) {
-    save_key("hud", id);
 }
 
 pub(super) fn save_wall_all(on: bool) {
@@ -298,42 +281,29 @@ mod tests {
     }
 
     #[test]
-    fn layout_and_hud_share_the_file() {
-        // A file from before the HUD was kept has none.
-        let old = r#"{"layout":"stage"}"#;
-        assert_eq!(hud_of(old), None);
-        let both = put(old, "hud", "pips");
-        assert_eq!(
-            (decode(&both), hud_of(&both).as_deref()),
-            (ViewMode::Stage, Some("pips"))
-        );
-        // Saving the layout keeps the HUD, and the other way round.
-        let again = put(&both, "layout", "chat");
-        assert_eq!(
-            (decode(&again), hud_of(&again).as_deref()),
-            (ViewMode::Chat, Some("pips"))
-        );
-        assert_eq!(hud_of(&put("{", "hud", "off")).as_deref(), Some("off"));
+    fn an_old_file_with_a_hud_key_still_loads() {
+        // The progress HUD is gone; its key is ignored and kept as it was.
+        let old = r#"{"layout":"stage","hud":"ink"}"#;
+        assert_eq!(decode(old), ViewMode::Stage);
+        let again = put(old, "layout", "chat");
+        assert_eq!(decode(&again), ViewMode::Chat);
     }
 
     #[test]
     fn snoozes_share_the_file() {
         assert!(snoozed_of(r#"{"layout":"stage"}"#).is_empty());
         let map = std::collections::HashMap::from([("w".to_string(), 42u64)]);
-        let text = put(r#"{"hud":"ink"}"#, "snoozed", serde_json::json!(map));
+        let text = put(r#"{"layout":"stage"}"#, "snoozed", serde_json::json!(map));
         assert_eq!(snoozed_of(&text), map);
-        assert_eq!(hud_of(&text).as_deref(), Some("ink"));
+        assert_eq!(decode(&text), ViewMode::Stage);
     }
 
     #[test]
     fn wall_all_shares_the_file() {
         assert!(!wall_all_of(r#"{"layout":"wall"}"#));
-        let text = put(r#"{"layout":"wall","hud":"ink"}"#, "wall_all", true);
+        let text = put(r#"{"layout":"wall"}"#, "wall_all", true);
         assert!(wall_all_of(&text));
-        assert_eq!(
-            (decode(&text), hud_of(&text).as_deref()),
-            (ViewMode::Chat, Some("ink"))
-        );
+        assert_eq!(decode(&text), ViewMode::Chat);
         assert!(!wall_all_of(&put(&text, "wall_all", false)));
     }
 

@@ -252,7 +252,7 @@ in the middle of the window, live and typeable. From top to bottom:
   pane. ctrl+shift+i walks the needs-you and done items in any layout (on
   the Wall it selects the circle's tile). **Snooze 1h** on a needs-you or
   done chip (or the peek card) quiets that pane for an hour: no chip, no
-  banner or ding, no purple HUD row, and ctrl+shift+i skips it. Its row and
+  banner or ding, and ctrl+shift+i skips it. Its row and
   status stay. Opening the pane ends it early; when the hour is up the chip
   comes back if it's still waiting. A faint "N snoozed" at the end of the
   bar brings them all back (when only snoozed ones are left, the bar shows
@@ -377,7 +377,7 @@ see above), `theme`, `palette`, `background`, `foreground`, `cursor-color`,
 `seance-done-sound` and `seance-done-sound-volume` (played when a pane
 finishes while you're looking elsewhere; leads only),
 `seance-auto-sleep-idle` and `seance-auto-sleep-skip` (see below),
-`seance-hud` (see below), `seance-new-circle-command` (Stage, see above),
+`seance-new-circle-command` (Stage, see above),
 `seance-origin-gutter` (`false` hides the 2px stripe at a terminal's left
 edge that tints by who last typed).
 A pane's BEL plays the bell sound; OSC 9 /
@@ -398,28 +398,6 @@ into the same conversation.
 seance-auto-sleep-idle = 6h            # default 12h; off turns it off
 seance-auto-sleep-skip = l6-leveling, main   # circles never auto-slept
 ```
-
-**Progress HUD (macOS).** A tiny window floats over everything with one line
-per pane that is working or needs you: the circle, the task or step, and how
-long it has run. A status note with a step count ("build 3/5") also fills a
-hairline bar. Panes that need you come first with a purple dot; everything
-else is gray. A finished line fades out after about 3 seconds, and the HUD
-hides when nothing runs. It never takes focus or keystrokes. Hover it for
-each pane's full name; click a line to bring Seance forward with that pane
-on stage. Two looks:
-
-- **Ink**: bottom-right of the screen you launched Seance on, just text and
-  hairlines with a soft shadow; hovering adds a dark backing.
-- **Pips**: top centre under the menu bar, a small pill of short bars (a dot
-  for a pane that needs you); hovering opens the line list.
-
-```
-seance-hud = ink      # ink, pips or off (the default)
-```
-
-The Seance menu's **Progress HUD: Ink / Pips / Off** switch it, and the
-pick is kept on this machine (in `~/.config/seance/view.json`), so the next
-launch opens the same one. `seance-hud` is the default until you pick one.
 
 ### Lead sprites
 
