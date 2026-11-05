@@ -81,7 +81,7 @@ impl SeanceApp {
             (true, true) => "Turning off…",
             (true, false) => "Turning on…",
             (false, true) => "✓ AFK ON",
-            (false, false) => "AFK OFF",
+            (false, false) => "AFK",
         };
         Some(
             div()
