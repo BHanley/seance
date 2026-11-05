@@ -379,12 +379,12 @@ fn reset_label(ts_ms: u64, with_day: bool) -> String {
 }
 
 /// The thin usage line under the thread header, like the phone's: "5h 18% ·
-/// ⟳ 12:50 PM   7d 35% · ⟳ Thu 2 AM   ctx 28%". Numbers go red from 80%. The
-/// last is the lead's context, which is its own and not the plan's. None when
+/// ⟳ 12:50 PM   7d 35% · ⟳ Thu 2 AM   ctx 28%". Numbers go red from 80%, the
+/// last (ctx, the lead's own context and not the plan's) from 30%. None when
 /// nothing is known.
 fn usage_strip(u: Option<&Usage>, context: Option<u32>) -> Option<AnyElement> {
-    let part = |label: &str, used: f64, resets: Option<(u64, bool)>| {
-        let hot = used >= 80.;
+    let part = |label: &str, used: f64, hot_at: f64, resets: Option<(u64, bool)>| {
+        let hot = used >= hot_at;
         div()
             .flex()
             .items_center()
@@ -403,14 +403,14 @@ fn usage_strip(u: Option<&Usage>, context: Option<u32>) -> Option<AnyElement> {
             .children(resets.map(|(at, with_day)| format!("· ⟳ {}", reset_label(at, with_day))))
     };
     let window = |label: &str, w: &UsageWindow, with_day: bool| {
-        part(label, w.used, w.resets.map(|at| (at, with_day)))
+        part(label, w.used, 80., w.resets.map(|at| (at, with_day)))
     };
     let parts: Vec<_> = [
         u.and_then(|u| u.five_hour.as_ref())
             .map(|w| window("5h", w, false)),
         u.and_then(|u| u.seven_day.as_ref())
             .map(|w| window("7d", w, true)),
-        context.map(|c| part("ctx", f64::from(c), None)),
+        context.map(|c| part("ctx", f64::from(c), 30., None)),
     ]
     .into_iter()
     .flatten()
