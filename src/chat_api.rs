@@ -114,6 +114,10 @@ pub struct Thread {
     /// The circle's lead is mid-turn, so Stop has something to stop.
     #[serde(default)]
     pub lead_busy: bool,
+    /// Percent of the lead's Claude context used; none when unknown (asleep,
+    /// no status line, or Alerts).
+    #[serde(default)]
+    pub context: Option<u32>,
 }
 
 /// One `/api/search` result: a message, and the circle it is in.
@@ -761,6 +765,11 @@ mod tests {
             .is_none());
         let t: Thread = serde_json::from_str(r#"{"messages":[],"lead_busy":true}"#).unwrap();
         assert!(t.lead_busy);
+        assert_eq!(t.context, None);
+        let t: Thread = serde_json::from_str(r#"{"messages":[],"context":28}"#).unwrap();
+        assert_eq!(t.context, Some(28));
+        let t: Thread = serde_json::from_str(r#"{"messages":[],"context":null}"#).unwrap();
+        assert_eq!(t.context, None);
         let h: Hits = serde_json::from_str(
             r#"{"results":[{"ws":"main","circle":"PM","id":9,"from":"lead","ts":3,"text":"hi"}]}"#,
         )
