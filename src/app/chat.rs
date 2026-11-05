@@ -1005,6 +1005,17 @@ impl SeanceApp {
     fn chat_poke(&mut self, ws: String, cx: &mut Context<Self>) {
         use super::sprite::{Poke, LINE_MS, PARTY_LINE, PARTY_MS};
         let now = now_ms();
+        // More clicks while a party runs must not end it by replacing it with
+        // a dance and a line.
+        if self
+            .chat
+            .egg
+            .as_ref()
+            .is_some_and(|e| e.mv.is_none() && now.saturating_sub(e.at) < PARTY_MS)
+        {
+            eprintln!("[seance chat] creature poke ws={ws} at={now} -> ignored, party running");
+            return;
+        }
         let (mv, line, ms) = match self.chat.pokes.poke(now) {
             Poke::Dance { mv, line } => (Some(mv), line, LINE_MS),
             Poke::Party => {
@@ -1742,7 +1753,10 @@ impl SeanceApp {
     /// header's creature and the line in a big centered bubble. It has no
     /// handlers and no id, so it makes nothing to hit and clicks pass through.
     fn party_overlay(&self) -> Option<AnyElement> {
-        let egg = self.chat.egg.as_ref().filter(|e| e.mv.is_none())?;
+        let egg =
+            self.chat.egg.as_ref().filter(|e| {
+                e.mv.is_none() && self.chat.selected.as_deref() == Some(e.ws.as_str())
+            })?;
         let t = now_ms().saturating_sub(egg.at);
         if t >= super::sprite::PARTY_MS {
             return None;
@@ -1769,9 +1783,12 @@ impl SeanceApp {
             div()
                 .absolute()
                 .inset_0()
+                .overflow_hidden()
                 .flex()
                 .items_center()
                 .justify_center()
+                // The bubble centers on the thread, not the list beside it.
+                .pl(px(LIST_W))
                 .children(spirits)
                 .child(
                     div()
