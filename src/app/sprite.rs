@@ -946,8 +946,13 @@ pub(super) fn confetti_at(seed: u64, i: usize, t: u64, w: f32, h: f32) -> Option
     Some((left + drift * p, -12. + p * 1.1 * h))
 }
 
-/// Ends the party at a click; true if it was still on, so ended early.
-pub(super) fn end_party(party: &mut Option<Party>, now: u64) -> bool {
+/// A click on the party. On the header's creature it is one more poke and
+/// ignored, as those are while a party runs; anywhere else it ends the
+/// party. True if that party was still on, so ended early.
+pub(super) fn click_party(party: &mut Option<Party>, now: u64, on_creature: bool) -> bool {
+    if on_creature && party.as_ref().is_some_and(|p| p.on(now)) {
+        return false;
+    }
     party.take().is_some_and(|p| p.on(now))
 }
 
@@ -1354,13 +1359,16 @@ mod tests {
             Some(Party::new(generate("home"), [generate("a")], 10_000, rng))
         };
         let mut party = start(&mut rng);
-        assert!(end_party(&mut party, 12_000));
+        // A click on the header's creature is an ignored poke.
+        assert!(!click_party(&mut party, 11_000, true));
+        assert!(party.is_some());
+        assert!(click_party(&mut party, 12_000, false));
         assert!(party.is_none());
         // Over already, or none: nothing ended early.
         let mut party = start(&mut rng);
-        assert!(!end_party(&mut party, 10_000 + PARTY_MS));
+        assert!(!click_party(&mut party, 10_000 + PARTY_MS, false));
         assert!(party.is_none());
-        assert!(!end_party(&mut None, 12_000));
+        assert!(!click_party(&mut None, 12_000, false));
         // The crew is gone once the party is over.
         let party = start(&mut rng).unwrap();
         assert_eq!(party.cuts(12_000, PARTY_R).len(), PARTY_CREW);

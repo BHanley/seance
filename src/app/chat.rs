@@ -195,6 +195,9 @@ pub(super) struct ChatState {
     egg: Option<Egg>,
     /// The five-click party, while it runs.
     party: Option<super::sprite::Party>,
+    /// Where the header's creature was last painted: a click there during a
+    /// party is one more poke, ignored, not the click that ends it.
+    creature_at: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
     /// When Compact was last clicked, for its cooldown.
     compact_at: Option<(String, Instant)>,
     /// Why the last action Brian took was refused; a click clears it.
@@ -1506,6 +1509,8 @@ impl SeanceApp {
             self.chat.search = Some(search);
         }
         self.chat.window_active = window.is_window_active();
+        // Set again as the header's creature is painted, if it still is.
+        self.chat.creature_at.set(None);
         if let Some(input) = self.chat.input.clone() {
             if let Some(text) = self.chat.restore.take() {
                 // Whatever was typed since stays, after the failed text.
@@ -1901,7 +1906,9 @@ impl SeanceApp {
                 .occlude()
                 .opacity(scene.fade)
                 .bg(gpui::black().opacity(0.6))
-                .on_click(cx.listener(|this, _, _, cx| this.chat_end_party(cx)))
+                .on_click(cx.listener(|this, ev: &gpui::ClickEvent, _, cx| {
+                    this.chat_party_click(ev.position(), cx)
+                }))
                 .child(centred().child(glow))
                 .child(centred().child(party.render(now, w)))
                 .children(confetti)
@@ -1909,12 +1916,16 @@ impl SeanceApp {
         )
     }
 
-    /// A click on the party ends it early.
-    fn chat_end_party(&mut self, cx: &mut Context<Self>) {
+    /// A click on the party ends it early, unless it is on the header's
+    /// creature.
+    fn chat_party_click(&mut self, at: gpui::Point<gpui::Pixels>, cx: &mut Context<Self>) {
         let now = now_ms();
-        if super::sprite::end_party(&mut self.chat.party, now) {
+        let on_creature = self.chat.creature_at.get().is_some_and(|b| b.contains(&at));
+        if super::sprite::click_party(&mut self.chat.party, now, on_creature) {
             super::sprite::stop_party();
             eprintln!("[seance chat] party ended early at={now}");
+        } else if on_creature {
+            eprintln!("[seance chat] creature poke at={now} -> ignored, party running");
         }
         cx.notify();
     }
@@ -1976,6 +1987,12 @@ impl SeanceApp {
             .flex_none()
             .cursor_pointer()
             .on_click(cx.listener(move |this, _, _, cx| this.chat_poke(target.clone(), cx)))
+            .child({
+                let at = self.chat.creature_at.clone();
+                gpui::canvas(move |b, _, _| at.set(Some(b)), |_, _, _, _| {})
+                    .absolute()
+                    .size_full()
+            })
             .child(if cuts.is_empty() {
                 super::sprite::render_move(&sprite, 2.5, working, moving)
             } else {
