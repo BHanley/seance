@@ -1288,7 +1288,11 @@ impl SeanceApp {
                 &search,
                 window,
                 |this: &mut SeanceApp, input, event: &InputEvent, _, cx| match event {
-                    InputEvent::PressEnter { .. } => this.chat_search(cx),
+                    InputEvent::PressEnter { .. } => {
+                        // Enter searches now; a pending timer must not repeat it.
+                        this.chat.search_seq += 1;
+                        this.chat_search(cx);
+                    }
                     InputEvent::Change => {
                         this.chat.search_seq += 1;
                         if input.read(cx).value().trim().is_empty() {
