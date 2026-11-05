@@ -38,6 +38,8 @@ const RETRY: Duration = Duration::from_secs(3);
 /// While another layout is up the loop only checks back this often.
 const IDLE: Duration = Duration::from_secs(1);
 const LIST_W: f32 = 300.;
+/// A list row's crew against the header's, as the web Chat scales it.
+const LIST_CREW: f32 = 0.62;
 /// Invoke's alerts circle is read-only: nothing to say, no lead to open.
 const ALERTS_WS: &str = "alerts";
 /// A refresh reads this many of the newest messages again, to catch status changes.
@@ -151,6 +153,11 @@ pub(super) struct ChatState {
     window_active: bool,
     /// The header crew's run of moves, while it shows.
     crew_dance: Option<super::sprite::CrewDance>,
+    /// Each list row's crew dance by circle, apart from the header's.
+    list_dances: HashMap<String, super::sprite::CrewDance>,
+    /// Rows whose crew dances this frame: those scrolled into view.
+    list_dancing: HashSet<String>,
+    list_scroll: ScrollHandle,
     /// Counts down from zero: ids for bubbles shown before Invoke has them.
     next_local: i64,
     /// Text of a send that failed, to put back in the composer.
@@ -572,6 +579,12 @@ fn tick_for(m: &Msg, read: i64) -> Option<(&'static str, bool, &'static str)> {
         ("lead", _) if m.id > 0 && m.id <= read => Some(("✓✓", true, "Seen")),
         _ => None,
     }
+}
+
+/// One child of the circle list.
+enum ListItem {
+    Label(String),
+    Circle(CircleRow),
 }
 
 /// A list heading: a space's name, or Active.
@@ -1529,10 +1542,36 @@ impl SeanceApp {
             self.chat.scroll.scroll_to_bottom();
             window.request_animation_frame();
         }
-        // The header's crew dances smoothly, so it needs every frame while
-        // it shows; the spinner's 240ms tick is too coarse. Not in a window
-        // nobody is looking at: rebuilding the thread 60 times a second there
-        // would only burn battery.
+        // Crews dance smoothly, so they need every frame while one shows in
+        // the header or a list row in view; the spinner's 240ms tick is too
+        // coarse. Not in a window nobody is looking at: rebuilding the view 60
+        // times a second there would only burn battery.
+        let items = self.chat_list_items();
+        let now = now_ms();
+        let crews = items.iter().filter_map(|i| match i {
+            ListItem::Circle(c) => Some((c.ws.as_str(), &c.crew[..])),
+            ListItem::Label(_) => None,
+        });
+        super::sprite::keep_crew_dances(&mut self.chat.list_dances, crews, now);
+        // The list's children in view as of its last layout; all of them
+        // before it has one.
+        let list = &self.chat.list_scroll;
+        let seen = if list.bounds_for_item(0).is_some() {
+            list.top_item()..=list.bottom_item()
+        } else {
+            0..=usize::MAX
+        };
+        self.chat.list_dancing.clear();
+        for (i, item) in items.iter().enumerate() {
+            if let ListItem::Circle(c) = item {
+                if let Some(d) = self.chat.list_dances.get_mut(&c.ws) {
+                    if seen.contains(&i) {
+                        d.advance(now, &mut rand::thread_rng());
+                        self.chat.list_dancing.insert(c.ws.clone());
+                    }
+                }
+            }
+        }
         let crew = self
             .chat
             .selected
@@ -1540,7 +1579,6 @@ impl SeanceApp {
             .and_then(|ws| self.chat.threads.get(ws))
             .is_some_and(|t| super::sprite::is_crew(&t.crew));
         if crew {
-            let now = now_ms();
             self.chat
                 .crew_dance
                 .get_or_insert_with(|| super::sprite::CrewDance::new(now))
@@ -1548,10 +1586,10 @@ impl SeanceApp {
         } else {
             self.chat.crew_dance = None;
         }
-        if crew && self.chat.window_active {
+        if (crew || !self.chat.list_dancing.is_empty()) && self.chat.window_active {
             window.request_animation_frame();
         }
-        let list = self.render_chat_list(cx);
+        let list = self.render_chat_list(items, cx);
         let thread = self.render_chat_thread(cx);
         div()
             .id("chat")
@@ -1575,13 +1613,44 @@ impl SeanceApp {
         rows
     }
 
-    fn render_chat_list(&self, cx: &Context<Self>) -> AnyElement {
+    /// The circle list's children in order: none while search results stand
+    /// in for the circles.
+    fn chat_list_items(&self) -> Vec<ListItem> {
+        let mut items = Vec::new();
+        if self.chat.hits.is_some() {
+            return items;
+        }
         let spaces = &self.subs_pref.spaces;
+        // Active circles sit above the spaces, lifted out of theirs.
+        let active = active_circles(&self.chat.circles, now_ms());
+        if !active.is_empty() {
+            items.push(ListItem::Label("ACTIVE".to_string()));
+            items.extend(active.iter().cloned().map(ListItem::Circle));
+        }
+        let mut space = String::new();
+        for c in self.chat_circles_in_order() {
+            if active.iter().any(|a| a.ws == c.ws) {
+                continue;
+            }
+            let id = spaces.space_of(&c.ws).to_string();
+            if id != space {
+                if let Some(s) = spaces.list.iter().find(|s| s.id == id) {
+                    items.push(ListItem::Label(s.name.to_uppercase()));
+                }
+                space = id;
+            }
+            items.push(ListItem::Circle(c));
+        }
+        items
+    }
+
+    fn render_chat_list(&self, items: Vec<ListItem>, cx: &Context<Self>) -> AnyElement {
         let mut col = div()
             .id("chat-list")
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
+            .track_scroll(&self.chat.list_scroll)
             .flex()
             .flex_col();
         if let Some(hits) = &self.chat.hits {
@@ -1592,29 +1661,12 @@ impl SeanceApp {
             for h in hits {
                 col = col.child(self.chat_hit_row(h, cx));
             }
-        } else {
-            // Active circles sit above the spaces, lifted out of theirs.
-            let active = active_circles(&self.chat.circles, now_ms());
-            if !active.is_empty() {
-                col = col.child(list_label("ACTIVE".to_string()));
-                for c in &active {
-                    col = col.child(self.chat_circle_row(c, cx));
-                }
-            }
-            let mut space = String::new();
-            for c in self.chat_circles_in_order() {
-                if active.iter().any(|a| a.ws == c.ws) {
-                    continue;
-                }
-                let id = spaces.space_of(&c.ws).to_string();
-                if id != space {
-                    if let Some(s) = spaces.list.iter().find(|s| s.id == id) {
-                        col = col.child(list_label(s.name.to_uppercase()));
-                    }
-                    space = id;
-                }
-                col = col.child(self.chat_circle_row(&c, cx));
-            }
+        }
+        for item in items {
+            col = col.child(match item {
+                ListItem::Label(text) => list_label(text).into_any_element(),
+                ListItem::Circle(c) => self.chat_circle_row(&c, cx),
+            });
         }
         div()
             .w(px(LIST_W))
@@ -1718,9 +1770,7 @@ impl SeanceApp {
                     let _ = weak.update(cx, |a, cx| a.chat_unread(ws, cx));
                 }))
             })
-            .child(div().flex_none().w(px(30.)).flex().justify_center().child(
-                super::sprite::render(&super::sprite::for_circle(&c.ws), 2., c.working),
-            ))
+            .child(self.chat_row_creature(c))
             .child(
                 div()
                     .flex_1()
@@ -1831,6 +1881,40 @@ impl SeanceApp {
         )
     }
 
+    /// A list row's creature, or its crew while two or more dance in view.
+    fn chat_row_creature(&self, c: &CircleRow) -> AnyElement {
+        let sprite = super::sprite::for_circle(&c.ws);
+        let slot = div().flex_none().w(px(30.)).flex().justify_center();
+        let dance = self
+            .chat
+            .list_dances
+            .get(&c.ws)
+            .filter(|_| self.chat.list_dancing.contains(&c.ws));
+        let Some(dance) = dance else {
+            return slot
+                .child(super::sprite::render(&sprite, 2., c.working))
+                .into_any_element();
+        };
+        let cuts = super::sprite::crew_at(&c.crew, dance, now_ms());
+        // Wider than the slot: centred over it in a box that holds it, as
+        // tall as the lone creature, so the row and its text stay put.
+        slot.h(px(20.))
+            .relative()
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(-20.))
+                    .right(px(-20.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(super::sprite::render_crew(&sprite, &cuts, None, LIST_CREW)),
+            )
+            .into_any_element()
+    }
+
     /// The thread header's creature. Click it: it dances and says something.
     fn header_creature(&self, ws: &str, working: bool, cx: &Context<Self>) -> AnyElement {
         let now = now_ms();
@@ -1858,7 +1942,7 @@ impl SeanceApp {
             .child(if cuts.is_empty() {
                 super::sprite::render_move(&sprite, 2.5, working, moving)
             } else {
-                super::sprite::render_crew(&sprite, &cuts, moving)
+                super::sprite::render_crew(&sprite, &cuts, moving, 1.)
             })
             .children(say.map(|line| {
                 // Deferred, so the thread below cannot paint over it.
