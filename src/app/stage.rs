@@ -47,8 +47,8 @@ const USAGE_BAR_W: f32 = 64.;
 /// Below this the crew column folds behind a toggle so the terminal keeps
 /// its width.
 const CREW_FOLD_BELOW: f32 = 1000.;
-/// Stage and Wall's row of space tabs.
-const SPACE_ROW_H: f32 = 30.;
+/// Stage and Wall's row of space tabs, and Stage's row above it.
+pub(super) const SPACE_ROW_H: f32 = 30.;
 /// Lines a done chip's peek card shows of the finish note.
 const PEEK_LINES: usize = 12;
 /// Bottom rows read for a crew card's last line: enough to clear a TUI's
@@ -815,6 +815,7 @@ impl SeanceApp {
         let crew_w = if width >= 1200. { 330. } else { 260. };
         let show_crew = !fold || self.stage.crew_open;
 
+        let head = self.render_stage_head(cx);
         let tabs = self.render_space_tabs("stage", cx);
         let top = self.render_stage_top(width, cx);
         let (chips, snoozed) = self.waiting_list();
@@ -869,6 +870,7 @@ impl SeanceApp {
             .flex_col()
             .bg(SeancePalette::bg())
             .child(self.render_daemon_error_bar(cx))
+            .child(head)
             .children(tabs)
             .child(top)
             .children(needs)
@@ -889,9 +891,33 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    /// ✦ mark and AFK chip (unless the space row holds them), circle pills,
-    /// the layout toggle and the jump box. With "+N more" open, the circles that don't
-    /// fit get a row of their own underneath.
+    /// Stage's top row: the ✦ mark, the layout switch beside it and the AFK
+    /// chip at the right. Drawn with one space or many.
+    fn render_stage_head(&self, cx: &Context<Self>) -> AnyElement {
+        div()
+            .flex_none()
+            .h(px(SPACE_ROW_H))
+            .px(px(14.))
+            .flex()
+            .items_center()
+            .gap(px(14.))
+            .bg(SeancePalette::bg_elevated())
+            .border_b_1()
+            .border_color(SeancePalette::border())
+            .child(self.render_seance_mark("stage", cx))
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(SWITCH_W))
+                    .child(self.render_view_switch("strip", cx)),
+            )
+            .child(div().flex_1())
+            .children(self.render_afk_chip("stage", cx))
+            .into_any_element()
+    }
+
+    /// Circle pills, "+ circle" and the jump box. With "+N more" open, the
+    /// circles that don't fit get a row of their own underneath.
     fn render_stage_top(&mut self, width: f32, cx: &Context<Self>) -> AnyElement {
         let rename = self.render_rename_field();
         let renaming = rename.is_some();
@@ -900,22 +926,9 @@ impl SeanceApp {
         let circles = self.subs_pref.spaces.circles_in(&space, &self.workspaces());
         let roomy = width >= 900.;
         let jump_w = jump_box_w(roomy);
-        // The mark sits on the space row above when that row shows, and the
-        // switch with it.
-        let tabs = self.space_tabs_shown();
-        let mark_w = if tabs { 0. } else { 84. + 14. };
         let add_w = 76.;
-        // The AFK chip moves up there too.
-        let afk = (!tabs).then(|| self.render_afk_chip("stage", cx)).flatten();
-        let afk_w = if afk.is_some() {
-            super::afk::AFK_W + 14.
-        } else {
-            0.
-        };
-        // Strip padding, the mark, the toggle, the jump box, "+ circle", the
-        // AFK chip and the gaps.
-        let switch_w = if tabs { 0. } else { SWITCH_W + 14. };
-        let avail = width - 28. - mark_w - switch_w - jump_w - 14. * 2. - add_w - 6. - afk_w;
+        // Strip padding, the jump box, "+ circle" and the gaps.
+        let avail = width - 28. - jump_w - 14. * 2. - add_w - 6.;
         let labels: Vec<String> = circles.iter().map(|c| self.workspace_label(c)).collect();
         let widths: Vec<f32> = labels.iter().map(|l| pill_width(l)).collect();
         let sel_idx = selected
@@ -1097,14 +1110,6 @@ impl SeanceApp {
             .bg(SeancePalette::bg_elevated())
             .border_b_1()
             .border_color(SeancePalette::border())
-            .when(!tabs, |d| {
-                d.child(self.render_seance_mark("stage", cx)).child(
-                    div()
-                        .flex_none()
-                        .w(px(SWITCH_W))
-                        .child(self.render_view_switch("strip", cx)),
-                )
-            })
             .child(
                 div()
                     .flex_1()
@@ -1116,8 +1121,6 @@ impl SeanceApp {
                     .children(rename)
                     .when(!renaming, |d| d.children(pills).children(more).child(add)),
             )
-            // Left of the jump box, which the jump palette drops down from.
-            .children(afk)
             .child(render_jump_box("stage-jump", roomy, cx));
         div()
             .flex_none()
@@ -1182,7 +1185,8 @@ impl SeanceApp {
     /// Stage and Wall's space row: a tab per space with the mark its rail
     /// row has (needs you, working, done), the one on show underlined.
     /// Empty spaces get no tab unless on show. Wall leads with an All tab.
-    /// Scrolls sideways when the tabs don't fit; the AFK chip ends the row.
+    /// Scrolls sideways when the tabs don't fit. Wall's row leads with the ✦
+    /// mark and ends with the AFK chip; Stage has them in the row above.
     /// None when there would be fewer than two.
     pub(super) fn render_space_tabs(
         &mut self,
@@ -1322,8 +1326,7 @@ impl SeanceApp {
                 })
                 .child("All")
         });
-        // The ✦ mark leads the row, so the spaces sit beside it rather than
-        // above it.
+        let wall_ends = key == "wall";
         Some(
             div()
                 .flex_none()
@@ -1335,16 +1338,7 @@ impl SeanceApp {
                 .bg(SeancePalette::bg_elevated())
                 .border_b_1()
                 .border_color(SeancePalette::border())
-                .child(self.render_seance_mark(key, cx))
-                // Stage's switch sits here, after the mark; Wall keeps its own.
-                .when(key == "stage", |d| {
-                    d.child(
-                        div()
-                            .flex_none()
-                            .w(px(SWITCH_W))
-                            .child(self.render_view_switch("strip", cx)),
-                    )
-                })
+                .when(wall_ends, |d| d.child(self.render_seance_mark(key, cx)))
                 .child(
                     div()
                         .id(SharedString::from(format!("{key}-spaces")))
@@ -1359,7 +1353,7 @@ impl SeanceApp {
                         .children(all_tab)
                         .children(tabs),
                 )
-                .children(self.render_afk_chip(key, cx))
+                .when(wall_ends, |d| d.children(self.render_afk_chip(key, cx)))
                 .into_any_element(),
         )
     }
