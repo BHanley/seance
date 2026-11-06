@@ -229,9 +229,11 @@ mod shots {
                                 (Torch::Stopped, "stopped"),
                             ]
                             .map(|(t, name)| {
-                                div()
-                                    .bg(P::bg())
-                                    .child(chat_header(Some(t), &format!("l6-leveling · {name}")))
+                                div().bg(P::bg()).child(chat_header(
+                                    Some(t),
+                                    &format!("l6-leveling · {name}"),
+                                    None,
+                                ))
                             }),
                         ),
                     )
@@ -543,7 +545,19 @@ mod shots {
 
     /// The Chat header as `chat.rs` builds it: stone strip, the lead's torch
     /// at 1.5x, the circle's creature (a stand-in square here), name, chips.
-    fn chat_header(torch: Option<Torch>, name: &str) -> impl IntoElement {
+    /// With `decor_w` (the header's width) it also gets Chat's decorative
+    /// wall torches and the one by the task count.
+    fn chat_header(torch: Option<Torch>, name: &str, decor_w: Option<f32>) -> impl IntoElement {
+        use crate::app::chat::decor;
+        let line = "running cargo test";
+        let wall = decor_w.map_or_else(Vec::new, |w| {
+            decor::wall(
+                0,
+                w,
+                decor::header_text_end(torch.is_some(), 1, name, line),
+                decor::header_chips_at(w, true),
+            )
+        });
         let chip = |text: &str, fill: bool| {
             div()
                 .flex_none()
@@ -565,6 +579,7 @@ mod shots {
             .border_b_1()
             .border_color(P::border())
             .map(|d| under(d, STRIP))
+            .children(wall)
             .children(
                 torch.map(|t| {
                     crate::torch::element(t, 0, crate::torch::seed("l6-leveling-lead"), 1.5)
@@ -588,16 +603,16 @@ mod shots {
                             .text_color(P::text())
                             .child(name.to_string()),
                     )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(P::flame())
-                            .child("running cargo test"),
-                    ),
+                    .child(div().text_xs().text_color(P::flame()).child(line)),
             )
-            .child(chip("☑ 3", false))
+            .child(chip("☑ 3", false).when(decor_w.is_some(), |d| {
+                d.relative().child(decor::by_tasks(0))
+            }))
             .child(chip("show terminal", true))
     }
+
+    /// The Chat shot's header width: 900 wide, less padding and the rail.
+    const CHAT_HEADER_W: f32 = 900. - 20. - 220.;
 
     fn chat_view(id: &str) -> impl IntoElement {
         let torches = crate::theme::active()
@@ -716,7 +731,11 @@ mod shots {
                     .text_xs()
                     .text_color(P::text_faint())
                     .child(format!("scheme: {id}")),
-            );
+            )
+            .when(torches, |d| {
+                d.child(crate::app::chat::decor::by_mark(0))
+                    .child(crate::app::chat::decor::rail_post(0))
+            });
         let composer = div()
             .flex_none()
             .p_3()
@@ -726,6 +745,7 @@ mod shots {
             .border_t_1()
             .border_color(P::border())
             .map(|d| under(d, STRIP))
+            .when(torches, |d| d.child(crate::app::chat::decor::over_send(0)))
             .child(
                 div()
                     .flex()
@@ -796,6 +816,7 @@ mod shots {
                     .child(chat_header(
                         torches.then_some(Torch::Working),
                         "l6-leveling",
+                        torches.then_some(CHAT_HEADER_W),
                     ))
                     .child(
                         div()

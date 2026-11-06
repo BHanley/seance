@@ -223,18 +223,66 @@ pub fn element(state: Torch, frame: u64, seed: u64, scale: f32) -> impl IntoElem
     .h(px(H as f32 * scale))
 }
 
+/// The standing torch: narrower than the wall one, and tall.
+pub const TALL_W: usize = 8;
+pub const TALL_H: usize = 40;
+
+type TallGrid = [[Option<u32>; TALL_W]; TALL_H];
+
+/// A standing torch, always calm: the Idle flame and bowl of the wall torch
+/// (its columns 2..10) on an iron post with two bands and a foot.
+pub fn tall_texels(frame: u64, seed: u64) -> TallGrid {
+    let wall = texels(Torch::Idle, frame, seed);
+    let mut g: TallGrid = [[None; TALL_W]; TALL_H];
+    for y in 0..14 {
+        g[y].copy_from_slice(&wall[y][2..2 + TALL_W]);
+    }
+    for row in g.iter_mut().take(TALL_H - 2).skip(14) {
+        row[3] = Some(IRON_LIT);
+        row[4] = Some(IRON);
+    }
+    for y in [20, 30] {
+        for x in 2..6 {
+            g[y][x] = Some(IRON_DARK);
+        }
+    }
+    for y in TALL_H - 2..TALL_H {
+        for x in 1..7 {
+            g[y][x] = Some(if y == TALL_H - 1 { IRON_DARK } else { IRON });
+        }
+    }
+    g
+}
+
+/// A standing torch at `scale` points per texel.
+pub fn tall_element(frame: u64, seed: u64, scale: f32) -> impl IntoElement {
+    let grid = tall_texels(frame, seed);
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| paint(&grid, bounds, scale, window),
+    )
+    .flex_none()
+    .w(px(TALL_W as f32 * scale))
+    .h(px(TALL_H as f32 * scale))
+}
+
 /// One quad per horizontal run of one color.
-fn paint(grid: &Grid, bounds: Bounds<Pixels>, scale: f32, window: &mut Window) {
+fn paint<const N: usize>(
+    grid: &[[Option<u32>; N]],
+    bounds: Bounds<Pixels>,
+    scale: f32,
+    window: &mut Window,
+) {
     let o = bounds.origin;
     for (y, row) in grid.iter().enumerate() {
         let mut x = 0;
-        while x < W {
+        while x < N {
             let Some(c) = row[x] else {
                 x += 1;
                 continue;
             };
             let start = x;
-            while x < W && row[x] == Some(c) {
+            while x < N && row[x] == Some(c) {
                 x += 1;
             }
             let quad = Bounds::new(
@@ -275,6 +323,32 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn the_standing_torch_moves_on_every_tick_and_keeps_its_flame() {
+        for f in 0..48 {
+            assert_ne!(
+                tall_texels(f, seed("post")),
+                tall_texels(f + 1, seed("post"))
+            );
+        }
+        // The wall torch's Idle flame fits the narrower grid whole.
+        for f in 0..16 {
+            let wall = texels(Torch::Idle, f, seed("post"))
+                .iter()
+                .take(11)
+                .flatten()
+                .filter(|c| c.is_some())
+                .count();
+            let tall = tall_texels(f, seed("post"))
+                .iter()
+                .take(11)
+                .flatten()
+                .filter(|c| c.is_some())
+                .count();
+            assert_eq!(wall, tall, "frame {f}");
         }
     }
 

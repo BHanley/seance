@@ -71,6 +71,12 @@ fn on_screen<'a>(
         .collect()
 }
 
+/// Chat's decorative torches (rail, header wall, composer) burn whenever
+/// Chat shows on a torch scheme, with or without a lead.
+fn decor_on_screen(mode: ViewMode, torches: bool) -> bool {
+    torches && mode == ViewMode::Chat
+}
+
 /// What one 240 ms spinner tick does: torches on screen step a frame,
 /// and the window renders once if the spinner or a torch wants it. Torches
 /// never add a render the spinner already asked for, and none shows means
@@ -118,14 +124,16 @@ impl SeanceApp {
         ))
     }
 
-    /// Whether any pane on screen shows a torch (never, outside a skin
-    /// with torches).
+    /// Whether any torch is on screen: a pane's, or Chat's decorative ones
+    /// (never, outside a skin with torches).
     pub(super) fn torches_on_screen(&self, cx: &App) -> bool {
-        crate::skin::torches()
-            && self
-                .panes_on_screen()
-                .into_iter()
-                .any(|p| self.pane_torch(p, cx).is_some())
+        let torches = crate::skin::torches();
+        decor_on_screen(self.view.mode, torches)
+            || (torches
+                && self
+                    .panes_on_screen()
+                    .into_iter()
+                    .any(|p| self.pane_torch(p, cx).is_some()))
     }
 
     /// This pane's torch and the frame to draw it at.
@@ -219,6 +227,26 @@ mod tests {
         );
         // An empty circle: nothing to burn, so no torch render.
         assert!(on_screen(ViewMode::Classic, Some("z"), None, None, it()).is_empty());
+    }
+
+    #[test]
+    fn chat_decor_burns_only_in_chat_on_a_torch_scheme() {
+        // Chat with no lead pane still has the rail, wall and composer torches.
+        assert!(decor_on_screen(ViewMode::Chat, true));
+        assert_eq!(
+            spinner_tick(false, decor_on_screen(ViewMode::Chat, true)),
+            (true, true)
+        );
+        // Flat schemes and the other views: none, so no tick for them.
+        assert!(!decor_on_screen(ViewMode::Chat, false));
+        for mode in [ViewMode::Classic, ViewMode::Stage, ViewMode::Wall] {
+            assert!(!decor_on_screen(mode, true), "{mode:?}");
+            assert!(!decor_on_screen(mode, false), "{mode:?}");
+        }
+        assert_eq!(
+            spinner_tick(false, decor_on_screen(ViewMode::Stage, true)),
+            (false, false)
+        );
     }
 
     #[test]

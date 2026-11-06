@@ -102,6 +102,116 @@ struct Egg {
 /// What the quick-reply chips above an empty composer send.
 const QUICK_REPLIES: [&str; 3] = ["Keep going", "Status?", "Ship it"];
 
+/// Chat's decorative torches on a torch scheme: by the mark, on the header
+/// wall, by the task count, a standing one at the foot of the list rail and
+/// one over Send. All burn calm, each on its own seed, at the spinner tick's
+/// frame. Each sits in an absolute layer with no handlers, so it takes no
+/// clicks and no cursor; one that would cover text is left out, never moved.
+pub(crate) mod decor {
+    use gpui::{div, px, Div, ParentElement as _, Styled as _};
+
+    use crate::torch::{self, Torch};
+
+    /// One seed name per torch. An Idle frame depends only on the frame plus
+    /// `seed % 12`, so these are picked with twelve distinct phases apart;
+    /// two sharing a phase would flicker in step.
+    pub(crate) const SEEDS: [&str; 9] = [
+        "chat-decor-mark",
+        "chat-decor-rail",
+        "chat-decor-tasks",
+        "chat-decor-send",
+        "chat-decor-wall-0",
+        "chat-decor-wall-1",
+        "chat-decor-wall-2",
+        "chat-decor-wall-3",
+        "chat-decor-wall-4",
+    ];
+
+    /// A small calm torch, 12x20, in an absolute layer.
+    fn small(name: &str, frame: u64) -> Div {
+        div()
+            .absolute()
+            .child(torch::element(Torch::Idle, frame, torch::seed(name), 1.0))
+    }
+
+    /// Just right of the "seance" mark, in the rail's top row.
+    pub(crate) fn by_mark(frame: u64) -> Div {
+        small(SEEDS[0], frame).left(px(88.)).top(px(10.))
+    }
+
+    /// The standing torch at the foot of the list rail, in the rows' right
+    /// padding against the divider, 60 points tall.
+    pub(crate) fn rail_post(frame: u64) -> Div {
+        div()
+            .absolute()
+            .right_0()
+            .bottom(px(6.))
+            .child(torch::tall_element(frame, torch::seed(SEEDS[1]), 1.5))
+    }
+
+    /// Just left of the task count chip, in the header's gap before it:
+    /// a child of the chip, so it follows the chip wherever it sits.
+    pub(crate) fn by_tasks(frame: u64) -> Div {
+        small(SEEDS[2], frame).left(px(-12.)).top(px(-1.))
+    }
+
+    /// Over the Send button, in the quick-reply row's right end.
+    pub(crate) fn over_send(frame: u64) -> Div {
+        small(SEEDS[3], frame).right(px(34.)).top(px(12.))
+    }
+
+    /// The torch over Send fits while the row above the input shows its
+    /// usual chips (quick replies, Stop) and leaves their room free; @
+    /// suggestions can fill the row, and with no row the spot is the input.
+    pub(crate) fn over_send_fits(composer_w: f32, row_shown: bool, mentioning: bool) -> bool {
+        row_shown && !mentioning && composer_w >= 360.
+    }
+
+    /// The header wall's five torches around its centre, uneven, as
+    /// (left, top) from an anchor at this share of the header's width.
+    const WALL_AT: f32 = 0.38;
+    const WALL: [(f32, f32); 5] = [(-22., 9.), (-9., 2.), (4., 13.), (16., 4.), (29., 11.)];
+
+    /// Where the wall torches go in a header `header_w` wide whose text ends
+    /// at `text_end` and whose chips start at `chips_at`: those that would
+    /// reach within 8 points of either are left out. (index, left, top).
+    pub(crate) fn wall_spots(
+        header_w: f32,
+        text_end: f32,
+        chips_at: f32,
+    ) -> Vec<(usize, f32, f32)> {
+        let anchor = header_w * WALL_AT;
+        WALL.iter()
+            .enumerate()
+            .map(|(i, &(dx, top))| (i, anchor + dx, top))
+            .filter(|&(_, x, _)| x >= text_end + 8. && x + torch::W as f32 <= chips_at - 8.)
+            .collect()
+    }
+
+    pub(crate) fn wall(frame: u64, header_w: f32, text_end: f32, chips_at: f32) -> Vec<Div> {
+        wall_spots(header_w, text_end, chips_at)
+            .into_iter()
+            .map(|(i, x, top)| small(SEEDS[4 + i], frame).left(px(x)).top(px(top)))
+            .collect()
+    }
+
+    /// A generous guess at where the header's text ends: padding, the lead's
+    /// torch, the creature (or crew), then the longer of name and doing line
+    /// at a wide average glyph.
+    pub(crate) fn header_text_end(lead_torch: bool, crew: usize, name: &str, line: &str) -> f32 {
+        let torch = if lead_torch { 18. + 12. } else { 0. };
+        let creature = 30. * crew.max(1) as f32 + 12.;
+        let text = (name.chars().count() as f32 * 8.).max(line.chars().count() as f32 * 7.);
+        12. + torch + creature + text
+    }
+
+    /// Where the header's chips start: the task count and "show terminal",
+    /// with padding and gaps, or just the padding on a read-only circle.
+    pub(crate) fn header_chips_at(header_w: f32, chips: bool) -> f32 {
+        header_w - if chips { 200. } else { 12. }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum VideoState {
     Downloading,
@@ -198,6 +308,9 @@ pub(super) struct ChatState {
     /// Where the header's creature was last painted: a click there during a
     /// party is one more poke, ignored, not the click that ends it.
     creature_at: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
+    /// The thread column's width as last laid out (a dock or drawer beside
+    /// Chat narrows it), for the decorative torches' room checks.
+    thread_w: std::rc::Rc<std::cell::Cell<Option<f32>>>,
     /// When Compact was last clicked, for its cooldown.
     compact_at: Option<(String, Instant)>,
     /// Why the last action Brian took was refused; a click clears it.
@@ -1641,7 +1754,14 @@ impl SeanceApp {
             window.request_animation_frame();
         }
         let list = self.render_chat_list(items, cx);
-        let thread = self.render_chat_thread(cx);
+        // The thread column's width, for the decorative torches' room checks:
+        // as last laid out, else the window less the list.
+        let thread_w = self
+            .chat
+            .thread_w
+            .get()
+            .unwrap_or(f32::from(window.viewport_size().width) - LIST_W);
+        let thread = self.render_chat_thread(thread_w, cx);
         div()
             .id("chat")
             .flex_1()
@@ -1759,6 +1879,11 @@ impl SeanceApp {
                     })),
             )
             .child(col)
+            .when(crate::skin::torches(), |d| {
+                let frame = self.torch_frame;
+                d.child(decor::by_mark(frame))
+                    .child(decor::rail_post(frame))
+            })
             .into_any_element()
     }
 
@@ -2047,7 +2172,7 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    fn render_chat_thread(&self, cx: &Context<Self>) -> AnyElement {
+    fn render_chat_thread(&self, thread_w: f32, cx: &Context<Self>) -> AnyElement {
         let Some(ws) = self.chat.selected.clone() else {
             return div()
                 .flex_1()
@@ -2093,6 +2218,19 @@ impl SeanceApp {
             .as_ref()
             .and_then(|l| self.lead_tasks.get(l))
             .map_or(0, |d| d.open_count());
+        let read_only = ws == ALERTS_WS;
+        // The wall's decorative torches, where they clear the header's text.
+        let wall = if crate::skin::torches() {
+            let crew = self.chat.threads.get(&ws).map_or(0, |t| t.crew.len());
+            decor::wall(
+                self.torch_frame,
+                thread_w,
+                decor::header_text_end(torch.is_some(), crew, &name, &line),
+                decor::header_chips_at(thread_w, !read_only),
+            )
+        } else {
+            Vec::new()
+        };
 
         let mut header = div()
             .flex_none()
@@ -2104,6 +2242,7 @@ impl SeanceApp {
             .border_b_1()
             .border_color(SeancePalette::border())
             .map(|d| crate::skin::under(d, crate::skin::STRIP))
+            .children(wall)
             .children(torch.map(|((t, frame), seed)| crate::torch::element(t, frame, seed, 1.5)))
             .child(self.header_creature(&ws, working, cx))
             .child(
@@ -2128,7 +2267,6 @@ impl SeanceApp {
                         )
                     }),
             );
-        let read_only = ws == ALERTS_WS;
         let tasks_open = lead.as_deref().is_some_and(|l| self.tasks_popover_open(l));
         let chip_lead = lead.clone();
         header = header.when(!read_only, |header| {
@@ -2154,7 +2292,10 @@ impl SeanceApp {
                             this.toggle_tasks_popover(lead, ev.position(), cx);
                         }
                     }))
-                    .child(format!("☑ {todo}")),
+                    .child(format!("☑ {todo}"))
+                    .when(crate::skin::torches(), |d| {
+                        d.relative().child(decor::by_tasks(self.torch_frame))
+                    }),
             )
         });
         header = header.when(!read_only, |header| {
@@ -2214,6 +2355,17 @@ impl SeanceApp {
             .h_full()
             .flex()
             .flex_col()
+            .when(crate::skin::torches(), |d| {
+                let at = self.chat.thread_w.clone();
+                d.relative().child(
+                    gpui::canvas(
+                        move |b, _, _| at.set(Some(b.size.width.into())),
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .size_full(),
+                )
+            })
             .child(header)
             .children(usage_strip(
                 self.chat.usage.as_ref(),
@@ -2254,11 +2406,13 @@ impl SeanceApp {
             );
         }
         col.child(thread)
-            .when(!read_only, |col| col.child(self.render_chat_composer(cx)))
+            .when(!read_only, |col| {
+                col.child(self.render_chat_composer(thread_w, cx))
+            })
             .into_any_element()
     }
 
-    fn render_chat_composer(&self, cx: &Context<Self>) -> AnyElement {
+    fn render_chat_composer(&self, composer_w: f32, cx: &Context<Self>) -> AnyElement {
         let Some(input) = self.chat.input.as_ref() else {
             return div().into_any_element();
         };
@@ -2330,6 +2484,8 @@ impl SeanceApp {
                 );
             }
         }
+        let send_torch = crate::skin::torches()
+            && decor::over_send_fits(composer_w, typed.is_empty() || lead_busy, mentioning);
         if lead_busy && !mentioning {
             let stop_ws = ws.clone();
             above = above.child(
@@ -2350,6 +2506,7 @@ impl SeanceApp {
             .border_t_1()
             .border_color(SeancePalette::border())
             .map(|d| crate::skin::under(d, crate::skin::STRIP))
+            .when(send_torch, |d| d.child(decor::over_send(self.torch_frame)))
             .child(above)
             .child(
                 div()
@@ -2726,6 +2883,45 @@ impl SeanceApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wall_torches_leave_out_any_that_would_reach_the_text_or_chips() {
+        // A wide header with a short name: all five, at uneven heights.
+        let all = decor::wall_spots(1100., 150., 900.);
+        assert_eq!(all.iter().map(|s| s.0).collect::<Vec<_>>(), [0, 1, 2, 3, 4]);
+        assert!(all.windows(2).all(|w| w[0].2 != w[1].2));
+        // A long doing line reaching into the cluster drops its left end only.
+        let left = decor::wall_spots(1100., 400., 900.);
+        assert!(!left.is_empty() && left.len() < 5);
+        assert!(left.iter().all(|s| s.1 >= 408.));
+        assert_eq!(left.last().map(|s| s.0), Some(4));
+        // Narrow: the chips crowd in from the right, and the far ones go.
+        let right = decor::wall_spots(500., 100., 200.);
+        assert!(right.iter().all(|s| s.1 + 12. <= 192.));
+        assert!(right.len() < 5);
+        // Text right up to the chips: none.
+        assert!(decor::wall_spots(700., 500., 520.).is_empty());
+    }
+
+    #[test]
+    fn no_two_decorative_torches_flicker_in_step() {
+        let phases: HashSet<u64> = decor::SEEDS
+            .iter()
+            .map(|n| crate::torch::seed(n) % 12)
+            .collect();
+        assert_eq!(phases.len(), decor::SEEDS.len());
+    }
+
+    #[test]
+    fn the_send_torch_shows_only_over_its_usual_chip_row() {
+        assert!(decor::over_send_fits(800., true, false));
+        // @ suggestions can fill the row.
+        assert!(!decor::over_send_fits(800., true, true));
+        // No row above the input: the spot would be the input.
+        assert!(!decor::over_send_fits(800., false, false));
+        // Too narrow for the quick replies and the torch side by side.
+        assert!(!decor::over_send_fits(300., true, false));
+    }
 
     #[test]
     fn a_spec_body_drops_its_title_line() {
