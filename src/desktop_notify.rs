@@ -201,8 +201,9 @@ fn mac_terminal_notifier(
 
 /// Play `bell-audio-path` from `~/.config/seance/terminal.conf` when
 /// `bell-features` includes `audio`.
-/// Fire-and-forget like [`notify`]: `afplay` on macOS, `pw-play` (falling back
-/// to `paplay`) on Linux. A burst of bells inside a second plays once.
+/// Fire-and-forget like [`notify`]. On macOS it plays through the sound
+/// effects device from Sound settings (`afplay` when that fails); on Linux
+/// `pw-play`, falling back to `paplay`. A burst of bells inside a second plays once.
 pub fn bell_sound() {
     static LAST_BELL_MS: AtomicU64 = AtomicU64::new(0);
     let cfg = crate::term_config::get();
@@ -232,7 +233,6 @@ fn play(last: &AtomicU64, path: std::path::PathBuf, volume: f32) {
     if wall.saturating_sub(last.swap(wall, Ordering::Relaxed)) < 1_000 {
         return;
     }
-    let volume = volume.to_string();
     std::thread::spawn(move || {
         let quiet = |c: &mut Command| {
             c.stdout(std::process::Stdio::null())
@@ -240,16 +240,280 @@ fn play(last: &AtomicU64, path: std::path::PathBuf, volume: f32) {
                 .status()
                 .is_ok_and(|s| s.success())
         };
+        let volume_arg = volume.to_string();
         if cfg!(target_os = "macos") {
-            quiet(Command::new("afplay").args(["-v", &volume]).arg(&path));
+            // afplay can't pick a device, so it is only the fallback.
+            if !mac_system_play(&path, volume) {
+                quiet(Command::new("afplay").args(["-v", &volume_arg]).arg(&path));
+            }
         } else if !quiet(
             Command::new("pw-play")
-                .args(["--volume", &volume])
+                .args(["--volume", &volume_arg])
                 .arg(&path),
         ) {
             quiet(Command::new("paplay").arg(&path));
         }
     });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn mac_system_play(_path: &std::path::Path, _volume: f32) -> bool {
+    false
+}
+
+/// Plays on Sound settings' "Play sound effects through" device. False when
+/// that device can't be resolved or NSSound refuses the file.
+#[cfg(target_os = "macos")]
+fn mac_system_play(path: &std::path::Path, volume: f32) -> bool {
+    match sound_backend(mac_audio::default_system_output().map(|d| d.uid)) {
+        SoundBackend::Device(uid) => mac_audio::play_on_device(path, clamp_volume(volume), &uid),
+        SoundBackend::Afplay => false,
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, PartialEq)]
+enum SoundBackend {
+    Device(String),
+    Afplay,
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn sound_backend(system_uid: Option<String>) -> SoundBackend {
+    match system_uid {
+        Some(uid) if !uid.is_empty() => SoundBackend::Device(uid),
+        _ => SoundBackend::Afplay,
+    }
+}
+
+/// NaN parses as a valid f32 and survives `clamp`, so it maps to full volume.
+#[cfg(any(target_os = "macos", test))]
+fn clamp_volume(volume: f32) -> f32 {
+    if volume.is_nan() {
+        1.0
+    } else {
+        volume.clamp(0.0, 1.0)
+    }
+}
+
+/// Raw CoreAudio and Objective-C calls: the few needed here don't justify a
+/// direct objc or core-foundation dependency.
+#[cfg(target_os = "macos")]
+mod mac_audio {
+    use std::ffi::{c_char, c_void, CStr, CString};
+    use std::time::{Duration, Instant};
+
+    type Id = *mut c_void;
+    type Sel = *const c_void;
+    type CFStringRef = *const c_void;
+
+    #[repr(C)]
+    struct PropertyAddress {
+        selector: u32,
+        scope: u32,
+        element: u32,
+    }
+
+    const fn fourcc(code: &[u8; 4]) -> u32 {
+        u32::from_be_bytes(*code)
+    }
+
+    const SYSTEM_OBJECT: u32 = 1;
+    #[cfg(test)]
+    const DEFAULT_OUTPUT: u32 = fourcc(b"dOut");
+    const DEFAULT_SYSTEM_OUTPUT: u32 = fourcc(b"sOut");
+    const DEVICE_UID: u32 = fourcc(b"uid ");
+    const OBJECT_NAME: u32 = fourcc(b"lnam");
+    const SCOPE_GLOBAL: u32 = fourcc(b"glob");
+    const ELEMENT_MAIN: u32 = 0;
+    const CF_UTF8: u32 = 0x0800_0100;
+
+    /// Longest a sound is kept alive for; done and bell sounds are short.
+    const MAX_PLAY: Duration = Duration::from_secs(10);
+
+    #[link(name = "CoreAudio", kind = "framework")]
+    extern "C" {
+        fn AudioObjectGetPropertyData(
+            object: u32,
+            address: *const PropertyAddress,
+            qualifier_size: u32,
+            qualifier: *const c_void,
+            data_size: *mut u32,
+            data: *mut c_void,
+        ) -> i32;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFStringGetCString(s: CFStringRef, buf: *mut c_char, size: isize, encoding: u32) -> u8;
+        fn CFRelease(cf: *const c_void);
+    }
+
+    // AppKit holds NSSound; linking it keeps objc_getClass working in tests.
+    #[link(name = "AppKit", kind = "framework")]
+    extern "C" {}
+
+    #[link(name = "objc")]
+    extern "C" {
+        fn objc_getClass(name: *const c_char) -> Id;
+        fn sel_registerName(name: *const c_char) -> Sel;
+        fn objc_msgSend();
+        fn objc_autoreleasePoolPush() -> *mut c_void;
+        fn objc_autoreleasePoolPop(pool: *mut c_void);
+    }
+
+    pub struct Device {
+        pub uid: String,
+        #[cfg_attr(not(test), allow(dead_code))]
+        pub name: String,
+    }
+
+    /// Sound settings' "Play sound effects through" device.
+    pub fn default_system_output() -> Option<Device> {
+        device(DEFAULT_SYSTEM_OUTPUT)
+    }
+
+    /// The device music and afplay use.
+    #[cfg(test)]
+    pub fn default_output() -> Option<Device> {
+        device(DEFAULT_OUTPUT)
+    }
+
+    fn device(which: u32) -> Option<Device> {
+        let mut id: u32 = 0;
+        if !get_property(SYSTEM_OBJECT, which, &mut id) || id == 0 {
+            return None;
+        }
+        Some(Device {
+            uid: string_property(id, DEVICE_UID)?,
+            name: string_property(id, OBJECT_NAME).unwrap_or_default(),
+        })
+    }
+
+    fn get_property<T>(object: u32, selector: u32, out: &mut T) -> bool {
+        let address = PropertyAddress {
+            selector,
+            scope: SCOPE_GLOBAL,
+            element: ELEMENT_MAIN,
+        };
+        let mut size = std::mem::size_of::<T>() as u32;
+        let status = unsafe {
+            AudioObjectGetPropertyData(
+                object,
+                &address,
+                0,
+                std::ptr::null(),
+                &mut size,
+                out as *mut T as *mut c_void,
+            )
+        };
+        status == 0 && size as usize == std::mem::size_of::<T>()
+    }
+
+    /// The property's CFString comes back retained; it is released here.
+    fn string_property(object: u32, selector: u32) -> Option<String> {
+        let mut cf: CFStringRef = std::ptr::null();
+        if !get_property(object, selector, &mut cf) || cf.is_null() {
+            return None;
+        }
+        let mut buf = [0 as c_char; 512];
+        let ok = unsafe { CFStringGetCString(cf, buf.as_mut_ptr(), buf.len() as isize, CF_UTF8) };
+        unsafe { CFRelease(cf) };
+        (ok != 0).then(|| {
+            unsafe { CStr::from_ptr(buf.as_ptr()) }
+                .to_string_lossy()
+                .into_owned()
+        })
+    }
+
+    fn sel(name: &str) -> Sel {
+        let name = CString::new(name).expect("selector has no NUL");
+        unsafe { sel_registerName(name.as_ptr()) }
+    }
+
+    /// objc_msgSend must be called through the exact signature of each method.
+    macro_rules! send {
+        ($obj:expr, $sel:expr $(, $arg:expr => $ty:ty)* ; $ret:ty) => {{
+            let f: unsafe extern "C" fn(Id, Sel $(, $ty)*) -> $ret =
+                std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            f($obj, sel($sel) $(, $arg)*)
+        }};
+    }
+
+    /// Autoreleased; needs a pool.
+    unsafe fn ns_string(s: &str) -> Option<Id> {
+        let c = CString::new(s).ok()?;
+        let class = objc_getClass(c"NSString".as_ptr());
+        if class.is_null() {
+            return None;
+        }
+        let ns = send!(class, "stringWithUTF8String:", c.as_ptr() => *const c_char; Id);
+        (!ns.is_null()).then_some(ns)
+    }
+
+    /// A retained NSSound for `path`, routed to `uid`, not yet playing.
+    /// The caller releases it. Must run inside an autorelease pool.
+    unsafe fn routed_sound(path: &std::path::Path, volume: f32, uid: &str) -> Option<Id> {
+        let class = objc_getClass(c"NSSound".as_ptr());
+        if class.is_null() {
+            return None;
+        }
+        let path = ns_string(path.to_str()?)?;
+        let uid = ns_string(uid)?;
+        let alloc = send!(class, "alloc"; Id);
+        let sound =
+            send!(alloc, "initWithContentsOfFile:byReference:", path => Id, true => bool; Id);
+        if sound.is_null() {
+            return None;
+        }
+        send!(sound, "setVolume:", volume => f32; ());
+        send!(sound, "setPlaybackDeviceIdentifier:", uid => Id; ());
+        Some(sound)
+    }
+
+    /// Blocks the calling thread until the sound ends (at most [`MAX_PLAY`])
+    /// so the NSSound stays alive. False when NSSound can't play the file.
+    pub fn play_on_device(path: &std::path::Path, volume: f32, uid: &str) -> bool {
+        unsafe {
+            let pool = objc_autoreleasePoolPush();
+            let played = match routed_sound(path, volume, uid) {
+                Some(sound) => {
+                    let ok = send!(sound, "play"; bool);
+                    if ok {
+                        let start = Instant::now();
+                        while send!(sound, "isPlaying"; bool) && start.elapsed() < MAX_PLAY {
+                            std::thread::sleep(Duration::from_millis(50));
+                        }
+                        send!(sound, "stop"; bool);
+                    }
+                    send!(sound, "release"; ());
+                    ok
+                }
+                None => false,
+            };
+            objc_autoreleasePoolPop(pool);
+            played
+        }
+    }
+
+    /// The device identifier an NSSound reports after routing. Never plays.
+    #[cfg(test)]
+    pub fn routed_identifier(path: &std::path::Path, uid: &str) -> Option<String> {
+        unsafe {
+            let pool = objc_autoreleasePoolPush();
+            let out = routed_sound(path, 0.5, uid).and_then(|sound| {
+                let id = send!(sound, "playbackDeviceIdentifier"; Id);
+                let s = (!id.is_null()).then(|| {
+                    let c = send!(id, "UTF8String"; *const c_char);
+                    CStr::from_ptr(c).to_string_lossy().into_owned()
+                });
+                send!(sound, "release"; ());
+                s
+            });
+            objc_autoreleasePoolPop(pool);
+            out
+        }
+    }
 }
 
 /// `label` is what the human calls the pane ("circle · name"); `pane` stays
@@ -282,4 +546,63 @@ pub fn ask(from: &str, question: &str) {
         &format!("{from}: {q}"),
         sound,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn system_device_uid_picks_nssound() {
+        assert_eq!(
+            sound_backend(Some("BuiltInSpeakerDevice".into())),
+            SoundBackend::Device("BuiltInSpeakerDevice".into())
+        );
+    }
+
+    #[test]
+    fn missing_or_empty_uid_falls_back_to_afplay() {
+        assert_eq!(sound_backend(None), SoundBackend::Afplay);
+        assert_eq!(sound_backend(Some(String::new())), SoundBackend::Afplay);
+    }
+
+    #[test]
+    fn volume_is_clamped_and_nan_is_full() {
+        assert_eq!(clamp_volume(0.6), 0.6);
+        assert_eq!(clamp_volume(-1.0), 0.0);
+        assert_eq!(clamp_volume(3.0), 1.0);
+        assert_eq!(clamp_volume(f32::NAN), 1.0);
+    }
+
+    /// Prints the two default output devices. Plays nothing.
+    /// `cargo test print_output_devices -- --ignored --nocapture`
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore]
+    fn print_output_devices() {
+        let show = |d: Option<mac_audio::Device>| {
+            d.map(|d| format!("{} ({})", d.name, d.uid))
+                .unwrap_or_else(|| "none".into())
+        };
+        println!(
+            "system output: {}",
+            show(mac_audio::default_system_output())
+        );
+        println!("default output: {}", show(mac_audio::default_output()));
+    }
+
+    /// Routing sticks on the NSSound without ever calling play.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn nssound_takes_the_system_device() {
+        let Some(device) = mac_audio::default_system_output() else {
+            eprintln!("no system output device; skipped");
+            return;
+        };
+        let glass = std::path::Path::new("/System/Library/Sounds/Glass.aiff");
+        assert_eq!(
+            mac_audio::routed_identifier(glass, &device.uid),
+            Some(device.uid)
+        );
+    }
 }
