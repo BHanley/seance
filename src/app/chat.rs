@@ -171,6 +171,56 @@ fn can_reply(ws: &str, m: &Msg) -> bool {
     m.id > 0 && ws != ALERTS_WS && (m.from == "me" || m.from == "lead")
 }
 
+/// What a Reply sets, from the menu or the arrow alike: nothing for a
+/// message that cannot be replied to.
+fn reply_draft(ws: &str, m: &Msg) -> Option<ReplyDraft> {
+    can_reply(ws, m).then(|| ReplyDraft::of(ws, m))
+}
+
+/// Which side of its bubble the reply arrow sits on: the side facing the
+/// middle of the thread.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ArrowSide {
+    Left,
+    Right,
+}
+
+fn reply_arrow_side(ws: &str, m: &Msg) -> Option<ArrowSide> {
+    can_reply(ws, m).then(|| {
+        if m.from == "me" {
+            ArrowSide::Left
+        } else {
+            ArrowSide::Right
+        }
+    })
+}
+
+/// The hover group of a bubble's row, which shows its reply arrow.
+const REPLY_GROUP: &str = "chat-bubble-row";
+
+/// The reply arrow beside a bubble. It is laid out all the time, so nothing
+/// moves when it shows, and drawn only while the pointer is over its row: a
+/// group hover style, which redraws once on enter and once on leave. It sits
+/// beside the bubble, never over it; bubbles stop at 72% of the row, so the
+/// gutter has room, and in a row too narrow for both it shrinks with them.
+pub(crate) fn reply_arrow(id: i64) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(SharedString::from(format!("bubble-reply-{id}")))
+        .w(px(24.))
+        .min_w_0()
+        .flex_shrink(1.)
+        .overflow_hidden()
+        .flex()
+        .justify_center()
+        .text_sm()
+        .text_color(SeancePalette::text_dim())
+        .opacity(0.)
+        .group_hover(REPLY_GROUP, |s| s.opacity(1.))
+        .hover(|s| s.text_color(SeancePalette::flame()))
+        .cursor_pointer()
+        .child("↩")
+}
+
 /// Opening a circle drops a reply meant for another one.
 fn reply_after_select(cur: Option<ReplyDraft>, ws: &str) -> Option<ReplyDraft> {
     cur.filter(|r| r.ws == ws)
@@ -1048,8 +1098,8 @@ fn bubble_menu(
     m: &Msg,
 ) -> PopupMenu {
     let mut menu = menu;
-    if can_reply(ws, m) {
-        let (weak, draft) = (app.clone(), ReplyDraft::of(ws, m));
+    if let Some(draft) = reply_draft(ws, m) {
+        let weak = app.clone();
         menu = menu.item(PopupMenuItem::new("Reply").on_click(move |_, _, cx| {
             let draft = draft.clone();
             let _ = weak.update(cx, |a, cx| a.chat_reply_to(draft, cx));
@@ -3219,12 +3269,31 @@ impl SeanceApp {
                 let ws = ws.clone().unwrap_or_default();
                 bubble_menu(menu, window, cx, &weak, &ws, &msg)
             });
+        // The bubble's row, with the reply arrow on the side facing the
+        // middle; the row is the hover group, so the arrow stays while the
+        // pointer moves from the bubble onto it.
+        let ws = self.chat.selected.as_deref().unwrap_or_default();
+        let arrow = reply_arrow_side(ws, m).zip(reply_draft(ws, m));
+        let row = div()
+            .group(REPLY_GROUP)
+            .w_full()
+            .flex()
+            .items_center()
+            .when(me, |d| d.justify_end());
+        let row = match arrow {
+            Some((side, draft)) => {
+                let arrow = reply_arrow(m.id).on_click(
+                    cx.listener(move |this, _, _, cx| this.chat_reply_to(draft.clone(), cx)),
+                );
+                match side {
+                    ArrowSide::Left => row.child(arrow).child(bubble),
+                    ArrowSide::Right => row.child(bubble).child(arrow),
+                }
+            }
+            None => row.child(bubble),
+        };
         if m.choices.is_empty() || me {
-            return div()
-                .flex()
-                .when(me, |d| d.justify_end())
-                .child(bubble)
-                .into_any_element();
+            return row.into_any_element();
         }
         // The lead's choices, as pills under its message.
         div()
@@ -3232,7 +3301,7 @@ impl SeanceApp {
             .flex_col()
             .items_start()
             .gap_1()
-            .child(bubble)
+            .child(row)
             .child(self.choice_pills(m, cx))
             .into_any_element()
     }
@@ -3766,6 +3835,46 @@ mod tests {
         // A bubble Invoke has not confirmed yet has no id to reply to.
         assert!(!can_reply("l6", &m(-1, "me")));
         assert!(!can_reply(ALERTS_WS, &m(5, "lead")));
+    }
+
+    #[test]
+    fn the_reply_arrow_faces_the_middle_and_only_where_a_reply_can_go() {
+        let m = |id: i64, from: &str| Msg {
+            id,
+            from: from.into(),
+            ..Default::default()
+        };
+        assert_eq!(reply_arrow_side("l6", &m(5, "me")), Some(ArrowSide::Left));
+        assert_eq!(
+            reply_arrow_side("l6", &m(5, "lead")),
+            Some(ArrowSide::Right)
+        );
+        assert_eq!(reply_arrow_side("l6", &m(5, "system")), None);
+        assert_eq!(reply_arrow_side("l6", &m(-1, "me")), None);
+        assert_eq!(reply_arrow_side(ALERTS_WS, &m(5, "lead")), None);
+    }
+
+    #[test]
+    fn the_menu_and_the_arrow_set_the_same_reply() {
+        let m = Msg {
+            id: 7,
+            from: "lead".into(),
+            ts: 42,
+            text: "ship it?".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            reply_draft("l6", &m),
+            Some(ReplyDraft {
+                ws: "l6".into(),
+                id: 7,
+                from: "lead".into(),
+                ts: 42,
+                text: "ship it?".into(),
+            })
+        );
+        assert_eq!(reply_draft(ALERTS_WS, &m), None);
+        assert_eq!(reply_draft("l6", &Msg { id: 0, ..m }), None);
     }
 
     #[test]

@@ -210,7 +210,8 @@ mod shots {
         ChatHeaders,
         /// A quoted reply bubble and the quote bar over the composer, once
         /// per scheme.
-        ChatReply(Vec<&'static str>),
+        /// The reply shot; `true` draws each bubble as hovered, arrow showing.
+        ChatReply(Vec<&'static str>, bool),
     }
 
     struct Shot(Scene);
@@ -243,11 +244,11 @@ mod shots {
                     crate::theme::set_active_for_test(id);
                     row.child(chat_view(id))
                 }
-                Scene::ChatReply(schemes) => {
+                Scene::ChatReply(schemes, hovered) => {
                     let mut row = row;
                     for id in schemes {
                         crate::theme::set_active_for_test(id);
-                        row = row.child(chat_reply_panel(id));
+                        row = row.child(chat_reply_panel(id, *hovered));
                     }
                     row
                 }
@@ -886,22 +887,29 @@ mod shots {
     /// The thread's foot with a reply: the lead's ask, Brian's answer quoting
     /// it, and the quote bar over the composer strip, built with the app's own
     /// quote builders.
-    fn chat_reply_panel(id: &str) -> impl IntoElement {
-        use crate::app::chat::{quote_block, reply_bar};
+    fn chat_reply_panel(id: &str, hovered: bool) -> impl IntoElement {
+        use crate::app::chat::{quote_block, reply_arrow, reply_bar};
         let ask = "Stone is on the chat rail now. Run the shots for castle, neon and one flat scheme, then post them here? The quote above a reply stops at three lines, so this long ask shows the cut.";
+        let arrow = |me: bool| hovered.then(|| reply_arrow(i64::from(me)).opacity(1.));
         let bubble = |me: bool, quote: bool, text: &str| {
-            div().flex().when(me, |d| d.justify_end()).child(
-                div()
-                    .max_w(px(260.))
-                    .px_3()
-                    .py_2()
-                    .rounded_lg()
-                    .text_sm()
-                    .text_color(P::text())
-                    .bg(if me { P::violet_dim() } else { P::surface() })
-                    .when(quote, |d| d.child(quote_block("lead", ask)))
-                    .child(text.to_string()),
-            )
+            div()
+                .flex()
+                .items_center()
+                .when(me, |d| d.justify_end())
+                .when(me, |d| d.children(arrow(me)))
+                .child(
+                    div()
+                        .max_w(px(260.))
+                        .px_3()
+                        .py_2()
+                        .rounded_lg()
+                        .text_sm()
+                        .text_color(P::text())
+                        .bg(if me { P::violet_dim() } else { P::surface() })
+                        .when(quote, |d| d.child(quote_block("lead", ask)))
+                        .child(text.to_string()),
+                )
+                .when(!me, |d| d.children(arrow(me)))
         };
         div()
             .flex_1()
@@ -966,10 +974,27 @@ mod shots {
             .unwrap_or_else(|_| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shots"));
         std::fs::create_dir_all(&dir).unwrap();
         render(
-            Scene::ChatReply(vec!["candlelit", "castle", "neon-district"]),
+            Scene::ChatReply(vec!["candlelit", "castle", "neon-district"], false),
             1200.,
             460.,
             &dir.join("chat-reply.png"),
+        );
+    }
+
+    /// The reply shot with every bubble hovered, so the arrows show:
+    /// `cargo test --bin seance chat_reply_arrow_shot -- --ignored`.
+    #[test]
+    #[ignore = "writes a PNG via headless Metal; run with --ignored"]
+    fn chat_reply_arrow_shot() {
+        let dir = std::env::var("SKIN_SHOTS_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shots"));
+        std::fs::create_dir_all(&dir).unwrap();
+        render(
+            Scene::ChatReply(vec!["candlelit", "castle", "neon-district"], true),
+            1200.,
+            460.,
+            &dir.join("chat-reply-arrow.png"),
         );
     }
 
