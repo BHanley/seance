@@ -33,8 +33,8 @@ All of it is in the Mac and Linux GUI. The daemon work below is small.
 | The Mac app (GUI) | A Mac. The download is Apple Silicon (arm64) only. |
 | Classic, Stage, Wall and terminals | A **daemon**. The Mac app's launch picker offers "connect to remote host" (an ssh destination) or "run locally". The docs describe the Mac as a thin client, and the daemon is meant to run on a Linux machine; I have not tested the Mac "run locally" option. |
 | A Linux machine | Where the daemon (and your agents' terminals) normally live. It needs this same build of `seance` on the `PATH` that a non-interactive `ssh` sees, and **passwordless ssh** from the Mac (keys or agent). The daemon refuses a GUI whose version does not match exactly, so build both sides from this fork. |
-| Tailscale | **Not required by the app.** Any ssh destination works. Tailscale shows up in two places: the Chat layout's default server address is a Tailscale host (so set your own, below), and `seance web` leaves remote access to Tailscale (`docs/WEB.md`). |
-| Chat layout | An **Invoke** server, a separate service that is not in this repo. Point the app at it with `SEANCE_INVOKE_URL`. The built-in default is the author's own Tailscale address and will not work for you. It expects the server to identify you itself (Tailscale Serve), so there is no token. Without Invoke, Chat has nothing to show; use classic or stage. |
+| Tailscale | **Not required by the app.** Any ssh destination works. Tailscale shows up in two places: your Invoke server is probably on your tailnet, and `seance web` leaves remote access to Tailscale (`docs/WEB.md`). |
+| Chat layout | An **Invoke** server, a separate service that is not in this repo. Point the app at it with `SEANCE_INVOKE_URL` or the file `~/.config/seance/invoke-url` (see below). There is no built-in default. It expects the server to identify you itself (Tailscale Serve), so there is no token. With no URL set, Chat shows a message saying how to set one; use classic or stage instead. |
 | Stage extras | Optional `terminal.conf` keys `seance-circle-map` and `seance-health-file`, files on the daemon's machine. Leave them out and those parts stay hidden. |
 
 ## Install
@@ -77,10 +77,12 @@ install -m755 target/release/seance ~/.local/bin/seance   # must be on the ssh P
 Then open the Mac app, choose "connect to remote host" and type the ssh
 destination. The app starts the daemon over ssh if it is not running.
 
-**Using Chat.** Set `SEANCE_INVOKE_URL` to your Invoke server's `https://`
-address before launching. A Dock launch does not see your shell's
-environment, so run `launchctl setenv SEANCE_INVOKE_URL https://...` first
-(or start the app from a terminal).
+**Using Chat.** The Chat view needs an Invoke server URL. Set either the
+`SEANCE_INVOKE_URL` environment variable, or the file
+`~/.config/seance/invoke-url` (one line, the `https://` URL). The variable
+wins when both are set. A Dock launch does not see your shell's environment,
+so the file is the easy way for the app. With neither set, Chat shows a
+message saying how to set it.
 
 ---
 
