@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Generate the Neon District skin's steel tile: assets/skins/neon-steel.png.
 
-Pixel art in a limited palette (at most 20 colors): grimy riveted steel
-plates in near-black violet, bevelled seams, rivets along the plate edges,
-rust bleeding from a few rivets, one short strip of worn hazard tape, faint
-scanlines, magenta and cyan neon staining that bleeds out of some seams,
-ordered (Bayer 8x8) dithered shadow and fine grain. Kept dark and low
-contrast so labels on top stay readable.
+Pixel art in a limited palette (at most 24 colors): grimy riveted steel
+plates in near-black violet, each plate its own shade, deep bevelled seams,
+rivets along the plate edges, patchy dithered shadow, oil stains, bright
+scratches, rust streaks running down from rivets and seams, one short strip
+of worn hazard tape, faint scanlines, and magenta and cyan neon staining
+bleeding out of some seams. The grime is as much deep shadow as bright
+detail, so the tile's average stays dark and labels on top stay readable.
 
 Seamless on every edge by construction: plate rows and widths sum to the
 tile size, the noise is periodic, the scanline period divides the tile, and
-every stamp (rivet, rust, stain, tape) writes its pixels mod the tile size.
+every stamp (rivet, rust, oil, scratch, stain, tape) writes its pixels mod the tile size.
 Every pixel is picked from the fixed palette, never blended.
 
 Usage:
@@ -29,15 +30,15 @@ SIZE = 256
 SEED = 11
 
 # Palette, darkest first within each group.
-SEAM_DEEP = 0x020106
-SEAM = 0x06040C
-STEEL = [0x0A0812, 0x0E0B18, 0x13101E, 0x181424, 0x1D182A]
-EDGE = 0x262033
-RIVET = 0x342D44
-RUST = [0x1C0E0D, 0x2E150F, 0x442013]
-TAPE = 0x3A2A0A
-PINK = [0x220A20, 0x3A0E34]
-CYAN = [0x071E24, 0x0B3139]
+SEAM_DEEP = 0x010003
+SEAM = 0x05030A
+STEEL = [0x08060E, 0x0D0A17, 0x13101F, 0x1A1628, 0x221D32, 0x2B253D, 0x352E4A]
+EDGE = 0x433A58
+RIVET = 0x655A7E
+RUST = [0x1E0E0C, 0x331710, 0x4C2413, 0x643318]
+TAPE = 0x4E3A0C
+PINK = [0x2C0B2A, 0x521348, 0x80207A]
+CYAN = [0x08232A, 0x0E3C47, 0x15606F]
 
 BAYER8 = np.array(
     [
@@ -131,19 +132,25 @@ def build():
     n = len(plates)
     seam = plate < 0
     pid = np.where(seam, 0, plate)
-    tone = rng.uniform(0.9, 3.2, size=n)
+    # Grime draws from its own generator so the plate layout above stays put.
+    rng = np.random.default_rng(SEED + 1)
+    ys, xs = np.mgrid[0:SIZE, 0:SIZE]
 
-    # Steel value on the STEEL ramp (0..4), worn and grimy, in pools of shadow.
-    grime = fbm(rng, [(4, 1.0), (8, 0.6), (16, 0.4), (32, 0.25)])
-    pools = periodic_noise(rng, 2)
-    v = tone[pid] + (grime - 0.5) * 2.6
-    v -= np.clip(0.55 - pools, 0, None) * 3.0
-    v += rng.normal(0.0, 0.4, size=(SIZE, SIZE))  # fine grain
+    # Steel value on the STEEL ramp (0..6): each plate its own shade, worn
+    # and grimy, sunk in patchy pools of shadow.
+    tone = rng.uniform(0.9, 4.9, size=n)
+    grime = fbm(rng, [(4, 1.0), (8, 0.7), (16, 0.5), (32, 0.3)])
+    pools = fbm(rng, [(2, 1.0), (4, 0.6), (8, 0.3)])
+    v = tone[pid] + (grime - 0.5) * 3.6
+    v -= np.clip(0.52 - pools, 0, None) * 7.0
+    v += rng.normal(0.0, 0.45, size=(SIZE, SIZE))  # fine grain
     # Scanlines: every other row a touch darker (period 2 divides SIZE).
-    v -= (np.arange(SIZE)[:, None] % 2) * 0.35
+    v -= (ys % 2) * 0.35
     # Bevel: plates lit on top and left, in shade on the bottom and right.
-    v += np.where(ly < 2, 0.9, 0) + np.where(lx < 1, 0.5, 0)
-    v -= np.where(lyb < 2, 1.0, 0) + np.where(lxr < 1, 0.6, 0)
+    v += np.where(ly < 2, 1.6, 0) + np.where(lx < 1, 0.9, 0)
+    v -= np.where(lyb < 3, 1.8, 0) + np.where(lxr < 2, 1.2, 0)
+    # Grime settles along each plate's lower edge.
+    v -= np.clip(1 - lyb / 9.0, 0, None) * 1.2
 
     # Rivets inset along each plate's edges.
     rivets = []
@@ -157,45 +164,64 @@ def build():
             rivets.append(((x0 + 3) % SIZE, (y0 + dy) % SIZE))
             rivets.append(((x0 + inner_w - 5) % SIZE, (y0 + dy) % SIZE))
 
-    # Rust: streaks running down from a few rivets, edges wandering.
+    # Rust: streaks running down from rivets and from the top seam of some
+    # plates, edges wandering, heaviest at the source.
     wander = periodic_noise(rng, 16)
     rust = np.zeros((SIZE, SIZE))
-    pick = rng.choice(len(rivets), size=max(1, len(rivets) // 14), replace=False)
-    for k in pick:
-        rx, ry = rivets[k]
-        length = int(rng.integers(8, 30))
-        width = rng.uniform(1.6, 3.0)
+
+    def streak(rx, ry, length, width):
         for t in range(length):
-            py = (ry + 2 + t) % SIZE
-            fade = (1 - t / length) ** 0.9
-            sway = (wander[py, rx % SIZE] - 0.5) * 3
-            wdt = width * (0.6 + 0.6 * fade)
-            for dx in range(-4, 5):
+            py = (ry + t) % SIZE
+            fade = (1 - t / length) ** 0.7
+            sway = (wander[py, rx % SIZE] - 0.5) * 4
+            wdt = width * (0.5 + 0.7 * fade)
+            for dx in range(-5, 6):
                 d = abs(dx - sway)
                 if d > wdt:
                     continue
                 px = (rx + dx) % SIZE
-                rust[py, px] = max(rust[py, px], fade * (1 - d / (wdt + 0.5)))
-    rust *= 0.5 + periodic_noise(rng, 32)
+                rust[py, px] = max(rust[py, px], fade * (1 - d / (wdt + 0.6)))
 
-    # Neon staining: glow bleeding out of a few seams, fading with distance.
+    pick = rng.choice(len(rivets), size=max(1, len(rivets) // 6), replace=False)
+    for k in pick:
+        rx, ry = rivets[k]
+        streak(rx, ry + 2, int(rng.integers(14, 46)), rng.uniform(1.6, 3.4))
+    for i in rng.choice(n, size=max(1, n // 2), replace=False):
+        x0, y0, w, h = plates[i]
+        for _ in range(int(rng.integers(1, 3))):
+            sx = (x0 + int(rng.integers(6, max(7, w - 8)))) % SIZE
+            streak(sx, y0, int(rng.integers(12, 40)), rng.uniform(1.2, 2.6))
+    rust *= 0.45 + 0.9 * periodic_noise(rng, 32)
+
+    # Oil: dark blots pooled on a few plates.
+    oil = np.zeros((SIZE, SIZE))
+    blot = periodic_noise(rng, 64)
+    for _ in range(7):
+        cx, cy = rng.integers(0, SIZE, size=2)
+        r = rng.uniform(6, 14)
+        ddx = (xs - cx + SIZE // 2) % SIZE - SIZE // 2
+        ddy = (ys - cy + SIZE // 2) % SIZE - SIZE // 2
+        d = np.sqrt(ddx**2 + (ddy * 1.4) ** 2) / r
+        oil = np.maximum(oil, np.clip(1.2 - d + (blot - 0.5) * 0.9, 0, 1))
+    v -= oil * 3.2
+
+    # Neon staining: glow bleeding out of seams, fading with distance.
     stain_p = np.zeros((SIZE, SIZE))
     stain_c = np.zeros((SIZE, SIZE))
-    ys, xs = np.mgrid[0:SIZE, 0:SIZE]
     ragged = periodic_noise(rng, 32)
-    for i in rng.choice(n, size=5, replace=False):
+    for j, i in enumerate(rng.choice(n, size=7, replace=False)):
         x0, y0, w, h = plates[i]
         # Along this plate's bottom seam, over part of its length.
-        sx = x0 + int(rng.integers(0, max(1, w // 2)))
-        span = int(rng.integers(w // 3, w))
+        sx = x0 + int(rng.integers(0, max(1, w // 3)))
+        span = int(rng.integers(w // 2, w + 20))
         sy = (y0 + h - 1) % SIZE
         cx = (sx + span / 2) % SIZE
         ddx = (xs - cx + SIZE // 2) % SIZE - SIZE // 2
         ddy = (ys - sy + SIZE // 2) % SIZE - SIZE // 2
-        along = np.clip(1 - np.abs(ddx) / (span / 2), 0, 1) ** 0.6
-        reach = rng.uniform(5, 10)
-        glow = along * np.clip(1 - np.abs(ddy) / reach + (ragged - 0.5) * 0.5, 0, 1)
-        if i % 2 == 0:
+        along = np.clip(1 - np.abs(ddx) / (span / 2), 0, 1) ** 0.5
+        reach = rng.uniform(10, 20)
+        glow = along * np.clip(1 - np.abs(ddy) / reach + (ragged - 0.5) * 0.6, 0, 1)
+        if j % 2 == 0:
             stain_p = np.maximum(stain_p, glow)
         else:
             stain_c = np.maximum(stain_c, glow)
@@ -205,20 +231,35 @@ def build():
     # Compose.
     img = np.zeros((SIZE, SIZE, 3), dtype=np.uint8)
     img[:] = np.array([rgb(c) for c in STEEL], dtype=np.uint8)[idx]
-    # The lit top bevel catches a little light on the brighter plates.
-    img[(ly == 0) & ~seam & (idx >= 2) & (THRESH < 0.5)] = rgb(EDGE)
+    # The lit top bevel catches light on the brighter plates.
+    img[(ly == 0) & ~seam & (idx >= 3) & (THRESH < 0.6)] = rgb(EDGE)
     img[seam] = rgb(SEAM)
-    img[seam & ((pools < 0.45) | (THRESH < 0.3))] = rgb(SEAM_DEEP)
+    img[seam & ((pools < 0.5) | (THRESH < 0.4))] = rgb(SEAM_DEEP)
+    # Oil at its heart goes near black.
+    img[(oil > 0.75) & (THRESH < 0.7) & ~seam] = rgb(SEAM)
 
-    on = rust > THRESH * 0.9
-    img[on & (rust > 0.7)] = rgb(RUST[2])
-    img[on & (rust <= 0.7) & (rust > 0.35)] = rgb(RUST[1])
-    img[on & (rust <= 0.35)] = rgb(RUST[0])
+    # Scratches: short bright gouges at a slant, on plates only.
+    for _ in range(26):
+        x, y = rng.uniform(0, SIZE, size=2)
+        ang = rng.uniform(-0.5, 0.5) + (np.pi / 2 if rng.random() < 0.3 else 0)
+        for t in range(int(rng.integers(5, 18))):
+            px = int(x + np.cos(ang) * t) % SIZE
+            py = int(y + np.sin(ang) * t) % SIZE
+            if not seam[py, px] and rng.random() < 0.85:
+                img[py, px] = rgb(EDGE if t % 5 else STEEL[-1])
+                img[(py + 1) % SIZE, px] = rgb(STEEL[0])
+
+    on = rust > THRESH * 0.8
+    img[on & (rust > 0.75)] = rgb(RUST[3])
+    img[on & (rust <= 0.75) & (rust > 0.5)] = rgb(RUST[2])
+    img[on & (rust <= 0.5) & (rust > 0.25)] = rgb(RUST[1])
+    img[on & (rust <= 0.25)] = rgb(RUST[0])
 
     for stain, ramp in ((stain_p, PINK), (stain_c, CYAN)):
-        on = stain * 0.85 > THRESH
-        img[on & (stain <= 0.6)] = rgb(ramp[0])
-        img[on & (stain > 0.6)] = rgb(ramp[1])
+        on = stain * 0.95 > THRESH
+        img[on & (stain <= 0.45)] = rgb(ramp[0])
+        img[on & (stain > 0.45) & (stain <= 0.75)] = rgb(ramp[1])
+        img[on & (stain > 0.75)] = rgb(ramp[2])
 
     # Hazard tape, once: a short strip of worn diagonal stripes across one
     # plate's lower edge, half the stripes scuffed away.
@@ -244,6 +285,7 @@ def build():
         img[(ry + 1) % SIZE, rx % SIZE] = rgb(EDGE)
         img[(ry + 1) % SIZE, (rx + 1) % SIZE] = rgb(SEAM)
         img[(ry + 2) % SIZE, (rx + 1) % SIZE] = rgb(SEAM_DEEP)
+        img[(ry + 2) % SIZE, rx % SIZE] = rgb(SEAM)
 
     return Image.fromarray(img, "RGB")
 
@@ -257,7 +299,7 @@ def main():
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tile = build()
     colors = len(tile.getcolors(1 << 16))
-    assert colors <= 20, f"{colors} colors"
+    assert colors <= 24, f"{colors} colors"
     tile.save(path, optimize=True)
     print(f"wrote {path} ({SIZE}x{SIZE}, {colors} colors)")
     if args.preview:

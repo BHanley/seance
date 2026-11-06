@@ -85,24 +85,31 @@ with square corners; schemes without a texture paint exactly as before
 (rounded frame, `border` color).
 
 Neon District is the second skin: a 256 px tile of riveted steel plates in
-near-black violet (17 colors) with bevelled seams, rust bleeding from a few
-rivets, one short strip of worn hazard tape, faint scanlines and magenta and
-cyan neon staining out of some seams, from `scripts/gen-neon-tile.py` (run
-it with `uv run --offline --no-project --with numpy --with pillow python
-scripts/gen-neon-tile.py`). It covers the same surfaces as Castle, Chat
-included, at the same backdrop strengths; its pane frame is dark steel
-`#1B1A26`. Its accent is magenta, its second accent cyan, and `text_faint`
-is lifted to `#7C80AA` so faint labels hold 4.5:1 on the steel.
+near-black violet (22 colors), each plate its own shade, with deep bevelled
+seams, rivet caps, patchy dithered shadow, oil stains, bright scratches,
+rust streaks running down from rivets and seams, one short strip of worn
+hazard tape, faint scanlines and magenta and cyan neon staining that bleeds
+well out of some seams, from `scripts/gen-neon-tile.py` (run it with `uv
+run --offline --no-project --with numpy --with pillow python
+scripts/gen-neon-tile.py`). The grime gets its contrast from deep shadow as
+much as from bright detail, so the tile's average stays dark enough for
+labels. It covers the same surfaces as Castle, Chat included. Each skin
+scales the backdrop strengths by its `Texture::strength`; both skins use
+1.0, so Neon District sits at Castle's strengths. Its pane frame is dark
+steel `#1B1A26`. Its accent is magenta, its second accent cyan, and
+`text_faint` is lifted to `#7C80AA` so faint labels hold 4.5:1 on the steel.
 
 Label contrast on the skins (WCAG ratio against the textured ground: the
 mean ground, then its 95th-percentile brightest pixel; the tile math and
-the rendered shots agree to 0.1):
+the rendered shots agree to 0.1 on the mean). The brightest 5% of the neon
+ground (rivet caps, scratches, neon stains) dips faint labels to about 4.1
+to 4.4; the average holds 4.8 or better:
 
 | surface | scheme | text | text_dim | text_faint |
 |---------|--------|------|----------|------------|
-| rail (0.6) | neon-district | 16.1 / 15.5 | 6.4 / 6.1 | 5.2 / 5.0 |
-| title strip (0.55) | neon-district | 16.2 / 15.6 | 6.4 / 6.2 | 5.2 / 5.0 |
-| active title (0.3) | neon-district | 15.3 / 14.9 | 6.1 / 5.9 | 4.9 / 4.8 |
+| rail (0.6) | neon-district | 15.8 / 13.2 | 6.2 / 5.2 | 5.1 / 4.2 |
+| title strip (0.55) | neon-district | 15.8 / 13.5 | 6.3 / 5.3 | 5.1 / 4.3 |
+| active title (0.3) | neon-district | 15.1 / 13.8 | 6.0 / 5.4 | 4.8 / 4.4 |
 | rail (0.6) | castle | 11.1 / 9.3 | 6.0 / 5.1 | 3.0 / 2.5 |
 | title strip (0.55) | castle | 11.0 / 9.4 | 6.0 / 5.1 | 3.0 / 2.5 |
 | active title (0.3) | castle | 9.4 / 8.6 | 5.1 / 4.7 | 2.5 / 2.3 |

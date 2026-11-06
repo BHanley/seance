@@ -43,9 +43,9 @@ pub fn lamp() -> Option<Lamp> {
     active().and_then(|t| t.lamp)
 }
 
-/// Texture strength per surface: low enough that the stone reads as a calm
-/// ground behind labels, not a pattern fighting them (see docs/THEME.md for
-/// the contrast numbers).
+/// Texture strength per surface, scaled by the skin's own `strength`: low
+/// enough that the texture reads as a calm ground behind labels, not a
+/// pattern fighting them (see docs/THEME.md for the contrast numbers).
 pub const RAIL: f32 = 0.6;
 /// A strip of tabs or a drawer header.
 pub const STRIP: f32 = 0.6;
@@ -75,7 +75,7 @@ pub fn backdrop(opacity: f32) -> Option<impl IntoElement> {
             .top_0()
             .left_0()
             .size_full()
-            .opacity(opacity)
+            .opacity((opacity * tex.strength).min(1.0))
             .child(
                 canvas(
                     |_, _, _| {},
@@ -441,7 +441,18 @@ mod shots {
             .child(chip("scratch · zsh"))
     }
 
+    /// The mock's copy names the skin on screen; Neon District gets its own,
+    /// every other scheme keeps Castle's.
+    fn neon() -> bool {
+        lamp() == Some(Lamp::Tube)
+    }
+
     fn dock() -> impl IntoElement {
+        let (title, line) = if neon() {
+            ("# Neon District skin", "- steel on chrome only")
+        } else {
+            ("# Castle skin", "- stone on chrome only")
+        };
         let tab = |name: &str, open: bool| {
             div()
                 .h_full()
@@ -487,8 +498,8 @@ mod shots {
                     .p_2()
                     .text_xs()
                     .text_color(P::text_dim())
-                    .child("# Castle skin")
-                    .child("- stone on chrome only")
+                    .child(title)
+                    .child(line)
                     .child("- file bodies stay flat"),
             )
     }
@@ -635,6 +646,17 @@ mod shots {
 
     fn chat_view(id: &str) -> impl IntoElement {
         let torches = torches();
+        let (ask, reply) = if neon() {
+            (
+                "Steel is on the chat rail now. Run the shots?",
+                "yes, neon and a flat one",
+            )
+        } else {
+            (
+                "Stone is on the chat rail now. Run the shots?",
+                "yes, castle and a flat one",
+            )
+        };
         let row = |name: &str, on: bool, note: &str| {
             div()
                 .px_3()
@@ -842,11 +864,8 @@ mod shots {
                             .flex()
                             .flex_col()
                             .gap_2()
-                            .child(bubble(
-                                false,
-                                "Stone is on the chat rail now. Run the shots?",
-                            ))
-                            .child(bubble(true, "yes, castle and a flat one"))
+                            .child(bubble(false, ask))
+                            .child(bubble(true, reply))
                             .child(bubble(false, "Both written to shots/.")),
                     )
                     .child(composer),

@@ -61,6 +61,9 @@ pub struct Texture {
     /// A pixel lamp in each pane's title strip, lit by the pane's state;
     /// `None` hangs none.
     pub lamp: Option<Lamp>,
+    /// Scales every surface's backdrop strength (`src/skin.rs`), so each
+    /// skin can sit at its own weight; capped at fully opaque.
+    pub strength: f32,
 }
 
 #[derive(Debug)]
@@ -223,6 +226,7 @@ pub const CASTLE_STONE: Texture = Texture {
     size: 256,
     frame: 0x141415,
     lamp: Some(Lamp::Torch),
+    strength: 1.0,
 };
 
 // Neon District: grimy riveted steel in near-black violet, hot neon for the
@@ -239,6 +243,7 @@ pub const NEON_STEEL: Texture = Texture {
     size: 256,
     frame: 0x1B1A26,
     lamp: Some(Lamp::Tube),
+    strength: 1.0,
 };
 
 /// Every scheme, in menu order.
