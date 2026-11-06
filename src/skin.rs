@@ -198,6 +198,7 @@ mod shots {
     use crate::torch::Torch;
     use gpui::prelude::FluentBuilder as _;
     use gpui::{AnyElement, AppContext as _, Context, FontWeight, Hsla, Render};
+    use seance_core::schemes::MeBubble;
 
     enum Scene {
         Chrome(Vec<&'static str>),
@@ -206,12 +207,16 @@ mod shots {
         /// The Chat view: list rail, header with the lead's torch, plain
         /// bubbles, composer.
         Chat(&'static str),
+        /// [`Scene::Chat`] with Brian's bubble set to this fill and ink.
+        ChatInk(&'static str, u32, u32),
         /// The Chat header once per torch state.
         ChatHeaders,
         /// A quoted reply bubble and the quote bar over the composer, once
         /// per scheme.
         /// The reply shot; `true` draws each bubble as hovered, arrow showing.
         ChatReply(Vec<&'static str>, bool),
+        /// One reply panel with Brian's bubble set to this fill and ink.
+        ChatReplyInk(&'static str, u32, u32),
     }
 
     struct Shot(Scene);
@@ -242,15 +247,27 @@ mod shots {
                 }
                 Scene::Chat(id) => {
                     crate::theme::set_active_for_test(id);
-                    row.child(chat_view(id))
+                    row.child(chat_view(id, None))
+                }
+                Scene::ChatInk(id, bg, ink) => {
+                    crate::theme::set_active_for_test(id);
+                    row.child(chat_view(id, Some(MeBubble { bg: *bg, ink: *ink })))
                 }
                 Scene::ChatReply(schemes, hovered) => {
                     let mut row = row;
                     for id in schemes {
                         crate::theme::set_active_for_test(id);
-                        row = row.child(chat_reply_panel(id, *hovered));
+                        row = row.child(chat_reply_panel(id, *hovered, None));
                     }
                     row
+                }
+                Scene::ChatReplyInk(id, bg, ink) => {
+                    crate::theme::set_active_for_test(id);
+                    row.child(chat_reply_panel(
+                        id,
+                        false,
+                        Some(MeBubble { bg: *bg, ink: *ink }),
+                    ))
                 }
                 Scene::ChatHeaders => {
                     crate::theme::set_active_for_test("castle");
@@ -656,7 +673,8 @@ mod shots {
     /// The Chat shot's header width: 900 wide, less padding and the rail.
     const CHAT_HEADER_W: f32 = 900. - 20. - 220.;
 
-    fn chat_view(id: &str) -> impl IntoElement {
+    fn chat_view(id: &str, ink_override: Option<MeBubble>) -> impl IntoElement {
+        let custom = ink_override.or(crate::theme::active().me_bubble);
         let torches = torches();
         let (ask, reply) = if neon() {
             (
@@ -676,7 +694,11 @@ mod shots {
                 .flex()
                 .justify_between()
                 .text_xs()
-                .when(on, |d| d.bg(P::surface()))
+                .relative()
+                .when(on, |d| {
+                    d.bg(crate::app::chat::selected_row_bg(custom))
+                        .children(crate::app::chat::selected_row_bar(custom))
+                })
                 .child(
                     div()
                         .text_color(if on { P::text() } else { P::text_dim() })
@@ -689,7 +711,7 @@ mod shots {
         let bubble = |me: bool, text: &str| {
             let (fill, words) = crate::app::chat::bubble_fill(
                 me,
-                crate::app::chat::active_me_ink(me),
+                crate::app::chat::me_ink(me, custom),
                 P::flame(),
                 P::surface(),
                 if me { P::bg() } else { P::text() },
@@ -896,14 +918,12 @@ mod shots {
     /// The thread's foot with a reply: the lead's ask, Brian's answer quoting
     /// it, and the quote bar over the composer strip, built with the app's own
     /// quote builders.
-    fn chat_reply_panel(id: &str, hovered: bool) -> impl IntoElement {
-        use crate::app::chat::{
-            active_me_ink, bubble_fill, hex, quote_block, reply_arrow, reply_bar,
-        };
+    fn chat_reply_panel(id: &str, hovered: bool, custom: Option<MeBubble>) -> impl IntoElement {
+        use crate::app::chat::{bubble_fill, hex, me_ink, quote_block, reply_arrow, reply_bar};
         let ask = "Stone is on the chat rail now. Run the shots for castle, neon and one flat scheme, then post them here? The quote above a reply stops at three lines, so this long ask shows the cut.";
         let arrow = |me: bool| hovered.then(|| reply_arrow(i64::from(me)).opacity(1.));
         let bubble = |me: bool, quote: bool, text: &str| {
-            let ink = active_me_ink(me);
+            let ink = me_ink(me, custom.or(crate::theme::active().me_bubble));
             let (fill, words) = bubble_fill(me, ink, P::violet_dim(), P::surface(), P::text());
             div()
                 .flex()
@@ -1145,6 +1165,36 @@ mod shots {
             image::imageops::resize(&grid, n * 9, n * 9, image::imageops::FilterType::Nearest);
         big.save(out).expect("save png");
         eprintln!("wrote {}", out.display());
+    }
+
+    /// Neon District's bubble ink options, each as the whole Chat view with
+    /// the selected row, plus a tight crop of a quoted reply (the harness renders at 2x).
+    #[test]
+    #[ignore = "writes PNGs via headless Metal; run with --ignored"]
+    fn neon_ink_shots() {
+        let dir = std::env::var("SKIN_SHOTS_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("shots"));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, bg, ink) in [
+            ("a", 0xFF2FB5, 0xFFFFFF),
+            ("b", 0xD6168F, 0xFFFFFF),
+            ("c", 0xC8128A, 0xFFF4E0),
+        ] {
+            render(
+                Scene::ChatInk("neon-district", bg, ink),
+                900.,
+                460.,
+                &dir.join(format!("neon-ink-{name}.png")),
+            );
+            let crop = dir.join(format!("neon-ink-{name}-reply.png"));
+            render(
+                Scene::ChatReplyInk("neon-district", bg, ink),
+                330.,
+                460.,
+                &crop,
+            );
+        }
     }
 
     #[test]

@@ -252,12 +252,17 @@ fn one_line(text: &str) -> String {
     }
 }
 
-/// How far the time and a waiting tick in a recolored bubble move from the
-/// ink toward the fill: softer, still 4.5:1 on the fill.
+/// The most the time and a waiting tick in a recolored bubble move from the
+/// ink toward the fill: softer, but never under 4.5:1 on the fill.
 const SOFT_INK: f32 = 0.2;
-/// How far a quote's fill in a recolored bubble moves toward the ink: a
-/// darker tint the ink still holds 4.5:1 on.
+/// How far a quote's fill in a recolored bubble darkens: toward a dark ink,
+/// toward black under a light one, so the ink holds 4.5:1 on it.
 const QUOTE_TINT: f32 = 0.12;
+/// How far the selected circle row's wash moves from the rail to the
+/// recolored bubble's fill.
+const ROW_WASH: f32 = 0.22;
+/// Width of the bar on the selected circle row's left edge.
+const ROW_BAR: f32 = 3.;
 
 /// Brian's bubble on a scheme that recolors it (`Scheme::me_bubble`), as
 /// packed hex: the fill, the ink, the softer ink for the time and a waiting
@@ -277,9 +282,53 @@ pub(crate) fn me_ink(me: bool, custom: Option<schemes::MeBubble>) -> Option<MeIn
     Some(MeInk {
         bg: b.bg,
         ink: b.ink,
-        soft: schemes::mix(b.ink, b.bg, SOFT_INK),
-        quote_bg: schemes::mix(b.bg, b.ink, QUOTE_TINT),
+        soft: soft_ink(b.ink, b.bg),
+        quote_bg: schemes::mix(
+            b.bg,
+            if schemes::is_lighter(b.ink, b.bg) {
+                0x000000
+            } else {
+                b.ink
+            },
+            QUOTE_TINT,
+        ),
     })
+}
+
+/// The ink moved toward the fill by up to [`SOFT_INK`], less where a full
+/// step would drop it under 4.5:1 (a light ink on a mid fill has little room).
+fn soft_ink(ink: u32, bg: u32) -> u32 {
+    (1..=(SOFT_INK * 100.) as u32)
+        .rev()
+        .map(|n| schemes::mix(ink, bg, n as f32 / 100.))
+        .find(|&c| schemes::contrast(c, bg) >= 4.5)
+        .unwrap_or(ink)
+}
+
+/// The selected circle row's fill: the rail's `surface`, or the recolored
+/// bubble's fill washed thin where the scheme has one, so the row stands out
+/// on a textured rail.
+pub(crate) fn selected_row_bg(custom: Option<schemes::MeBubble>) -> Hsla {
+    match custom {
+        Some(b) => hex(b.bg).opacity(ROW_WASH),
+        None => SeancePalette::surface(),
+    }
+}
+
+/// The bar on a selected circle row's left edge where the scheme recolors
+/// the bubble. It is absolute, so the row's contents stay where they were;
+/// the row must be `relative`.
+pub(crate) fn selected_row_bar(custom: Option<schemes::MeBubble>) -> Option<gpui::Div> {
+    let b = custom?;
+    Some(
+        div()
+            .absolute()
+            .left_0()
+            .top_0()
+            .bottom_0()
+            .w(px(ROW_BAR))
+            .bg(hex(b.bg)),
+    )
 }
 
 /// [`me_ink`] for the active scheme.
@@ -2504,6 +2553,7 @@ impl SeanceApp {
         let ws = c.ws.clone();
         let (menu_ws, weak) = (c.ws.clone(), cx.weak_entity());
         let pulse = 0.45 + 0.55 * (((now_ms() / 300) % 2) as f32);
+        let me = crate::theme::active().me_bubble;
         div()
             .id(SharedString::from(format!("chat-circle-{}", c.ws)))
             .flex_none()
@@ -2513,7 +2563,10 @@ impl SeanceApp {
             .items_center()
             .gap_3()
             .cursor_pointer()
-            .when(on, |d| d.bg(SeancePalette::surface()))
+            .relative()
+            .when(on, |d| {
+                d.bg(selected_row_bg(me)).children(selected_row_bar(me))
+            })
             .hover(|s| s.bg(SeancePalette::surface()))
             .on_click(cx.listener(move |this, _, window, cx| this.chat_select(&ws, window, cx)))
             .context_menu(move |menu, _, _| {
@@ -4441,7 +4494,7 @@ mod tests {
             .unwrap()
             .me_bubble;
         let i = me_ink(true, neon).expect("his bubble on neon");
-        assert_eq!((i.bg, i.ink), (0xFF2FB5, 0x04010A));
+        assert_eq!((i.bg, i.ink), (0xD6168F, 0xFFFFFF));
         // The lead's bubble and every scheme without the field keep the palette.
         assert_eq!(me_ink(false, neon), None);
         for s in &seance_core::schemes::SCHEMES {
@@ -4465,8 +4518,62 @@ mod tests {
         let ink = me_ink(true, neon);
         assert_eq!(
             bubble_fill(true, ink, me_bg, lead_bg, text),
-            (hex(0xFF2FB5), hex(0x04010A))
+            (hex(0xD6168F), hex(0xFFFFFF))
         );
+    }
+
+    #[test]
+    fn a_light_ink_darkens_its_quote_and_keeps_a_soft_ink_that_reads() {
+        use seance_core::schemes::{contrast, MeBubble};
+        let light = me_ink(
+            true,
+            Some(MeBubble {
+                bg: 0xC8128A,
+                ink: 0xFFF4E0,
+            }),
+        )
+        .unwrap();
+        // Toward black, not toward the ink.
+        assert_eq!(
+            light.quote_bg,
+            seance_core::schemes::mix(0xC8128A, 0, QUOTE_TINT)
+        );
+        // The full step would read 3.6:1; the stepped-back one holds.
+        assert!(
+            contrast(
+                seance_core::schemes::mix(0xFFF4E0, 0xC8128A, SOFT_INK),
+                0xC8128A
+            ) < 4.5
+        );
+        assert!(contrast(light.soft, light.bg) >= 4.5);
+        // A dark ink on a light fill keeps the full step.
+        let dark = me_ink(
+            true,
+            Some(MeBubble {
+                bg: 0xFFB0E0,
+                ink: 0x04010A,
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            dark.soft,
+            seance_core::schemes::mix(0x04010A, 0xFFB0E0, SOFT_INK)
+        );
+        assert_eq!(
+            dark.quote_bg,
+            seance_core::schemes::mix(0xFFB0E0, 0x04010A, QUOTE_TINT)
+        );
+    }
+
+    #[test]
+    fn the_selected_row_is_washed_only_where_the_scheme_recolors_bubbles() {
+        let neon = seance_core::schemes::find("neon-district")
+            .unwrap()
+            .me_bubble;
+        assert_eq!(selected_row_bg(neon), hex(0xD6168F).opacity(ROW_WASH));
+        assert!(selected_row_bar(neon).is_some());
+        assert!(selected_row_bar(None).is_none());
+        assert_eq!(selected_row_bg(None), SeancePalette::surface());
     }
 
     #[test]

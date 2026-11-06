@@ -474,8 +474,8 @@ pub static SCHEMES: [Scheme; 14] = [
         )),
         texture: Some(NEON_STEEL),
         me_bubble: Some(MeBubble {
-            bg: 0xFF2FB5,
-            ink: 0x04010A,
+            bg: 0xD6168F,
+            ink: 0xFFFFFF,
         }),
     },
 ];
@@ -515,6 +515,11 @@ fn luminance(c: u32) -> f64 {
 pub fn contrast(a: u32, b: u32) -> f64 {
     let (a, b) = (luminance(a), luminance(b));
     (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// Whether `a` is the lighter of the two colors.
+pub fn is_lighter(a: u32, b: u32) -> bool {
+    luminance(a) > luminance(b)
 }
 
 /// `a` moved `t` (0.0 to 1.0) of the way to `b`, channel by channel.
@@ -599,8 +604,8 @@ mod tests {
             .collect();
         assert_eq!(recolored, ["neon-district"]);
         let b = find("neon-district").unwrap().me_bubble.unwrap();
-        assert_eq!((b.bg, b.ink), (0xFF2FB5, 0x04010A));
-        assert!(contrast(b.ink, b.bg) >= 6.0);
+        assert_eq!((b.bg, b.ink), (0xD6168F, 0xFFFFFF));
+        assert!(contrast(b.ink, b.bg) >= 4.5);
     }
 
     #[test]
