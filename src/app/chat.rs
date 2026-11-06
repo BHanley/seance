@@ -2565,7 +2565,9 @@ impl SeanceApp {
             .cursor_pointer()
             .relative()
             .when(on, |d| {
-                d.bg(selected_row_bg(me)).children(selected_row_bar(me))
+                d.bg(selected_row_bg(me))
+                    .children(selected_row_bar(me))
+                    .children(crate::chain::frame())
             })
             .hover(|s| s.bg(SeancePalette::surface()))
             .on_click(cx.listener(move |this, _, window, cx| this.chat_select(&ws, window, cx)))

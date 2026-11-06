@@ -207,6 +207,8 @@ mod shots {
         /// The Chat view: list rail, header with the lead's torch, plain
         /// bubbles, composer.
         Chat(&'static str),
+        /// [`Scene::Chat`] with the narrowest sidebar the app allows.
+        ChatNarrow(&'static str),
         /// [`Scene::Chat`] with Brian's bubble set to this fill and ink.
         ChatInk(&'static str, u32, u32),
         /// The Chat header once per torch state.
@@ -247,11 +249,15 @@ mod shots {
                 }
                 Scene::Chat(id) => {
                     crate::theme::set_active_for_test(id);
-                    row.child(chat_view(id, None))
+                    row.child(chat_view(id, None, 220.))
+                }
+                Scene::ChatNarrow(id) => {
+                    crate::theme::set_active_for_test(id);
+                    row.child(chat_view(id, None, 160.))
                 }
                 Scene::ChatInk(id, bg, ink) => {
                     crate::theme::set_active_for_test(id);
-                    row.child(chat_view(id, Some(MeBubble { bg: *bg, ink: *ink })))
+                    row.child(chat_view(id, Some(MeBubble { bg: *bg, ink: *ink }), 220.))
                 }
                 Scene::ChatReply(schemes, hovered) => {
                     let mut row = row;
@@ -673,7 +679,7 @@ mod shots {
     /// The Chat shot's header width: 900 wide, less padding and the rail.
     const CHAT_HEADER_W: f32 = 900. - 20. - 220.;
 
-    fn chat_view(id: &str, ink_override: Option<MeBubble>) -> impl IntoElement {
+    fn chat_view(id: &str, ink_override: Option<MeBubble>, rail_w: f32) -> impl IntoElement {
         let custom = ink_override.or(crate::theme::active().me_bubble);
         let torches = torches();
         let (ask, reply) = if neon() {
@@ -698,6 +704,7 @@ mod shots {
                 .when(on, |d| {
                     d.bg(crate::app::chat::selected_row_bg(custom))
                         .children(crate::app::chat::selected_row_bar(custom))
+                        .children(crate::chain::frame())
                 })
                 .child(
                     div()
@@ -730,7 +737,7 @@ mod shots {
         };
         let rail = div()
             .flex_none()
-            .w(px(220.))
+            .w(px(rail_w))
             .h_full()
             .flex()
             .flex_col()
@@ -1165,6 +1172,31 @@ mod shots {
             image::imageops::resize(&grid, n * 9, n * 9, image::imageops::FilterType::Nearest);
         big.save(out).expect("save png");
         eprintln!("wrote {}", out.display());
+    }
+
+    /// The castle chain on the selected row: the whole Chat view, a tight
+    /// crop of the row, and the narrowest sidebar's crop.
+    #[test]
+    #[ignore = "writes PNGs via headless Metal; run with --ignored"]
+    fn castle_chain_shots() {
+        let dir = std::env::var("SKIN_SHOTS_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("shots"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let whole = dir.join("castle-chain-chat.png");
+        render(Scene::Chat("castle"), 900., 460., &whole);
+        // The harness renders at 2x: the selected row is at 10..230 pt wide.
+        let crop = |from: &std::path::Path, to: &str, x: u32, w: u32| {
+            image::open(from)
+                .unwrap()
+                .crop_imm(x, 300, w, 92)
+                .save(dir.join(to))
+                .unwrap();
+        };
+        crop(&whole, "castle-chain-row.png", 20, 440);
+        let narrow = dir.join("castle-chain-narrow-chat.png");
+        render(Scene::ChatNarrow("castle"), 560., 460., &narrow);
+        crop(&narrow, "castle-chain-narrow-row.png", 20, 320);
     }
 
     /// Neon District's bubble ink options, each as the whole Chat view with
