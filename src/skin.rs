@@ -181,6 +181,11 @@ mod shots {
     enum Scene {
         Chrome(Vec<&'static str>),
         Torches,
+        /// The Chat view: list rail, header with the lead's torch, plain
+        /// bubbles, composer.
+        Chat(&'static str),
+        /// The Chat header once per torch state.
+        ChatHeaders,
     }
 
     struct Shot(Scene);
@@ -208,6 +213,28 @@ mod shots {
                 Scene::Torches => {
                     crate::theme::set_active_for_test("castle");
                     row.child(torch_sheet())
+                }
+                Scene::Chat(id) => {
+                    crate::theme::set_active_for_test(id);
+                    row.child(chat_view(id))
+                }
+                Scene::ChatHeaders => {
+                    crate::theme::set_active_for_test("castle");
+                    row.child(
+                        div().flex_1().flex().flex_col().gap(px(8.)).children(
+                            [
+                                (Torch::Idle, "idle"),
+                                (Torch::Working, "working"),
+                                (Torch::NeedsYou, "needs you"),
+                                (Torch::Stopped, "stopped"),
+                            ]
+                            .map(|(t, name)| {
+                                div()
+                                    .bg(P::bg())
+                                    .child(chat_header(Some(t), &format!("l6-leveling · {name}")))
+                            }),
+                        ),
+                    )
                 }
             }
         }
@@ -514,6 +541,281 @@ mod shots {
             .child(dock())
     }
 
+    /// The Chat header as `chat.rs` builds it: stone strip, the lead's torch
+    /// at 1.5x, the circle's creature (a stand-in square here), name, chips.
+    fn chat_header(torch: Option<Torch>, name: &str) -> impl IntoElement {
+        let chip = |text: &str, fill: bool| {
+            div()
+                .flex_none()
+                .px_2()
+                .py_0p5()
+                .rounded_sm()
+                .text_xs()
+                .text_color(P::text_dim())
+                .when(fill, |d| d.bg(P::surface()))
+                .child(text.to_string())
+        };
+        div()
+            .flex_none()
+            .px_3()
+            .py_2()
+            .flex()
+            .items_center()
+            .gap_3()
+            .border_b_1()
+            .border_color(P::border())
+            .map(|d| under(d, STRIP))
+            .children(
+                torch.map(|t| {
+                    crate::torch::element(t, 0, crate::torch::seed("l6-leveling-lead"), 1.5)
+                }),
+            )
+            .child(
+                div()
+                    .size(px(30.))
+                    .rounded_sm()
+                    .bg(P::violet().opacity(0.6)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(P::text())
+                            .child(name.to_string()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(P::flame())
+                            .child("running cargo test"),
+                    ),
+            )
+            .child(chip("☑ 3", false))
+            .child(chip("show terminal", true))
+    }
+
+    fn chat_view(id: &str) -> impl IntoElement {
+        let torches = crate::theme::active()
+            .texture
+            .as_ref()
+            .is_some_and(|t| t.torches);
+        let row = |name: &str, on: bool, note: &str| {
+            div()
+                .px_3()
+                .py_2()
+                .flex()
+                .justify_between()
+                .text_xs()
+                .when(on, |d| d.bg(P::surface()))
+                .child(
+                    div()
+                        .text_color(if on { P::text() } else { P::text_dim() })
+                        .child(name.to_string()),
+                )
+                .child(div().text_color(P::text_faint()).child(note.to_string()))
+        };
+        let bubble = |me: bool, text: &str| {
+            div().flex().when(me, |d| d.justify_end()).child(
+                div()
+                    .max_w(px(320.))
+                    .px_3()
+                    .py_2()
+                    .rounded_lg()
+                    .text_sm()
+                    .text_color(if me { P::bg() } else { P::text() })
+                    .bg(if me { P::flame() } else { P::surface() })
+                    .child(text.to_string()),
+            )
+        };
+        let rail = div()
+            .flex_none()
+            .w(px(220.))
+            .h_full()
+            .flex()
+            .flex_col()
+            .bg(P::bg_elevated())
+            .border_r_1()
+            .border_color(P::border())
+            .map(|d| under(d, RAIL))
+            .child(
+                div()
+                    .p_2()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(div().text_color(P::flame_dim()).child("✦"))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(P::text())
+                                    .child("seance"),
+                            ),
+                    )
+                    .child(
+                        // The view switch, as `render_view_switch` draws it.
+                        div()
+                            .flex()
+                            .p(px(2.))
+                            .gap(px(2.))
+                            .rounded_md()
+                            .border_1()
+                            .border_color(P::border())
+                            .children(["Classic", "Stage", "Chat", "Wall"].map(|m| {
+                                let on = m == "Chat";
+                                div()
+                                    .flex_1()
+                                    .flex()
+                                    .justify_center()
+                                    .rounded_sm()
+                                    .text_xs()
+                                    .when(on, |d| d.bg(P::surface()).text_color(P::flame()))
+                                    .when(!on, |d| d.text_color(P::text_dim()))
+                                    .child(m)
+                            })),
+                    )
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(P::border())
+                            .bg(P::bg())
+                            .text_xs()
+                            .text_color(P::text_faint())
+                            .child("Search chats"),
+                    ),
+            )
+            .child(
+                div()
+                    .px_3()
+                    .pt_2()
+                    .pb_1()
+                    .text_xs()
+                    .text_color(P::text_faint())
+                    .child("ACTIVE"),
+            )
+            .child(row("l6-leveling", true, "now"))
+            .child(row("rudle", false, "3m"))
+            .child(row("riff-raiders", false, "1h"))
+            .child(
+                div()
+                    .mt_auto()
+                    .px_3()
+                    .pb_2()
+                    .text_xs()
+                    .text_color(P::text_faint())
+                    .child(format!("scheme: {id}")),
+            );
+        let composer = div()
+            .flex_none()
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .border_t_1()
+            .border_color(P::border())
+            .map(|d| under(d, STRIP))
+            .child(
+                div()
+                    .flex()
+                    .gap_1p5()
+                    .children(["ok", "go", "status?"].map(|t| {
+                        div()
+                            .px_2()
+                            .py_0p5()
+                            .rounded_full()
+                            .border_1()
+                            .border_color(P::border())
+                            .text_xs()
+                            .text_color(P::text_dim())
+                            .child(t)
+                    })),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1p5()
+                            .rounded_md()
+                            .bg(P::surface())
+                            .text_sm()
+                            .child("📎"),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .px_2()
+                            .py_1p5()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(P::border())
+                            .bg(P::bg())
+                            .text_sm()
+                            .text_color(P::text_faint())
+                            .child("Message the lead"),
+                    )
+                    .child(
+                        div()
+                            .px_3()
+                            .py_1p5()
+                            .rounded_md()
+                            .bg(P::flame())
+                            .text_sm()
+                            .text_color(P::bg())
+                            .child("Send"),
+                    ),
+            );
+        div()
+            .flex_1()
+            .h_full()
+            .flex()
+            .overflow_hidden()
+            .rounded_md()
+            .bg(P::bg())
+            .child(rail)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(chat_header(
+                        torches.then_some(Torch::Working),
+                        "l6-leveling",
+                    ))
+                    .child(
+                        div()
+                            .flex_1()
+                            .px_4()
+                            .py_3()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(bubble(
+                                false,
+                                "Stone is on the chat rail now. Run the shots?",
+                            ))
+                            .child(bubble(true, "yes, castle and a flat one"))
+                            .child(bubble(false, "Both written to shots/.")),
+                    )
+                    .child(composer),
+            )
+    }
+
     /// Every state down the side, frames across, at 4 points per texel on
     /// the title strip's stone.
     fn torch_sheet() -> impl IntoElement {
@@ -617,6 +919,24 @@ mod shots {
             &dir.join("castle-vs-candlelit.png"),
         );
         render(Scene::Torches, 560., 470., &dir.join("torch-sheet.png"));
+        render(
+            Scene::Chat("castle"),
+            900.,
+            460.,
+            &dir.join("chat-castle.png"),
+        );
+        render(
+            Scene::Chat("candlelit"),
+            900.,
+            460.,
+            &dir.join("chat-candlelit.png"),
+        );
+        render(
+            Scene::ChatHeaders,
+            560.,
+            300.,
+            &dir.join("chat-header-torches.png"),
+        );
         tile_preview(&dir.join("castle-tile-3x3.png"));
     }
 }

@@ -1437,6 +1437,18 @@ impl SeanceApp {
         cx.notify();
     }
 
+    /// The open circle's lead pane while Chat shows: its torch burns in the
+    /// thread header.
+    pub(super) fn chat_lead(&self) -> Option<String> {
+        if self.view.mode != ViewMode::Chat {
+            return None;
+        }
+        self.chat
+            .selected
+            .as_deref()
+            .and_then(|ws| self.stage_lead(ws))
+    }
+
     /// Back to Classic, on this circle's lead.
     fn chat_show_terminal(&mut self, ws: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.set_view(ViewMode::Classic, cx);
@@ -1716,6 +1728,8 @@ impl SeanceApp {
             .bg(SeancePalette::bg_elevated())
             .border_r_1()
             .border_color(SeancePalette::border())
+            // Castle's stone, as on Classic's rail; flat schemes unchanged.
+            .map(|d| crate::skin::under(d, crate::skin::RAIL))
             .child(
                 div()
                     .flex_none()
@@ -2069,6 +2083,12 @@ impl SeanceApp {
             .and_then(|p| p.doing.clone())
             .unwrap_or_default();
         let lead = self.stage_lead(&ws);
+        // The lead's wall torch, when the skin has torches.
+        let torch = lead
+            .as_deref()
+            .and_then(|l| self.panes.iter().find(|p| p.slug == l))
+            .and_then(|p| self.pane_torch_frame(p, cx))
+            .zip(lead.as_deref().map(crate::torch::seed));
         let todo = lead
             .as_ref()
             .and_then(|l| self.lead_tasks.get(l))
@@ -2083,6 +2103,8 @@ impl SeanceApp {
             .gap_3()
             .border_b_1()
             .border_color(SeancePalette::border())
+            .map(|d| crate::skin::under(d, crate::skin::STRIP))
+            .children(torch.map(|((t, frame), seed)| crate::torch::element(t, frame, seed, 1.5)))
             .child(self.header_creature(&ws, working, cx))
             .child(
                 div()
@@ -2327,6 +2349,7 @@ impl SeanceApp {
             .gap_2()
             .border_t_1()
             .border_color(SeancePalette::border())
+            .map(|d| crate::skin::under(d, crate::skin::STRIP))
             .child(above)
             .child(
                 div()

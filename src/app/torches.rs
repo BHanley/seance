@@ -33,18 +33,28 @@ fn in_grid(p: &Pane, ws: Option<&str>) -> bool {
     p.tiled && p.popped.is_none() && ws.is_none_or(|w| p.workspace == w)
 }
 
-/// Indexes of the panes whose title strip is on screen: the selected
-/// circle's tiled panes (what `render_tiles` lays out), or just the zoomed
-/// one. Only the classic view draws title strips. Each pane is
+/// Indexes of the panes whose torch is on screen. Classic: the title strips
+/// of the selected circle's tiled panes (what `render_tiles` lays out), or
+/// just the zoomed one. Chat: the open circle's lead (`chat_lead`), in the
+/// thread header. Stage and the Wall draw none. Each pane is
 /// `(slug, circle, tiled, popped out)`.
 fn on_screen<'a>(
     mode: ViewMode,
     selected: Option<&str>,
     zoomed: Option<&str>,
+    chat_lead: Option<&str>,
     panes: impl Iterator<Item = (&'a str, &'a str, bool, bool)>,
 ) -> Vec<usize> {
-    if mode != ViewMode::Classic {
-        return Vec::new();
+    let mut panes = panes;
+    match mode {
+        ViewMode::Classic => {}
+        ViewMode::Chat => {
+            return chat_lead
+                .and_then(|l| panes.position(|p| p.0 == l))
+                .into_iter()
+                .collect();
+        }
+        _ => return Vec::new(),
     }
     let panes: Vec<_> = panes.collect();
     if let Some(z) = zoomed {
@@ -81,6 +91,7 @@ impl SeanceApp {
             self.view.mode,
             self.selected_workspace.as_deref(),
             self.zoomed_slug.as_deref(),
+            self.chat_lead().as_deref(),
             self.panes.iter().map(|p| {
                 (
                     p.slug.as_str(),
@@ -173,22 +184,41 @@ mod tests {
         ];
         let it = || panes.iter().copied();
         assert_eq!(
-            on_screen(ViewMode::Classic, Some("b"), None, it()),
+            on_screen(ViewMode::Classic, Some("b"), None, None, it()),
             [2, 3, 6]
         );
         assert_eq!(
-            on_screen(ViewMode::Classic, Some("b"), Some("b2"), it()),
+            on_screen(ViewMode::Classic, Some("b"), Some("b2"), None, it()),
             [3]
         );
-        // Stage, Chat and the Wall draw no title strips, so no torches.
-        for mode in [ViewMode::Stage, ViewMode::Chat, ViewMode::Wall] {
+        // Stage and the Wall draw no torches, even with a chat lead known.
+        for mode in [ViewMode::Stage, ViewMode::Wall] {
             assert!(
-                on_screen(mode, Some("b"), None, it()).is_empty(),
+                on_screen(mode, Some("b"), None, Some("b1"), it()).is_empty(),
                 "{mode:?}"
             );
         }
+        // Chat burns only the open circle's lead, in its header, wherever
+        // the grid's selection or zoom points.
+        assert_eq!(
+            on_screen(ViewMode::Chat, Some("b"), Some("b2"), Some("c1"), it()),
+            [7]
+        );
+        // The lead even when shelved: the header shows it, not the grid.
+        assert_eq!(
+            on_screen(ViewMode::Chat, Some("b"), None, Some("b3"), it()),
+            [4]
+        );
+        // No local lead for the open circle (or no circle open): no torch.
+        assert!(on_screen(ViewMode::Chat, Some("b"), None, None, it()).is_empty());
+        assert!(on_screen(ViewMode::Chat, Some("b"), None, Some("gone"), it()).is_empty());
+        // Classic ignores the chat lead.
+        assert_eq!(
+            on_screen(ViewMode::Classic, Some("b"), None, Some("c1"), it()),
+            [2, 3, 6]
+        );
         // An empty circle: nothing to burn, so no torch render.
-        assert!(on_screen(ViewMode::Classic, Some("z"), None, it()).is_empty());
+        assert!(on_screen(ViewMode::Classic, Some("z"), None, None, it()).is_empty());
     }
 
     #[test]
