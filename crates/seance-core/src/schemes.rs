@@ -39,6 +39,16 @@ pub struct TermColors {
     pub cursor: u32,
 }
 
+/// A skin's tiling image for chrome surfaces (rail, pane title strips).
+/// Never drawn under terminal text.
+#[derive(Debug)]
+pub struct Texture {
+    /// PNG bytes, square, seamless on every edge.
+    pub png: &'static [u8],
+    /// Width and height in texels. One texel paints as one logical pixel.
+    pub size: u32,
+}
+
 #[derive(Debug)]
 pub struct Scheme {
     pub id: &'static str,
@@ -48,6 +58,10 @@ pub struct Scheme {
     pub chrome: Chrome,
     /// `None` keeps the user's own terminal colors (`terminal.conf`).
     pub term: Option<TermColors>,
+    /// Optional chrome texture; `None` paints flat fills.
+    pub texture: Option<Texture>,
+    /// Chrome borders draw as 1px lines in `border`, pane frames included.
+    pub thin_lines: bool,
 }
 
 /// Terminal source colors in the order the scheme specs list them.
@@ -184,14 +198,29 @@ const HERBARIUM: Chrome = chrome([
     0x43407F, 0x7471A6, 0x2E5A1E, 0x9A1040,
 ]);
 
+// Castle: grey stone blocks with a little moss on the chrome, torchlight for
+// the accent. The terminal ground stays flat stone, a step below the tile.
+const CASTLE: Chrome = chrome([
+    0x1B1B1D, 0x2C2C2E, 0x3A3A3D, 0x4A4A4E, 0xE6E1D6, 0xACA79D, 0x75716A, 0xE39A43, 0x9C672B,
+    0x93A6C2, 0x5B6A82, 0x8DAA5B, 0xCF5A42,
+]);
+
+/// The castle stone tile, made by `scripts/gen-castle-tile.py`.
+pub const CASTLE_STONE: Texture = Texture {
+    png: include_bytes!("../../../assets/skins/castle-stone.png"),
+    size: 96,
+};
+
 /// Every scheme, in menu order.
-pub static SCHEMES: [Scheme; 12] = [
+pub static SCHEMES: [Scheme; 13] = [
     Scheme {
         id: "candlelit",
         label: "Candlelit",
         light: false,
         chrome: CANDLELIT,
         term: None,
+        texture: None,
+        thin_lines: false,
     },
     Scheme {
         id: "abyssal",
@@ -206,6 +235,8 @@ pub static SCHEMES: [Scheme; 12] = [
                 0x6E86A0,
             ]),
         )),
+        texture: None,
+        thin_lines: false,
     },
     Scheme {
         id: "ectoplasm",
@@ -220,6 +251,8 @@ pub static SCHEMES: [Scheme; 12] = [
                 0x6A8873,
             ]),
         )),
+        texture: None,
+        thin_lines: false,
     },
     Scheme {
         id: "ouija",
@@ -234,6 +267,8 @@ pub static SCHEMES: [Scheme; 12] = [
                 0x735E4B,
             ]),
         )),
+        texture: None,
+        thin_lines: false,
     },
     Scheme {
         id: "monokai",
@@ -248,6 +283,8 @@ pub static SCHEMES: [Scheme; 12] = [
                 0x8C8A8C,
             ]),
         )),
+        texture: None,
+        thin_lines: false,
     },
     Scheme {
         id: "tarot",
@@ -262,6 +299,8 @@ pub static SCHEMES: [Scheme; 12] = [
                 0x8A7CA6,
             ]),
         )),
+        texture: None,
+        thin_lines: false,
     },
     Scheme {
         id: "mojave",
@@ -276,6 +315,8 @@ pub static SCHEMES: [Scheme; 12] = [
                 0x9E8073,
             ]),
         )),
+        texture: None,
+        thin_lines: false,
     },
     Scheme {
         id: "riso",
@@ -290,6 +331,8 @@ pub static SCHEMES: [Scheme; 12] = [
                 0x6B6A64,
             ]),
         )),
+        texture: None,
+        thin_lines: false,
     },
     Scheme {
         id: "synth",
@@ -304,6 +347,8 @@ pub static SCHEMES: [Scheme; 12] = [
                 0x8A80C2,
             ]),
         )),
+        texture: None,
+        thin_lines: false,
     },
     Scheme {
         id: "fog",
@@ -318,6 +363,8 @@ pub static SCHEMES: [Scheme; 12] = [
                 0x9AA3B2,
             ]),
         )),
+        texture: None,
+        thin_lines: false,
     },
     Scheme {
         id: "parlor",
@@ -332,6 +379,8 @@ pub static SCHEMES: [Scheme; 12] = [
                 0x5E5145,
             ]),
         )),
+        texture: None,
+        thin_lines: false,
     },
     Scheme {
         id: "herbarium",
@@ -346,6 +395,24 @@ pub static SCHEMES: [Scheme; 12] = [
                 0x4D5A4F,
             ]),
         )),
+        texture: None,
+        thin_lines: false,
+    },
+    Scheme {
+        id: "castle",
+        label: "Castle",
+        light: false,
+        chrome: CASTLE,
+        term: Some(term(
+            false,
+            &CASTLE,
+            spec([
+                0x1E1E20, 0xDCD7CC, 0x8DAA5B, 0xD9B25A, 0x7FA2CC, 0xB58BC0, 0xD0654E, 0x7FB5A8,
+                0x7A766F,
+            ]),
+        )),
+        texture: Some(CASTLE_STONE),
+        thin_lines: true,
     },
 ];
 
@@ -394,6 +461,44 @@ mod tests {
         }
         let light: Vec<_> = SCHEMES.iter().filter(|s| s.light).map(|s| s.id).collect();
         assert_eq!(light, ["ouija", "riso", "parlor", "herbarium"]);
+    }
+
+    #[test]
+    fn only_castle_is_textured_and_thin_lined() {
+        let castle = find("castle").expect("castle scheme");
+        assert!(!castle.light);
+        assert!(castle.thin_lines);
+        assert_eq!(castle.texture.as_ref().map(|t| t.size), Some(96));
+        for s in SCHEMES.iter().filter(|s| s.id != "castle") {
+            assert!(s.texture.is_none(), "{}", s.id);
+            assert!(!s.thin_lines, "{}", s.id);
+        }
+    }
+
+    #[test]
+    fn every_textured_scheme_has_a_square_seamless_tile() {
+        for s in &SCHEMES {
+            let Some(t) = &s.texture else { continue };
+            let img = image::load_from_memory_with_format(t.png, image::ImageFormat::Png)
+                .unwrap_or_else(|e| panic!("{}: {e}", s.id))
+                .into_rgb8();
+            assert_eq!((img.width(), img.height()), (t.size, t.size), "{}", s.id);
+            let n = t.size;
+            let px = |x: u32, y: u32| img.get_pixel(x % n, y % n).0;
+            let diff = |a: [u8; 3], b: [u8; 3]| -> u32 {
+                a.iter().zip(b).map(|(a, b)| a.abs_diff(b) as u32).sum()
+            };
+            // Mean change across one column or row boundary; `i` is the
+            // boundary between i and i + 1, so `n - 1` is the wrap seam.
+            let col = |i: u32| (0..n).map(|y| diff(px(i, y), px(i + 1, y))).sum::<u32>() / n;
+            let row = |i: u32| (0..n).map(|x| diff(px(x, i), px(x, i + 1))).sum::<u32>() / n;
+            // The wrap seam must be no harsher than the harshest boundary
+            // inside the tile (mortar lines are the hardest ones there).
+            let inner_col = (0..n - 1).map(col).max().unwrap();
+            let inner_row = (0..n - 1).map(row).max().unwrap();
+            assert!(col(n - 1) <= inner_col, "{} left/right seam", s.id);
+            assert!(row(n - 1) <= inner_row, "{} top/bottom seam", s.id);
+        }
     }
 
     #[test]

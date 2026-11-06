@@ -12,3 +12,5 @@ flate2 = { workspace = true }
 
 [dev-dependencies]
 base64 = { workspace = true }
+# Decode the skin tiles in tests (already in the lock via gpui).
+image = { version = "0.25", default-features = false, features = ["png"] }

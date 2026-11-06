@@ -1,6 +1,6 @@
 # seance — theme & branding
 
-seance ships twelve color schemes (see [Schemes](#schemes)); the default, and
+seance ships thirteen color schemes (see [Schemes](#schemes)); the default, and
 the one this page's palette tables describe, is **candlelit**.
 
 Aesthetic: **candlelit**. A dark room lit by one candle — deep warm charcoal
@@ -64,6 +64,20 @@ name a scheme.
 | `fog` | Fog | `#3B414D` | `#F2B56B` | `#B7A8F0` |
 | `parlor` | Parlor (light) | `#CDC3B2` | `#8A2419` | `#24527A` |
 | `herbarium` | Herbarium (light) | `#BDC5B3` | `#8E3B14` | `#43407F` |
+| `castle` | Castle (skin) | `#1B1B1D` | `#E39A43` | `#93A6C2` |
+
+**Skins.** A scheme may also carry a `texture` (a seamless PNG tile, one
+texel per logical pixel) and a `thin_lines` flag. Castle is the first: grey
+dithered stone with a little moss on the rail and the pane title strips,
+1px pane frames. The tile comes from `scripts/gen-castle-tile.py` and lives in
+`assets/skins/`. `src/skin.rs` paints it: gpui has no repeat fill, so a
+`canvas` lays the tile out with `paint_image`, anchored to the window origin
+so every surface shares one grid. The tile is decoded and upscaled once per
+scale factor and cached, so the atlas uploads it once and a frame only adds
+one sprite per tile position. Terminal text never sits on a texture; the
+pane body stays the flat `bg`. Schemes without a texture paint exactly as
+before. Switching to or from a thin-lined skin moves the pane grid by 1px a
+side (the frame goes from 2px to 1px).
 
 **Who owns the choice.** The daemon. It saves it in the state dir
 (`theme.json`, `{"scheme": ID}`), sends it to each window on attach and
@@ -71,7 +85,7 @@ broadcasts `GuiEvent::Theme` on every switch, so the Mac thin client and the
 XPS GUI change together. At boot the saved choice wins, then `seance-theme`
 in `terminal.conf`, then candlelit; an unknown id falls back to candlelit.
 
-**Switching.** The ✦ menu at the top of the rail lists the twelve, dark ones then
+**Switching.** The ✦ menu at the top of the rail lists the thirteen, dark ones then
 light ones under their own headings, active one marked; `seance ctl theme` lists them and `seance ctl theme ID` switches (an
 unknown ID is refused with the list). A window that hears the switch sets
 the active scheme, re-runs `theme::init` and refreshes every window.
