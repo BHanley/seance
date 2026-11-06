@@ -45,6 +45,7 @@ mod sprite;
 mod stage;
 mod stage_parse;
 mod tiles;
+mod torches;
 mod util;
 mod views;
 mod wall;
@@ -774,6 +775,7 @@ impl SeanceApp {
 
         Self::start_lead_tasks_poll(cx);
         Self::start_chat_poll(cx);
+        Self::start_torch_tick(cx);
 
         // Live-refresh pad drawer every 2s while open (disk mtime/content).
         cx.spawn(async move |this, cx| loop {
@@ -3026,6 +3028,7 @@ impl Render for SeanceApp {
         // stderr (gui.stderr.log). Measures element construction only — gpui
         // layout/paint happen outside this fn — but the RATE is exact.
         self.render_probe.tick();
+        torches::rendered(util::now_ms());
         // Looking at a finished pane is reading it: drop its ✓ and banner.
         if self.window_active {
             if let Some(slug) = self.active_slug.as_deref() {

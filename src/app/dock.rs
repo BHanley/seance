@@ -159,6 +159,7 @@ impl SeanceApp {
                         .items_center()
                         .border_b_1()
                         .border_color(SeancePalette::border())
+                        .map(|d| crate::skin::under(d, crate::skin::STRIP))
                         .child(
                             div()
                                 .id("dock-tabs")

@@ -220,6 +220,7 @@ impl SeanceApp {
                         self.stage_lead(&pane.workspace).as_deref() == Some(pane.slug.as_str()),
                         self.workspace_has_working_agent(&pane.workspace),
                         self.lead_tasks_arg(pane),
+                        self.pane_torch(pane, cx),
                         cx,
                     )),
             )
@@ -227,19 +228,7 @@ impl SeanceApp {
     }
 
     pub(super) fn render_tiles(&self, window_active: bool, cx: &Context<Self>) -> impl IntoElement {
-        // The tiling region shows only the SELECTED workspace's tiled panes.
-        let tiled: Vec<&Pane> = self
-            .panes
-            .iter()
-            .filter(|s| {
-                s.tiled
-                    && s.popped.is_none()
-                    && self
-                        .selected_workspace
-                        .as_deref()
-                        .is_none_or(|ws| s.workspace == ws)
-            })
-            .collect();
+        let tiled = self.tiled_here();
         // Focus-zoom: single pane fills the region with unmistakable chrome.
         if let Some(z) = self.zoomed_slug.as_deref() {
             if let Some(p) = tiled
@@ -350,6 +339,7 @@ impl SeanceApp {
                             self.stage_lead(&left.workspace).as_deref() == Some(left.slug.as_str()),
                             self.workspace_has_working_agent(&left.workspace),
                             self.lead_tasks_arg(left),
+                            self.pane_torch(left, cx),
                             cx,
                         )),
                 )
@@ -392,6 +382,7 @@ impl SeanceApp {
                                 == Some(right.slug.as_str()),
                             self.workspace_has_working_agent(&right.workspace),
                             self.lead_tasks_arg(right),
+                            self.pane_torch(right, cx),
                             cx,
                         )),
                 )
@@ -488,6 +479,7 @@ impl SeanceApp {
                             self.stage_lead(&pane.workspace).as_deref() == Some(pane.slug.as_str()),
                             self.workspace_has_working_agent(&pane.workspace),
                             self.lead_tasks_arg(pane),
+                            self.pane_torch(pane, cx),
                             cx,
                         )),
                 );

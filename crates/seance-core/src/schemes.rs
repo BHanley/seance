@@ -39,14 +39,18 @@ pub struct TermColors {
     pub cursor: u32,
 }
 
-/// A skin's tiling image for chrome surfaces (rail, pane title strips).
-/// Never drawn under terminal text.
+/// A skin: a tiling image for chrome surfaces (rail, title and tab strips)
+/// plus the chrome that goes with it. Never drawn under terminal text.
 #[derive(Debug)]
 pub struct Texture {
     /// PNG bytes, square, seamless on every edge.
     pub png: &'static [u8],
     /// Width and height in texels. One texel paints as one logical pixel.
     pub size: u32,
+    /// Frame color of an unfocused pane. Skinned panes are square.
+    pub frame: u32,
+    /// A pixel wall torch in each pane's title strip, lit by the pane's state.
+    pub torches: bool,
 }
 
 #[derive(Debug)]
@@ -60,8 +64,6 @@ pub struct Scheme {
     pub term: Option<TermColors>,
     /// Optional chrome texture; `None` paints flat fills.
     pub texture: Option<Texture>,
-    /// Chrome borders draw as 1px lines in `border`, pane frames included.
-    pub thin_lines: bool,
 }
 
 /// Terminal source colors in the order the scheme specs list them.
@@ -208,7 +210,9 @@ const CASTLE: Chrome = chrome([
 /// The castle stone tile, made by `scripts/gen-castle-tile.py`.
 pub const CASTLE_STONE: Texture = Texture {
     png: include_bytes!("../../../assets/skins/castle-stone.png"),
-    size: 96,
+    size: 256,
+    frame: 0x141415,
+    torches: true,
 };
 
 /// Every scheme, in menu order.
@@ -220,7 +224,6 @@ pub static SCHEMES: [Scheme; 13] = [
         chrome: CANDLELIT,
         term: None,
         texture: None,
-        thin_lines: false,
     },
     Scheme {
         id: "abyssal",
@@ -236,7 +239,6 @@ pub static SCHEMES: [Scheme; 13] = [
             ]),
         )),
         texture: None,
-        thin_lines: false,
     },
     Scheme {
         id: "ectoplasm",
@@ -252,7 +254,6 @@ pub static SCHEMES: [Scheme; 13] = [
             ]),
         )),
         texture: None,
-        thin_lines: false,
     },
     Scheme {
         id: "ouija",
@@ -268,7 +269,6 @@ pub static SCHEMES: [Scheme; 13] = [
             ]),
         )),
         texture: None,
-        thin_lines: false,
     },
     Scheme {
         id: "monokai",
@@ -284,7 +284,6 @@ pub static SCHEMES: [Scheme; 13] = [
             ]),
         )),
         texture: None,
-        thin_lines: false,
     },
     Scheme {
         id: "tarot",
@@ -300,7 +299,6 @@ pub static SCHEMES: [Scheme; 13] = [
             ]),
         )),
         texture: None,
-        thin_lines: false,
     },
     Scheme {
         id: "mojave",
@@ -316,7 +314,6 @@ pub static SCHEMES: [Scheme; 13] = [
             ]),
         )),
         texture: None,
-        thin_lines: false,
     },
     Scheme {
         id: "riso",
@@ -332,7 +329,6 @@ pub static SCHEMES: [Scheme; 13] = [
             ]),
         )),
         texture: None,
-        thin_lines: false,
     },
     Scheme {
         id: "synth",
@@ -348,7 +344,6 @@ pub static SCHEMES: [Scheme; 13] = [
             ]),
         )),
         texture: None,
-        thin_lines: false,
     },
     Scheme {
         id: "fog",
@@ -364,7 +359,6 @@ pub static SCHEMES: [Scheme; 13] = [
             ]),
         )),
         texture: None,
-        thin_lines: false,
     },
     Scheme {
         id: "parlor",
@@ -380,7 +374,6 @@ pub static SCHEMES: [Scheme; 13] = [
             ]),
         )),
         texture: None,
-        thin_lines: false,
     },
     Scheme {
         id: "herbarium",
@@ -396,7 +389,6 @@ pub static SCHEMES: [Scheme; 13] = [
             ]),
         )),
         texture: None,
-        thin_lines: false,
     },
     Scheme {
         id: "castle",
@@ -412,7 +404,6 @@ pub static SCHEMES: [Scheme; 13] = [
             ]),
         )),
         texture: Some(CASTLE_STONE),
-        thin_lines: true,
     },
 ];
 
@@ -464,14 +455,17 @@ mod tests {
     }
 
     #[test]
-    fn only_castle_is_textured_and_thin_lined() {
+    fn only_castle_is_skinned_and_it_has_torches() {
         let castle = find("castle").expect("castle scheme");
         assert!(!castle.light);
-        assert!(castle.thin_lines);
-        assert_eq!(castle.texture.as_ref().map(|t| t.size), Some(96));
+        let tex = castle.texture.as_ref().expect("castle texture");
+        assert_eq!(tex.size, 256);
+        assert!(tex.torches);
+        // The stone frame is darker than the hairline border it replaces.
+        let luma = |c: u32| (c >> 16 & 0xFF) + (c >> 8 & 0xFF) + (c & 0xFF);
+        assert!(luma(tex.frame) < luma(castle.chrome.border));
         for s in SCHEMES.iter().filter(|s| s.id != "castle") {
             assert!(s.texture.is_none(), "{}", s.id);
-            assert!(!s.thin_lines, "{}", s.id);
         }
     }
 

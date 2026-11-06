@@ -76,6 +76,7 @@ impl SeanceApp {
             .border_b_1()
             .border_color(SeancePalette::border())
             .bg(SeancePalette::bg_elevated())
+            .map(|d| crate::skin::under(d, crate::skin::STRIP))
             .children(shelved.into_iter().map(|pane| {
                 let slug = pane.slug.clone();
                 let name = pane.name.clone();
@@ -447,6 +448,8 @@ pub(super) fn render_pane(
     circle_working: bool,
     // A lead's open task count and whether its tasks card is open.
     lead_tasks: Option<(usize, bool)>,
+    // The skin's wall torch for this pane, when the skin has torches.
+    torch: Option<crate::torch::Torch>,
     cx: &Context<SeanceApp>,
 ) -> impl IntoElement {
     let (task_count, tasks_open) = match lead_tasks {
@@ -508,9 +511,9 @@ pub(super) fn render_pane(
         }
     } else if is_zoomed {
         // Zoomed but window unfocused — keep a quiet ring, not "has focus".
-        SeancePalette::border()
+        crate::skin::idle_frame()
     } else {
-        SeancePalette::border()
+        crate::skin::idle_frame()
     };
 
     // Body: notes face if flipped, otherwise the terminal/file content.
@@ -576,17 +579,11 @@ pub(super) fn render_pane(
         .overflow_hidden()
         .flex()
         .flex_col()
-        .rounded_md()
+        // A skin's panes are square-cut stone.
+        .when(!crate::skin::square(), |d| d.rounded_md())
         // Always 2px border so focus only recolors — never reflows terminal
-        // cols (border_1 → border_2 used to steal a cell of width). A
-        // thin-lined skin keeps 1px for every state, so the same holds.
-        .map(|d| {
-            if crate::skin::thin_lines() {
-                d.border_1()
-            } else {
-                d.border_2()
-            }
-        })
+        // cols (border_1 → border_2 used to steal a cell of width).
+        .border_2()
         .border_color(frame_border)
         .bg(SeancePalette::bg())
         .opacity(if rail_hover {
@@ -653,8 +650,15 @@ pub(super) fn render_pane(
                 })
                 // Skin texture, lighter on the active strip so its fill
                 // still marks focus. Flat schemes keep the old layout.
-                .when(crate::theme::active().texture.is_some(), |d| d.relative())
-                .children(crate::skin::backdrop(if is_active { 0.35 } else { 0.8 }))
+                .when(crate::skin::active().is_some(), |d| d.relative())
+                .children(crate::skin::backdrop(if is_active {
+                    crate::skin::TITLE_ACTIVE
+                } else {
+                    crate::skin::TITLE
+                }))
+                .children(torch.map(|t| {
+                    crate::torch::element(t, super::util::now_ms(), crate::torch::seed(&slug), 1.0)
+                }))
                 .when(is_zoomed, |d| {
                     d.child(
                         div()
@@ -994,6 +998,7 @@ pub(super) fn drawer_close_bar(title: &'static str, cx: &Context<SeanceApp>) -> 
         .justify_between()
         .border_b_1()
         .border_color(SeancePalette::border())
+        .map(|d| crate::skin::under(d, crate::skin::STRIP))
         .child(
             div()
                 .text_xs()
