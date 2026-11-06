@@ -749,7 +749,7 @@ mod claude_mac_tests {
     fn a_pinned_conversation_is_found_in_the_pane_command() {
         let cmd = |args: &str| {
             format!(
-                "env LEAD_UNATTENDED=1 CLAUDE_MAC_DIR=/Users/brianhanley CLAUDE_MAC_ARGS='{args}' /home/bhanley/.local/bin/claude-mac"
+                "env LEAD_UNATTENDED=1 CLAUDE_MAC_DIR=/Users/you CLAUDE_MAC_ARGS='{args}' /home/you/.local/bin/claude-mac"
             )
         };
         for args in [
