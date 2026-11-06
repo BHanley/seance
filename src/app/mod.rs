@@ -1585,7 +1585,11 @@ impl SeanceApp {
                 t.apply_snapshot(snap, cx);
             });
             self.sync_workspace_working_touches();
-            self.grid_batch_visible = true;
+            // Chat draws no terminal: a streaming lead there kicked a whole
+            // window rebuild at up to 30 a second for nothing on screen.
+            if views::grid_kicks_frame(self.view.mode) {
+                self.grid_batch_visible = true;
+            }
         }
     }
 

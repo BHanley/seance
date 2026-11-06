@@ -268,9 +268,23 @@ impl SeanceApp {
     }
 }
 
+/// Whether a visible pane's new grid should rebuild the window. Chat draws
+/// no terminal, so its circle's streaming panes must not.
+pub(super) fn grid_kicks_frame(mode: ViewMode) -> bool {
+    mode != ViewMode::Chat
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_layouts_that_draw_terminals_take_a_frame_per_grid() {
+        assert!(grid_kicks_frame(ViewMode::Classic));
+        assert!(grid_kicks_frame(ViewMode::Stage));
+        assert!(grid_kicks_frame(ViewMode::Wall));
+        assert!(!grid_kicks_frame(ViewMode::Chat));
+    }
 
     #[test]
     fn codec_roundtrips_every_layout() {

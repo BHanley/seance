@@ -86,6 +86,88 @@ fn follow_step(
     )
 }
 
+/// A thread draws this many of its newest messages; laying out every bubble
+/// of a long thread on each frame cost tens of milliseconds.
+const THREAD_WINDOW: usize = 80;
+/// "Show earlier" draws this many more.
+const THREAD_STEP: usize = 80;
+
+/// The part of a thread that is drawn: its messages from `start` on, under a
+/// "Show earlier" row while any come before.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ThreadWindow {
+    start: usize,
+}
+
+impl ThreadWindow {
+    /// The newest `shown` of `len` messages, never fewer than [`THREAD_WINDOW`].
+    fn new(len: usize, shown: usize) -> Self {
+        Self {
+            start: len.saturating_sub(shown.max(THREAD_WINDOW)),
+        }
+    }
+
+    fn has_earlier(self) -> bool {
+        self.start > 0
+    }
+
+    /// Message `i`'s place among the scroll's children (after the "Show
+    /// earlier" row), or none when it is not drawn.
+    fn child(self, i: usize) -> Option<usize> {
+        (i >= self.start).then(|| i - self.start + usize::from(self.has_earlier()))
+    }
+}
+
+/// How many to draw so that message `at` of `len` is among them.
+fn widen_to(shown: usize, len: usize, at: usize) -> usize {
+    shown.max(THREAD_WINDOW).max(len.saturating_sub(at))
+}
+
+/// How many to draw after a click on "Show earlier".
+fn show_earlier(shown: usize, len: usize) -> usize {
+    (shown.max(THREAD_WINDOW) + THREAD_STEP).min(len.max(THREAD_WINDOW))
+}
+
+/// How many to draw once `added` messages have come in. Pinned to the
+/// bottom, the window slides with them; reading older ones (`held`), it
+/// grows so nothing above him drops out and moves what he is reading.
+fn shown_after_arrival(shown: usize, added: usize, held: bool) -> usize {
+    if held {
+        shown.max(THREAD_WINDOW) + added
+    } else {
+        shown
+    }
+}
+
+/// Crew dances step at about 12 frames a second from a timer: every frame
+/// rebuilds the whole window, and they read fine at this rate.
+const DANCE_TICK: Duration = Duration::from_millis(83);
+
+/// What keeps the Chat view redrawing on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+enum Frames {
+    /// Nothing moves: redraw only when something changes.
+    #[default]
+    Idle,
+    /// A crew dances: the dance timer redraws at [`DANCE_TICK`].
+    Dance,
+    /// The party runs: every frame, for its few seconds.
+    Smooth,
+}
+
+/// Frames for this render. Nothing at all in a window nobody is looking at.
+fn chat_frames(crew: bool, party: bool, list_dancing: bool, window_active: bool) -> Frames {
+    if !window_active {
+        Frames::Idle
+    } else if party {
+        Frames::Smooth
+    } else if crew || list_dancing {
+        Frames::Dance
+    } else {
+        Frames::Idle
+    }
+}
+
 /// Search runs this long after the last keystroke.
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(250);
 /// Fewest characters a search is run for (Invoke answers nothing for one).
@@ -315,6 +397,18 @@ pub(super) struct ChatState {
     compact_at: Option<(String, Instant)>,
     /// Why the last action Brian took was refused; a click clears it.
     notice: Option<String>,
+    /// How many of the open thread's newest messages are drawn (at least
+    /// [`THREAD_WINDOW`]); back to that on opening a circle.
+    shown: usize,
+    /// A "Show earlier" click: the message that was first, and how far below
+    /// the thread's top edge it sat, to keep it there once more are drawn.
+    earlier: Option<(i64, f32)>,
+    /// Frames the follow-the-bottom step sits out after "Show earlier".
+    hold_follow: u8,
+    /// What the last render asked of the dance timer.
+    frames: Frames,
+    /// The dance timer is running.
+    dance_ticking: bool,
 }
 
 impl ChatState {
@@ -353,6 +447,9 @@ impl ChatState {
         self.unpinned = false;
         self.no_pin = None;
         self.jump = None;
+        self.shown = THREAD_WINDOW;
+        self.earlier = None;
+        self.hold_follow = 0;
     }
 
     pub(super) fn any_working(&self) -> bool {
@@ -946,6 +1043,7 @@ impl SeanceApp {
     ) {
         let chat = &mut self.chat;
         let before = chat.last_id(&ws);
+        let had = chat.threads.get(&ws).map_or(0, |t| t.messages.len());
         if delta {
             let mut merged = chat.threads.remove(&ws).unwrap_or_default().messages;
             merged.retain(|m| m.id > 0);
@@ -958,10 +1056,16 @@ impl SeanceApp {
             thread.messages = merged;
         }
         let newest = thread.messages.iter().map(|m| m.id).max().unwrap_or(0);
+        let reading = chat.unpinned || chat.no_pin.as_deref() == Some(ws.as_str());
         // New messages follow the bottom, but never pull him away from older
         // ones he is reading.
-        if before != Some(newest) && !chat.unpinned && chat.no_pin.as_deref() != Some(ws.as_str()) {
+        if before != Some(newest) && !reading {
             chat.stick = 3;
+        }
+        // Nor may they push the oldest drawn ones out from above him.
+        if chat.selected.as_deref() == Some(ws.as_str()) {
+            let added = thread.messages.len().saturating_sub(had);
+            chat.shown = shown_after_arrival(chat.shown, added, reading && had > 0);
         }
         // Images the thread shows: fetch each once.
         let names: Vec<String> = thread
@@ -1225,6 +1329,62 @@ impl SeanceApp {
         })
         .detach();
         cx.notify();
+    }
+
+    /// Draw more of the open thread's older messages, leaving the one that
+    /// was first where it is on screen.
+    fn chat_show_earlier(&mut self, cx: &mut Context<Self>) {
+        let Some(t) = self
+            .chat
+            .selected
+            .as_ref()
+            .and_then(|ws| self.chat.threads.get(ws))
+        else {
+            return;
+        };
+        let len = t.messages.len();
+        let win = ThreadWindow::new(len, self.chat.shown);
+        let Some(first) = t.messages.get(win.start) else {
+            return;
+        };
+        let scroll = &self.chat.scroll;
+        let below = win
+            .child(win.start)
+            .and_then(|c| scroll.bounds_for_item(c))
+            .map_or(0., |b| {
+                f32::from(b.top() + scroll.offset().y - scroll.bounds().top())
+            });
+        self.chat.earlier = Some((first.id, below));
+        self.chat.shown = show_earlier(self.chat.shown, len);
+        self.chat.hold_follow = 2;
+        self.chat.unpinned = true;
+        cx.notify();
+    }
+
+    /// Redraw while a crew dances, about 12 times a second, until the last
+    /// render says none does (or Chat is gone). One timer at a time.
+    fn ensure_dance_timer(&mut self, cx: &mut Context<Self>) {
+        if self.chat.dance_ticking {
+            return;
+        }
+        self.chat.dance_ticking = true;
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(DANCE_TICK).await;
+            let Some(this) = this.upgrade() else { break };
+            let go = this.update(cx, |app: &mut SeanceApp, cx| {
+                let go = app.view.mode == ViewMode::Chat && app.chat.frames == Frames::Dance;
+                if go {
+                    cx.notify();
+                } else {
+                    app.chat.dance_ticking = false;
+                }
+                go
+            });
+            if !go {
+                break;
+            }
+        })
+        .detach();
     }
 
     /// Send `/compact` to the open circle's lead, as the composer would.
@@ -1664,32 +1824,49 @@ impl SeanceApp {
             }
         }
         self.maybe_mark_read(cx);
+        let ids: Vec<i64> = self
+            .chat
+            .selected
+            .as_ref()
+            .and_then(|ws| self.chat.threads.get(ws))
+            .map(|t| t.messages.iter().map(|m| m.id).collect())
+            .unwrap_or_default();
         // A search result waits here for its thread to arrive; it takes the
-        // frame from the pin to the bottom.
+        // frame from the pin to the bottom, and widens what is drawn to reach it.
         if let Some(id) = self.chat.jump {
-            let at = self
-                .chat
-                .selected
-                .as_ref()
-                .and_then(|ws| self.chat.threads.get(ws))
-                .and_then(|t| t.messages.iter().position(|m| m.id == id));
-            if let Some(at) = at {
+            if let Some(at) = ids.iter().position(|m| *m == id) {
                 self.chat.jump = None;
                 self.chat.stick = 0;
                 self.chat.no_pin = self.chat.selected.clone();
-                self.chat.scroll.scroll_to_item(at);
+                self.chat.shown = widen_to(self.chat.shown, ids.len(), at);
+                let win = ThreadWindow::new(ids.len(), self.chat.shown);
+                if let Some(child) = win.child(at) {
+                    self.chat.scroll.scroll_to_item(child);
+                }
                 window.request_animation_frame();
             }
         }
+        // "Show earlier": the message that was first keeps its place on
+        // screen. A zero-height marker sits that far above it, and this frame
+        // scrolls the marker to the top edge.
+        let marker = self.chat.earlier.take().and_then(|(id, below)| {
+            let at = ids.iter().position(|m| *m == id)?;
+            let win = ThreadWindow::new(ids.len(), self.chat.shown);
+            self.chat.scroll.scroll_to_top_of_item(win.child(at)?);
+            Some((at, below))
+        });
         // Follow the bottom while pinned: images, chips and new messages change
         // the thread's size after the pin frames are over.
         let now = (
             f32::from(self.chat.scroll.offset().y),
             f32::from(self.chat.scroll.max_offset().y),
         );
-        let held = self.chat.no_pin.is_some() || self.chat.jump.is_some();
+        let held =
+            self.chat.no_pin.is_some() || self.chat.jump.is_some() || self.chat.hold_follow > 0;
         let (pinned, down) = follow_step(!self.chat.unpinned, held, self.chat.seen, now);
-        self.chat.unpinned = !pinned;
+        // Messages drawn above him are reading, not a slide to the bottom.
+        self.chat.unpinned = !pinned || self.chat.hold_follow > 0;
+        self.chat.hold_follow = self.chat.hold_follow.saturating_sub(1);
         self.chat.seen = Some(now);
         if self.chat.stick > 0 {
             self.chat.stick -= 1;
@@ -1699,10 +1876,11 @@ impl SeanceApp {
             self.chat.scroll.scroll_to_bottom();
             window.request_animation_frame();
         }
-        // Crews dance smoothly, so they need every frame while one shows in
-        // the header or a list row in view; the spinner's 240ms tick is too
-        // coarse. Not in a window nobody is looking at: rebuilding the view 60
-        // times a second there would only burn battery.
+        // Crews dance while one shows in the header or a list row in view; the
+        // spinner's 240ms tick is too coarse for them, and every frame (60 a
+        // second) rebuilt the whole view for a few pixels of movement, so the
+        // dance timer redraws them about 12 times a second. Only the brief
+        // party gets every frame. Nothing in a window nobody is looking at.
         let items = self.chat_list_items();
         let now = now_ms();
         // Every circle, not just the rows shown, so a search keeps the dances.
@@ -1750,8 +1928,16 @@ impl SeanceApp {
             party.advance(now, &mut rand::thread_rng());
         }
         let party = self.chat.party.is_some();
-        if (crew || party || !self.chat.list_dancing.is_empty()) && self.chat.window_active {
-            window.request_animation_frame();
+        self.chat.frames = chat_frames(
+            crew,
+            party,
+            !self.chat.list_dancing.is_empty(),
+            self.chat.window_active,
+        );
+        match self.chat.frames {
+            Frames::Smooth => window.request_animation_frame(),
+            Frames::Dance => self.ensure_dance_timer(cx),
+            Frames::Idle => {}
         }
         let list = self.render_chat_list(items, cx);
         // The thread column's width, for the decorative torches' room checks:
@@ -1761,7 +1947,9 @@ impl SeanceApp {
             .thread_w
             .get()
             .unwrap_or(f32::from(window.viewport_size().width) - LIST_W);
-        let thread = self.render_chat_thread(thread_w, cx);
+        // The marker's margins cancel the thread's gap (`gap_2`, half a rem).
+        let marker = marker.map(|(at, below)| (at, below, f32::from(window.rem_size()) * 0.5));
+        let thread = self.render_chat_thread(thread_w, marker, cx);
         div()
             .id("chat")
             .flex_1()
@@ -2172,7 +2360,14 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    fn render_chat_thread(&self, thread_w: f32, cx: &Context<Self>) -> AnyElement {
+    /// `marker`: after "Show earlier", the index of the message that was
+    /// first, how far below the top edge it sat, and the thread's gap.
+    fn render_chat_thread(
+        &self,
+        thread_w: f32,
+        marker: Option<(usize, f32, f32)>,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let Some(ws) = self.chat.selected.clone() else {
             return div()
                 .flex_1()
@@ -2337,7 +2532,40 @@ impl SeanceApp {
         // The last message Brian has read, on any device: the lead's messages up
         // to it show as seen.
         let read = self.chat.threads.get(&ws).map_or(0, |t| t.read);
-        for m in messages.unwrap_or_default() {
+        let all = messages.unwrap_or_default();
+        let win = ThreadWindow::new(all.len(), self.chat.shown);
+        if win.has_earlier() {
+            thread = thread.child(
+                div()
+                    .id("chat-earlier")
+                    .flex_none()
+                    .self_center()
+                    .px_3()
+                    .py_1()
+                    .rounded_md()
+                    .text_xs()
+                    .text_color(SeancePalette::text_dim())
+                    .bg(SeancePalette::surface())
+                    .hover(|s| s.text_color(SeancePalette::flame()))
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| this.chat_show_earlier(cx)))
+                    .child(format!(
+                        "Show earlier ({} more)",
+                        win.start.min(THREAD_STEP)
+                    )),
+            );
+        }
+        for (i, m) in all.iter().enumerate().skip(win.start) {
+            if let Some((_, below, gap)) = marker.filter(|(at, ..)| *at == i) {
+                // Takes no room: its margins and the gap after it cancel.
+                thread = thread.child(
+                    div()
+                        .flex_none()
+                        .h(px(0.))
+                        .mt(px(-below))
+                        .mb(px(below - gap)),
+                );
+            }
             thread = thread.child(self.chat_bubble(m, read, cx));
         }
         if messages.is_some_and(<[Msg]>::is_empty) {
@@ -3265,5 +3493,259 @@ mod tests {
             follow_step(true, false, Some((-900., 900.)), (-900., 900.)),
             (true, false)
         );
+    }
+
+    #[test]
+    fn a_long_thread_draws_only_its_newest_messages() {
+        let w = ThreadWindow::new(2000, 0);
+        assert_eq!(w.start, 2000 - THREAD_WINDOW);
+        assert!(w.has_earlier());
+        // A short thread is drawn whole, with no "Show earlier" row.
+        let w = ThreadWindow::new(30, 0);
+        assert_eq!(w.start, 0);
+        assert!(!w.has_earlier());
+        // Never fewer than the window, whatever was asked.
+        assert_eq!(ThreadWindow::new(500, 10).start, 500 - THREAD_WINDOW);
+    }
+
+    #[test]
+    fn a_message_s_child_index_counts_the_show_earlier_row() {
+        let w = ThreadWindow::new(200, THREAD_WINDOW);
+        assert_eq!(w.child(w.start - 1), None, "not drawn");
+        assert_eq!(w.child(w.start), Some(1), "under the row");
+        assert_eq!(w.child(199), Some(THREAD_WINDOW));
+        let whole = ThreadWindow::new(10, 0);
+        assert_eq!(whole.child(0), Some(0), "no row, no shift");
+    }
+
+    #[test]
+    fn show_earlier_adds_a_step_until_the_thread_is_whole() {
+        let mut shown = 0;
+        shown = show_earlier(shown, 1000);
+        assert_eq!(shown, THREAD_WINDOW + THREAD_STEP);
+        shown = show_earlier(shown, 1000);
+        assert_eq!(shown, THREAD_WINDOW + 2 * THREAD_STEP);
+        assert_eq!(ThreadWindow::new(1000, shown).start, 1000 - shown);
+        // It stops at the whole thread.
+        assert_eq!(show_earlier(990, 1000), 1000);
+        assert!(!ThreadWindow::new(1000, show_earlier(990, 1000)).has_earlier());
+    }
+
+    #[test]
+    fn a_search_hit_widens_the_window_to_reach_it() {
+        let len = 900;
+        // Already drawn: nothing changes.
+        assert_eq!(widen_to(0, len, 880), THREAD_WINDOW);
+        // Far back: drawn from it on, and it is the first message under the row.
+        let shown = widen_to(0, len, 100);
+        let w = ThreadWindow::new(len, shown);
+        assert_eq!(w.start, 100);
+        assert_eq!(w.child(100), Some(1));
+        // The very first message: the whole thread, no row.
+        let w = ThreadWindow::new(len, widen_to(THREAD_WINDOW, len, 0));
+        assert_eq!((w.start, w.child(0)), (0, Some(0)));
+    }
+
+    #[test]
+    fn arrivals_slide_the_window_while_pinned_and_grow_it_while_reading() {
+        // Pinned to the bottom: the newest stay drawn, the oldest drop off.
+        let shown = shown_after_arrival(THREAD_WINDOW, 3, false);
+        assert_eq!(ThreadWindow::new(503, shown).start, 503 - THREAD_WINDOW);
+        // Scrolled up reading: the first drawn message stays the first.
+        let before = ThreadWindow::new(500, THREAD_WINDOW).start;
+        let shown = shown_after_arrival(THREAD_WINDOW, 3, true);
+        assert_eq!(ThreadWindow::new(503, shown).start, before);
+        // From the default (0) too.
+        let shown = shown_after_arrival(0, 2, true);
+        assert_eq!(ThreadWindow::new(502, shown).start, 500 - THREAD_WINDOW);
+    }
+
+    #[test]
+    fn opening_a_circle_resets_the_window() {
+        let mut chat = ChatState {
+            shown: 400,
+            earlier: Some((7, 12.)),
+            hold_follow: 2,
+            ..Default::default()
+        };
+        chat.arrive();
+        assert_eq!(chat.shown, THREAD_WINDOW);
+        assert_eq!(chat.earlier, None);
+        assert_eq!(chat.hold_follow, 0);
+        assert!(!chat.unpinned);
+        assert_eq!(
+            ThreadWindow::new(2000, chat.shown).start,
+            2000 - THREAD_WINDOW
+        );
+    }
+
+    #[test]
+    fn nothing_redraws_on_its_own_while_chat_is_idle() {
+        assert_eq!(chat_frames(false, false, false, true), Frames::Idle);
+        // Dances go by the timer, never every frame.
+        assert_eq!(chat_frames(true, false, false, true), Frames::Dance);
+        assert_eq!(chat_frames(false, false, true, true), Frames::Dance);
+        // Only the party gets every frame.
+        assert_eq!(chat_frames(true, true, true, true), Frames::Smooth);
+        // Nobody looking: nothing at all.
+        assert_eq!(chat_frames(true, true, true, false), Frames::Idle);
+        assert!(DANCE_TICK >= Duration::from_millis(80) && DANCE_TICK <= Duration::from_millis(90));
+    }
+
+    #[test]
+    fn following_the_bottom_settles_once_nothing_moves() {
+        // Pinned, the range grows: one scroll down, then the next frames see
+        // the bottom and stop asking for more.
+        let mut seen = Some((-900., 900.));
+        let mut pinned = true;
+        let mut steps = Vec::new();
+        for now in [
+            (-900., 1000.),
+            (-1000., 1000.),
+            (-1000., 1000.),
+            (-1000., 1000.),
+        ] {
+            let (p, down) = follow_step(pinned, false, seen, now);
+            pinned = p;
+            seen = Some(now);
+            steps.push(down);
+        }
+        assert_eq!(steps, [true, false, false, false]);
+        assert!(pinned);
+    }
+
+    /// Offscreen estimate of one Chat-thread draw: a mock thread of
+    /// markdown bubbles shaped like `chat_bubble`'s (the real view needs a
+    /// daemon), drawn in gpui's headless window. Compares every message
+    /// (what the thread drew before windowing) with [`ThreadWindow`]'s.
+    /// `cargo test --release --bin seance thread_draw_cost -- --ignored --nocapture`
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "headless Metal benchmark; run with --ignored --nocapture"]
+    fn thread_draw_cost() {
+        use gpui::AppContext as _;
+        use std::sync::Arc;
+
+        struct Mock {
+            texts: Vec<String>,
+            from: usize,
+            scroll: ScrollHandle,
+        }
+        impl gpui::Render for Mock {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let mut thread = div()
+                    .id("t")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.scroll)
+                    .px_4()
+                    .py_3()
+                    .flex()
+                    .flex_col()
+                    .gap_2();
+                for (i, text) in self.texts.iter().enumerate().skip(self.from) {
+                    let body = div().flex().flex_col().gap_0p5().child(
+                        div()
+                            .id(SharedString::from(format!("bt-{i}")))
+                            .min_h(px(14.))
+                            .child(
+                                TextView::markdown(
+                                    SharedString::from(format!("md-{i}")),
+                                    to_markdown(text),
+                                )
+                                .style(bubble_text_style())
+                                .selectable(true),
+                            ),
+                    );
+                    let bubble = div()
+                        .id(SharedString::from(format!("b-{i}")))
+                        .max_w(relative(0.72))
+                        .px_3()
+                        .py_2()
+                        .rounded_lg()
+                        .text_sm()
+                        .bg(gpui::rgb(0x333344))
+                        .child(body)
+                        .child(
+                            div()
+                                .mt_0p5()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .text_xs()
+                                .child("11:34 AM")
+                                .child("✓✓"),
+                        );
+                    thread = thread.child(
+                        div()
+                            .flex()
+                            .when(i % 2 == 0, |d| d.justify_end())
+                            .child(bubble),
+                    );
+                }
+                div().size_full().flex().child(thread)
+            }
+        }
+
+        // About Invoke's average message (seance-demo: 905 messages, ~280
+        // characters each), with a line break and a path now and then.
+        let text = |i: usize| {
+            let mut t = format!(
+                "Message {i}: the lead finished the step and checked the build. \
+                 Tests pass on the branch; the review notes are in the pad. "
+            );
+            t.push_str("Next it reads src/app/chat.rs around the thread render and the timer.\n");
+            t.push_str("Then it reports back with the numbers and what is still open.");
+            t
+        };
+        let median = |n: usize, from: usize| -> (f64, f64) {
+            let platform = gpui_platform::current_platform(true);
+            let mut cx = gpui::HeadlessAppContext::with_platform(
+                platform.text_system(),
+                Arc::new(()),
+                gpui_platform::current_headless_renderer,
+            );
+            cx.update(gpui_component::init);
+            let texts: Vec<String> = (0..n).map(text).collect();
+            let win = cx
+                .open_window(gpui::size(px(900.), px(800.)), move |_, cx| {
+                    cx.new(|_| Mock {
+                        texts,
+                        from,
+                        scroll: ScrollHandle::new(),
+                    })
+                })
+                .expect("headless window");
+            cx.run_until_parked();
+            let mut ms = Vec::new();
+            for _ in 0..22 {
+                let d = cx
+                    .update_window(win.into(), |_, window, cx| {
+                        window.refresh();
+                        let t = Instant::now();
+                        window.draw(cx).clear();
+                        t.elapsed()
+                    })
+                    .unwrap();
+                ms.push(d.as_secs_f64() * 1000.);
+            }
+            let first = ms[0];
+            // The first draws parse the markdown; the rest are what every
+            // redraw costs.
+            let mut warm = ms[2..].to_vec();
+            warm.sort_by(f64::total_cmp);
+            (warm[warm.len() / 2], first)
+        };
+        for n in [905, 2000] {
+            let (all, all_first) = median(n, 0);
+            let from = ThreadWindow::new(n, 0).start;
+            let (win, win_first) = median(n, from);
+            eprintln!(
+                "[thread_draw_cost] {n} messages: all drawn median {all:.2} ms (first {all_first:.1}); \
+                 window of {} median {win:.2} ms (first {win_first:.1}); {:.1}x",
+                n - from,
+                all / win
+            );
+        }
     }
 }
