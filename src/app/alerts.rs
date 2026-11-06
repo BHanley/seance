@@ -43,6 +43,11 @@ impl Snoozes {
     }
 }
 
+/// `pane` is the lead recorded for circle `ws`.
+fn leads_pane(leads: &std::collections::HashMap<String, String>, ws: &str, pane: &str) -> bool {
+    leads.get(ws).map(String::as_str) == Some(pane)
+}
+
 impl SeanceApp {
     pub(super) fn on_pane_alert(
         &self,
@@ -64,7 +69,12 @@ impl SeanceApp {
         match kind {
             // Sound only, as in Ghostty: shells ring on every failed tab
             // completion, and a program that wants a banner sends OSC 9/777.
-            "bell" => desktop_notify::bell_sound(),
+            // Only a circle's lead rings: helpers and builders stay silent.
+            "bell" => {
+                if self.is_circle_lead(pane) {
+                    desktop_notify::bell_sound();
+                }
+            }
             "done" if !watching => {
                 desktop_notify::notify_done(pane, &format!("{name}: done"), body);
             }
@@ -235,7 +245,7 @@ impl SeanceApp {
         // business), and on every finish of 5s or more, like the done
         // banner: one still unseen from before doesn't make the next one
         // silent.
-        if self.stage.leads.get(&ws).map(String::as_str) == Some(pane) {
+        if leads_pane(&self.stage.leads, &ws, pane) {
             if loud && !self.snoozed(pane) {
                 desktop_notify::done_sound();
             }
@@ -248,6 +258,14 @@ impl SeanceApp {
             return;
         }
         self.workspace_unread.insert(ws, WorkspaceAttention::Done);
+    }
+
+    /// The pane is its circle's lead.
+    fn is_circle_lead(&self, pane: &str) -> bool {
+        self.panes
+            .iter()
+            .find(|p| p.slug == pane)
+            .is_some_and(|p| leads_pane(&self.stage.leads, &p.workspace, pane))
     }
 
     /// Snoozed on Stage right now.
@@ -289,6 +307,14 @@ impl SeanceApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_recorded_lead_of_a_circle_counts_as_its_lead() {
+        let leads = std::collections::HashMap::from([("c1".to_string(), "lead-1".to_string())]);
+        assert!(leads_pane(&leads, "c1", "lead-1"));
+        assert!(!leads_pane(&leads, "c1", "helper-1"));
+        assert!(!leads_pane(&leads, "c2", "lead-1"));
+    }
 
     #[test]
     fn snooze_lasts_an_hour_and_opening_ends_it() {
