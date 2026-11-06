@@ -220,7 +220,7 @@ impl SeanceApp {
                         self.stage_lead(&pane.workspace).as_deref() == Some(pane.slug.as_str()),
                         self.workspace_has_working_agent(&pane.workspace),
                         self.lead_tasks_arg(pane),
-                        self.pane_torch(pane, cx),
+                        self.pane_torch_frame(pane, cx),
                         cx,
                     )),
             )
@@ -339,7 +339,7 @@ impl SeanceApp {
                             self.stage_lead(&left.workspace).as_deref() == Some(left.slug.as_str()),
                             self.workspace_has_working_agent(&left.workspace),
                             self.lead_tasks_arg(left),
-                            self.pane_torch(left, cx),
+                            self.pane_torch_frame(left, cx),
                             cx,
                         )),
                 )
@@ -382,7 +382,7 @@ impl SeanceApp {
                                 == Some(right.slug.as_str()),
                             self.workspace_has_working_agent(&right.workspace),
                             self.lead_tasks_arg(right),
-                            self.pane_torch(right, cx),
+                            self.pane_torch_frame(right, cx),
                             cx,
                         )),
                 )
@@ -479,7 +479,7 @@ impl SeanceApp {
                             self.stage_lead(&pane.workspace).as_deref() == Some(pane.slug.as_str()),
                             self.workspace_has_working_agent(&pane.workspace),
                             self.lead_tasks_arg(pane),
-                            self.pane_torch(pane, cx),
+                            self.pane_torch_frame(pane, cx),
                             cx,
                         )),
                 );

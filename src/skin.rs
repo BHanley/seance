@@ -178,9 +178,6 @@ mod shots {
     use gpui::prelude::FluentBuilder as _;
     use gpui::{AnyElement, AppContext as _, Context, FontWeight, Hsla, Render};
 
-    /// A fixed clock so every run draws the same frames.
-    const NOW: u64 = 1_700_000_000_000;
-
     enum Scene {
         Chrome(Vec<&'static str>),
         Torches,
@@ -340,7 +337,7 @@ mod shots {
                     })
                     .children(backdrop(if active { TITLE_ACTIVE } else { TITLE }))
                     .children(
-                        torch.map(|t| crate::torch::element(t, NOW, crate::torch::seed(name), 1.0)),
+                        torch.map(|t| crate::torch::element(t, 0, crate::torch::seed(name), 1.0)),
                     )
                     .child(label(
                         if active { "⌨ you" } else { "⚡ claude" },
@@ -530,7 +527,6 @@ mod shots {
             .iter()
             .map(|(state, name)| {
                 let frames = (0..6u64).map(|f| {
-                    let now = f * state.frame_ms();
                     div()
                         .p(px(6.))
                         .relative()
@@ -538,7 +534,7 @@ mod shots {
                         .children(backdrop(TITLE))
                         .child(crate::torch::element(
                             *state,
-                            now,
+                            f,
                             crate::torch::seed("a"),
                             4.0,
                         ))
@@ -552,7 +548,7 @@ mod shots {
                             .w(px(110.))
                             .text_sm()
                             .text_color(P::text())
-                            .child(format!("{name} · {}ms", state.frame_ms())),
+                            .child(*name),
                     )
                     .children(frames)
                     .into_any_element()

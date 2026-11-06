@@ -204,6 +204,8 @@ pub struct SeanceApp {
     /// Kept by the window-activation observer; pane alerts read it to decide
     /// whether a desktop notification is needed.
     window_active: bool,
+    /// Wall torch animation frame: spinner ticks seen with a torch on screen.
+    torch_frame: u64,
     selected_workspace: Option<String>,
     /// Last focused pane slug per workspace — restored on workspace switch.
     workspace_focus: std::collections::HashMap<String, String>,
@@ -524,6 +526,7 @@ impl SeanceApp {
             lead_tasks: std::collections::HashMap::new(),
             active_slug: None,
             window_active: true,
+            torch_frame: 0,
             selected_workspace: None,
             workspace_focus: std::collections::HashMap::new(),
             dock_tab: std::collections::HashMap::new(),
@@ -775,7 +778,6 @@ impl SeanceApp {
 
         Self::start_lead_tasks_poll(cx);
         Self::start_chat_poll(cx);
-        Self::start_torch_tick(cx);
 
         // Live-refresh pad drawer every 2s while open (disk mtime/content).
         cx.spawn(async move |this, cx| loop {
@@ -792,18 +794,23 @@ impl SeanceApp {
         })
         .detach();
 
-        // Sidebar working-spinner animation while any circle is live-busy.
+        // Sidebar working-spinner animation while any circle is live-busy,
+        // and the skin's wall torches while any is on screen.
         // NOT cheap: each notify re-renders the whole window (~55ms at 24
         // circles) — 240ms keeps the glyph alive without eating the thread.
         cx.spawn(async move |this, cx| loop {
             cx.background_executor()
-                .timer(Duration::from_millis(240))
+                .timer(Duration::from_millis(crate::torch::TICK_MS))
                 .await;
             let Some(this) = this.upgrade() else { break };
             this.update(cx, |app: &mut SeanceApp, cx| {
-                if !app.workspace_was_working.is_empty()
-                    || (app.view.mode == views::ViewMode::Chat && app.chat.any_working())
-                {
+                let spinner = !app.workspace_was_working.is_empty()
+                    || (app.view.mode == views::ViewMode::Chat && app.chat.any_working());
+                let (advance, render) = torches::spinner_tick(spinner, app.torches_on_screen(cx));
+                if advance {
+                    app.torch_frame = app.torch_frame.wrapping_add(1);
+                }
+                if render {
                     cx.notify();
                 }
             });
@@ -3028,7 +3035,6 @@ impl Render for SeanceApp {
         // stderr (gui.stderr.log). Measures element construction only — gpui
         // layout/paint happen outside this fn — but the RATE is exact.
         self.render_probe.tick();
-        torches::rendered(util::now_ms());
         // Looking at a finished pane is reading it: drop its ✓ and banner.
         if self.window_active {
             if let Some(slug) = self.active_slug.as_deref() {

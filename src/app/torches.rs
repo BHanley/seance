@@ -1,9 +1,7 @@
 //! Which wall torch each pane gets (see `crate::torch`), which panes are on
-//! screen to burn one, and the tick that animates them.
+//! screen to burn one, and how the spinner tick animates them.
 
-use std::time::Duration;
-
-use gpui::{App, Context};
+use gpui::App;
 
 use crate::pane::Pane;
 use crate::torch::Torch;
@@ -11,10 +9,6 @@ use crate::torch::Torch;
 use super::views::ViewMode;
 use super::workspaces::WorkspaceAttention;
 use super::SeanceApp;
-
-/// When no torch is on screen the tick only looks again this often, and
-/// renders nothing.
-const IDLE_LOOK_MS: u64 = 1000;
 
 /// A pane's torch, in the order Stage's `pane_state` reads a pane: exited or
 /// asleep (or its process gone, the grey status dot) is out; then needs-you;
@@ -67,17 +61,12 @@ fn on_screen<'a>(
         .collect()
 }
 
-/// When it last rendered (unix ms), so the tick skips a frame some other
-/// render (terminal output, the spinner) already drew.
-static LAST_RENDER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-pub(super) fn rendered(now: u64) {
-    LAST_RENDER.store(now, std::sync::atomic::Ordering::Relaxed);
-}
-
-/// A tick `ms` apart renders unless something else did in the last 3/4 of it.
-fn due(now: u64, last_render: u64, ms: u64) -> bool {
-    now.saturating_sub(last_render) >= ms * 3 / 4
+/// What one 240 ms spinner tick does: torches on screen step a frame,
+/// and the window renders once if the spinner or a torch wants it. Torches
+/// never add a render the spinner already asked for, and none shows means
+/// no render for them at all.
+pub(super) fn spinner_tick(spinner: bool, torches: bool) -> (bool, bool) {
+    (torches, spinner || torches)
 }
 
 impl SeanceApp {
@@ -118,38 +107,19 @@ impl SeanceApp {
         ))
     }
 
-    fn torches_on_screen(&self, cx: &App) -> Vec<Torch> {
-        self.panes_on_screen()
-            .into_iter()
-            .filter_map(|p| self.pane_torch(p, cx))
-            .collect()
+    /// Whether any pane on screen shows a torch (never, outside a skin
+    /// with torches).
+    pub(super) fn torches_on_screen(&self, cx: &App) -> bool {
+        crate::skin::torches()
+            && self
+                .panes_on_screen()
+                .into_iter()
+                .any(|p| self.pane_torch(p, cx).is_some())
     }
 
-    /// Animate the torches on screen: one render per frame of the fastest
-    /// one, none when no torch shows (another scheme, another view, an
-    /// empty circle). Each render is a whole-window render, like the
-    /// spinner's.
-    pub(super) fn start_torch_tick(cx: &mut Context<Self>) {
-        cx.spawn(async move |this, cx| {
-            let mut wait = IDLE_LOOK_MS;
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(wait))
-                    .await;
-                let Some(this) = this.upgrade() else { break };
-                wait = this.update(cx, |app: &mut SeanceApp, cx| {
-                    let Some(ms) = crate::torch::tick_ms(app.torches_on_screen(cx)) else {
-                        return IDLE_LOOK_MS;
-                    };
-                    let last = LAST_RENDER.load(std::sync::atomic::Ordering::Relaxed);
-                    if due(super::util::now_ms(), last, ms) {
-                        cx.notify();
-                    }
-                    ms
-                });
-            }
-        })
-        .detach();
+    /// This pane's torch and the frame to draw it at.
+    pub(super) fn pane_torch_frame(&self, p: &Pane, cx: &App) -> Option<(Torch, u64)> {
+        self.pane_torch(p, cx).map(|t| (t, self.torch_frame))
     }
 }
 
@@ -217,16 +187,17 @@ mod tests {
                 "{mode:?}"
             );
         }
-        // An empty circle: nothing to burn, so no tick at all.
+        // An empty circle: nothing to burn, so no torch render.
         assert!(on_screen(ViewMode::Classic, Some("z"), None, it()).is_empty());
-        assert_eq!(crate::torch::tick_ms([]), None);
     }
 
     #[test]
-    fn a_tick_is_skipped_when_something_else_just_rendered() {
-        assert!(due(10_000, 9_900, 100));
-        assert!(!due(10_000, 9_950, 100));
-        assert!(due(10_000, 0, 400));
-        assert!(!due(10_000, 9_800, 400));
+    fn torches_ride_the_spinner_tick_and_never_render_on_their_own_when_hidden() {
+        // (advance a frame, render)
+        assert_eq!(spinner_tick(false, false), (false, false));
+        assert_eq!(spinner_tick(true, false), (false, true));
+        assert_eq!(spinner_tick(false, true), (true, true));
+        // Spinner and torches together: one render, not two.
+        assert_eq!(spinner_tick(true, true), (true, true));
     }
 }

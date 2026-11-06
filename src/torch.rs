@@ -2,10 +2,9 @@
 //! in its title strip, burning the way the pane is doing.
 //!
 //! A torch is 12x20 texels drawn as a handful of `paint_quad` runs in one
-//! canvas, so it adds no elements per pixel. Its frame comes from the wall
-//! clock, like the lead creature in `app/sprite.rs`; the app's torch tick
-//! (see `tick_ms`) only asks for a render as often as the fastest torch on
-//! screen needs one.
+//! canvas, so it adds no elements per pixel. Its frame is the app's tick
+//! count: torches step once per `TICK_MS` spinner tick, every state on
+//! every tick, and never ask for a render of their own.
 
 use gpui::{canvas, point, px, size, Bounds, Hsla, IntoElement, Pixels, Styled, Window};
 
@@ -24,23 +23,12 @@ pub enum Torch {
     Stopped,
 }
 
-impl Torch {
-    /// How long one animation frame lasts.
-    pub fn frame_ms(self) -> u64 {
-        match self {
-            Torch::Working => 100,
-            Torch::NeedsYou => 125,
-            Torch::Idle => 200,
-            Torch::Stopped => 400,
-        }
-    }
-}
+/// One torch frame per tick of the app's 240 ms spinner timer, for every
+/// state: the torches ride that timer and never run a faster one.
+pub const TICK_MS: u64 = 240;
 
-/// How often the app should render for these torches: the fastest frame
-/// among them, or `None` (no tick at all) when none are on screen.
-pub fn tick_ms(on_screen: impl IntoIterator<Item = Torch>) -> Option<u64> {
-    on_screen.into_iter().map(Torch::frame_ms).min()
-}
+/// Idle's tip sway, one step per frame; no two neighbours match.
+const IDLE_SWAY: [i32; 4] = [-1, 0, 1, 0];
 
 /// A per-pane seed so torches don't flicker in step.
 pub fn seed(slug: &str) -> u64 {
@@ -94,8 +82,9 @@ fn sconce(g: &mut Grid) {
 }
 
 /// Flame rising from the bowl (row 10 is its base) `h` rows tall, at most
-/// `half` texels either side of centre; the top `wild` rows jitter sideways.
-fn flame(g: &mut Grid, h: usize, half: f32, wild: usize, r: u64, hot: bool) {
+/// `half` texels either side of centre; the top `wild` rows jitter sideways,
+/// by `sway` when given, else at random.
+fn flame(g: &mut Grid, h: usize, half: f32, wild: usize, r: u64, sway: Option<i32>, hot: bool) {
     for k in 0..h {
         let y = 10 - k as i32;
         if y < 0 {
@@ -104,7 +93,7 @@ fn flame(g: &mut Grid, h: usize, half: f32, wild: usize, r: u64, hot: bool) {
         let t = (k as f32 + 1.0) / (h as f32 + 1.0);
         let w = half * (std::f32::consts::PI * t).sin().powf(0.7) * (1.0 - 0.35 * t);
         let jitter = if k + wild >= h {
-            (hash(r, k as u64) % 3) as f32 - 1.0
+            sway.map_or((hash(r, k as u64) % 3) as f32 - 1.0, |s| s as f32)
         } else {
             0.0
         };
@@ -129,22 +118,33 @@ fn flame(g: &mut Grid, h: usize, half: f32, wild: usize, r: u64, hot: bool) {
     }
 }
 
-/// The torch's texels at animation frame `frame`.
+/// The torch's texels at animation frame `frame` (the tick count). Each
+/// state differs from one frame to the next, so every tick shows motion.
 pub fn texels(state: Torch, frame: u64, seed: u64) -> Grid {
     let mut g: Grid = [[None; W]; H];
     sconce(&mut g);
+    // The seed shifts the cycles so torches don't move in step.
+    let f = frame.wrapping_add(seed % 12);
     let r = hash(seed, frame);
     match state {
         Torch::Idle => {
-            // Mostly still: the tip sways every other frame and the
-            // height breathes by one row now and then.
-            let r = hash(seed, frame / 2);
-            let h = 6 + usize::from(r % 4 == 0);
-            flame(&mut g, h, 2.0, 1, r, false);
+            // Calm: the tip sways a texel each frame and the height
+            // breathes by one row every third.
+            let h = 6 + usize::from(f % 3 == 0);
+            flame(
+                &mut g,
+                h,
+                2.0,
+                1,
+                r,
+                Some(IDLE_SWAY[(f % 4) as usize]),
+                false,
+            );
         }
         Torch::Working => {
-            let h = 9 + (r % 3) as usize;
-            flame(&mut g, h, 3.0, h / 2, r, true);
+            // A new height every frame, so it never holds a pose.
+            let h = 9 + (f % 3) as usize;
+            flame(&mut g, h, 3.0, h / 2, r, None, true);
             // A few sparks above and beside the flame.
             for i in 0..3 {
                 let s = hash(r, 100 + i);
@@ -159,7 +159,7 @@ pub fn texels(state: Torch, frame: u64, seed: u64) -> Grid {
         Torch::NeedsYou => {
             // Blown flat: a tongue streaming right off the bowl, thinning
             // to its tip, with torn-off streamers racing past it.
-            let len = 5 + (r % 3) as usize;
+            let len = 5 + (f % 3) as usize;
             for i in 0..len {
                 let x = 5 + i;
                 let t = i as f32 / len as f32;
@@ -211,9 +211,8 @@ pub fn texels(state: Torch, frame: u64, seed: u64) -> Grid {
     g
 }
 
-/// A torch at `scale` points per texel, frame picked from `now` (unix ms).
-pub fn element(state: Torch, now: u64, seed: u64, scale: f32) -> impl IntoElement {
-    let frame = now / state.frame_ms();
+/// A torch at `scale` points per texel, at animation frame `frame`.
+pub fn element(state: Torch, frame: u64, seed: u64, scale: f32) -> impl IntoElement {
     let grid = texels(state, frame, seed);
     canvas(
         |_, _, _| {},
@@ -265,17 +264,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_fastest_torch_on_screen_sets_the_tick_and_none_means_no_tick() {
-        assert_eq!(tick_ms([]), None);
-        assert_eq!(tick_ms([Torch::Stopped]), Some(400));
-        assert_eq!(tick_ms([Torch::Idle, Torch::Stopped]), Some(200));
-        assert_eq!(
-            tick_ms([Torch::Idle, Torch::Working, Torch::NeedsYou]),
-            Some(100)
-        );
-        // Nothing renders faster than 10 fps.
-        for t in [Torch::Idle, Torch::Working, Torch::NeedsYou, Torch::Stopped] {
-            assert!(t.frame_ms() >= 100, "{t:?}");
+    fn every_state_moves_on_every_tick() {
+        for s in [Torch::Idle, Torch::Working, Torch::NeedsYou, Torch::Stopped] {
+            for name in ["a", "pane", "lead-7"] {
+                for f in 0..48 {
+                    assert_ne!(
+                        texels(s, f, seed(name)),
+                        texels(s, f + 1, seed(name)),
+                        "{s:?} {name} frame {f}"
+                    );
+                }
+            }
         }
     }
 

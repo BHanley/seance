@@ -66,18 +66,32 @@ name a scheme.
 | `herbarium` | Herbarium (light) | `#BDC5B3` | `#8E3B14` | `#43407F` |
 | `castle` | Castle (skin) | `#1B1B1D` | `#E39A43` | `#93A6C2` |
 
-**Skins.** A scheme may also carry a `texture` (a seamless PNG tile, one
-texel per logical pixel) and a `thin_lines` flag. Castle is the first: grey
-dithered stone with a little moss on the rail and the pane title strips,
-1px pane frames. The tile comes from `scripts/gen-castle-tile.py` and lives in
-`assets/skins/`. `src/skin.rs` paints it: gpui has no repeat fill, so a
-`canvas` lays the tile out with `paint_image`, anchored to the window origin
-so every surface shares one grid. The tile is decoded and upscaled once per
-scale factor and cached, so the atlas uploads it once and a frame only adds
-one sprite per tile position. Terminal text never sits on a texture; the
-pane body stays the flat `bg`. Schemes without a texture paint exactly as
-before. Switching to or from a thin-lined skin moves the pane grid by 1px a
-side (the frame goes from 2px to 1px).
+**Skins.** A scheme may also carry a `texture` (`Texture` in
+`seance-core/src/schemes.rs`): a seamless square PNG tile, one texel per
+logical pixel, plus the stone frame color and a `torches` flag. Castle is the
+first: a 256 px tile of grey dithered stone with cracks, damp and rust
+streaks and a little moss, on the rail, the pane title strips, the minimize
+shelf, the dock tab strip and drawer headers. The tile comes from
+`scripts/gen-castle-tile.py` and lives in `assets/skins/`. `src/skin.rs`
+paints it: gpui has no repeat fill, so a `canvas` lays the tile out with
+`paint_image`, anchored to the window origin so every surface shares one
+grid. The tile is decoded and upscaled once per scale factor and cached, so
+the atlas uploads it once and a frame only adds one sprite per tile position.
+Terminal text never sits on a texture; the pane body stays the flat `bg`.
+Skinned panes keep the 2px frame but draw it in the skin's dark stone color
+with square corners; schemes without a texture paint exactly as before
+(rounded frame, `border` color).
+
+**Torches.** A skin with `torches` puts a 12x20 pixel wall torch in each
+pane's title strip (`src/torch.rs`, painted as quad runs in one canvas). It
+burns the way the pane is doing, in Stage's `pane_state` order: stopped (out,
+ember and smoke) when the pane exited, sleeps or has no process; needs-you
+(blown flat sideways); working (tall, roaring, sparks); idle (a calm flame)
+otherwise. Torches have no timer of their own: they ride the sidebar
+spinner's 240 ms tick, every state stepping one frame per tick (frame =
+ticks seen with a torch on screen), and that tick renders at most once
+whether the spinner, a torch or both asked. With no torch on screen
+(another scheme, another view, an empty circle) they add nothing.
 
 **Who owns the choice.** The daemon. It saves it in the state dir
 (`theme.json`, `{"scheme": ID}`), sends it to each window on attach and

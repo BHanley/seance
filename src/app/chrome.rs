@@ -448,8 +448,8 @@ pub(super) fn render_pane(
     circle_working: bool,
     // A lead's open task count and whether its tasks card is open.
     lead_tasks: Option<(usize, bool)>,
-    // The skin's wall torch for this pane, when the skin has torches.
-    torch: Option<crate::torch::Torch>,
+    // The skin's wall torch for this pane and its frame, when the skin has torches.
+    torch: Option<(crate::torch::Torch, u64)>,
     cx: &Context<SeanceApp>,
 ) -> impl IntoElement {
     let (task_count, tasks_open) = match lead_tasks {
@@ -656,8 +656,8 @@ pub(super) fn render_pane(
                 } else {
                     crate::skin::TITLE
                 }))
-                .children(torch.map(|t| {
-                    crate::torch::element(t, super::util::now_ms(), crate::torch::seed(&slug), 1.0)
+                .children(torch.map(|(t, frame)| {
+                    crate::torch::element(t, frame, crate::torch::seed(&slug), 1.0)
                 }))
                 .when(is_zoomed, |d| {
                     d.child(
