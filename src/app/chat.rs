@@ -11,14 +11,15 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    div, img, prelude::*, px, relative, AnyElement, Context, Entity, Focusable as _, ScrollHandle,
-    SharedString, WeakEntity, Window,
+    div, img, prelude::*, px, relative, AnyElement, Context, Entity, Focusable as _, Hsla,
+    ScrollHandle, SharedString, WeakEntity, Window,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui_component::text::{TextView, TextViewStyle};
 use gpui_component::{StyledExt as _, WindowExt as _};
 use regex::Regex;
+use seance_core::schemes;
 
 use crate::chat_api::{
     self, Attachment, CircleRow, Circles, Hit, Msg, PaneRow, Progress, ReplyRef, Thread, Usage,
@@ -251,9 +252,147 @@ fn one_line(text: &str) -> String {
     }
 }
 
+/// How far the time and a waiting tick in a recolored bubble move from the
+/// ink toward the fill: softer, still 4.5:1 on the fill.
+const SOFT_INK: f32 = 0.2;
+/// How far a quote's fill in a recolored bubble moves toward the ink: a
+/// darker tint the ink still holds 4.5:1 on.
+const QUOTE_TINT: f32 = 0.12;
+
+/// Brian's bubble on a scheme that recolors it (`Scheme::me_bubble`), as
+/// packed hex: the fill, the ink, the softer ink for the time and a waiting
+/// tick, and a quote's fill.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MeInk {
+    pub bg: u32,
+    pub ink: u32,
+    pub soft: u32,
+    pub quote_bg: u32,
+}
+
+/// The recolored look for a bubble, or `None` for the palette's own: only
+/// Brian's bubbles, and only on a scheme that has one.
+pub(crate) fn me_ink(me: bool, custom: Option<schemes::MeBubble>) -> Option<MeInk> {
+    let b = custom.filter(|_| me)?;
+    Some(MeInk {
+        bg: b.bg,
+        ink: b.ink,
+        soft: schemes::mix(b.ink, b.bg, SOFT_INK),
+        quote_bg: schemes::mix(b.bg, b.ink, QUOTE_TINT),
+    })
+}
+
+/// [`me_ink`] for the active scheme.
+pub(crate) fn active_me_ink(me: bool) -> Option<MeInk> {
+    me_ink(me, crate::theme::active().me_bubble)
+}
+
+/// A bubble's fill and text color: the recolored ones when `ink` is set,
+/// else the palette's (`me_bg` for Brian, `lead_bg` for the lead, `text`).
+pub(crate) fn bubble_fill(
+    me: bool,
+    ink: Option<MeInk>,
+    me_bg: Hsla,
+    lead_bg: Hsla,
+    text: Hsla,
+) -> (Hsla, Hsla) {
+    match ink {
+        Some(i) => (hex(i.bg), hex(i.ink)),
+        None => (if me { me_bg } else { lead_bg }, text),
+    }
+}
+
+pub(crate) fn hex(c: u32) -> Hsla {
+    gpui::rgb(c).into()
+}
+
+/// Lays out `child` with the theme's link color set to `link`, then puts it
+/// back: the text view colors links from the theme alone, and the theme's
+/// link color cannot be read on a recolored bubble.
+pub(crate) struct LinkInk {
+    pub child: AnyElement,
+    pub link: Hsla,
+}
+
+impl LinkInk {
+    fn with<R>(link: Hsla, cx: &mut gpui::App, f: impl FnOnce(&mut gpui::App) -> R) -> R {
+        let was = std::mem::replace(&mut gpui_component::Theme::global_mut(cx).link, link);
+        let out = f(cx);
+        gpui_component::Theme::global_mut(cx).link = was;
+        out
+    }
+}
+
+impl IntoElement for LinkInk {
+    type Element = Self;
+
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl gpui::Element for LinkInk {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) -> (gpui::LayoutId, ()) {
+        let child = &mut self.child;
+        let id = Self::with(self.link, cx, |cx| child.request_layout(window, cx));
+        (id, ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        _: gpui::Bounds<gpui::Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) {
+        let child = &mut self.child;
+        Self::with(self.link, cx, |cx| child.prepaint(window, cx));
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        _: gpui::Bounds<gpui::Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) {
+        self.child.paint(window, cx);
+    }
+}
+
 /// The quote on top of a reply's bubble: who wrote the original and up to
-/// three lines of it.
-pub(crate) fn quote_block(from: &str, text: &str) -> gpui::Div {
+/// three lines of it. In a recolored bubble it is a darker tint in the ink.
+pub(crate) fn quote_block(from: &str, text: &str, ink: Option<MeInk>) -> gpui::Div {
+    let (bar, words, fill) = match ink {
+        Some(i) => (hex(i.ink), hex(i.ink), hex(i.quote_bg)),
+        None => (
+            SeancePalette::violet(),
+            SeancePalette::text_dim(),
+            SeancePalette::bg().opacity(0.3),
+        ),
+    };
     div()
         .flex()
         .flex_col()
@@ -262,18 +401,18 @@ pub(crate) fn quote_block(from: &str, text: &str) -> gpui::Div {
         .py_0p5()
         .rounded_sm()
         .border_l_2()
-        .border_color(SeancePalette::violet())
-        .bg(SeancePalette::bg().opacity(0.3))
+        .border_color(bar)
+        .bg(fill)
         .text_xs()
         .child(
             div()
                 .font_semibold()
-                .text_color(SeancePalette::text_dim())
+                .text_color(words)
                 .child(quote_label(from)),
         )
         .child(
             div()
-                .text_color(SeancePalette::text_dim())
+                .text_color(words)
                 .line_clamp(3)
                 .text_ellipsis()
                 .child(text.to_string()),
@@ -1074,13 +1213,14 @@ fn attachment_only(m: &Msg) -> bool {
         .is_some_and(|a| m.text == format!("📎 {}", a.title))
 }
 
-/// A document on a note: its title, as a link that opens it.
-fn attachment_link(id: i64, a: &Attachment) -> AnyElement {
+/// A document on a note: its title, as a link that opens it. `ink` colors
+/// it in a recolored bubble.
+fn attachment_link(id: i64, a: &Attachment, ink: Option<Hsla>) -> AnyElement {
     let url = a.url();
     div()
         .id(SharedString::from(format!("bubble-file-{id}")))
         .underline()
-        .text_color(SeancePalette::violet())
+        .text_color(ink.unwrap_or_else(SeancePalette::violet))
         .cursor_pointer()
         .on_click(move |_, _, _| crate::sysopen::open_detached(&url))
         .child(a.title.clone())
@@ -3042,8 +3182,16 @@ impl SeanceApp {
     }
 
     /// A "▶ video" tile in a picture's place: the file name, and a click that
-    /// downloads it (no automatic retry) and opens it in its app.
-    fn video_tile(&self, id: i64, i: usize, name: &str, cx: &Context<Self>) -> AnyElement {
+    /// downloads it (no automatic retry) and opens it in its app. In a
+    /// recolored bubble it takes the quote's tint and the ink.
+    fn video_tile(
+        &self,
+        id: i64,
+        i: usize,
+        name: &str,
+        ink: Option<MeInk>,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let state = self.chat.videos.get(name);
         let status = match state {
             Some(VideoState::Downloading) => "downloading…".to_string(),
@@ -3051,7 +3199,21 @@ impl SeanceApp {
             None => "click to open".to_string(),
         };
         let busy = state == Some(&VideoState::Downloading);
+        let failed = matches!(state, Some(VideoState::Failed(_)));
         let file = name.to_string();
+        let (fill, title, label, note) = match ink {
+            Some(i) => (hex(i.quote_bg), hex(i.ink), hex(i.ink), hex(i.ink)),
+            None => (
+                SeancePalette::bg().opacity(0.4),
+                SeancePalette::text(),
+                SeancePalette::text_dim(),
+                if failed {
+                    SeancePalette::danger()
+                } else {
+                    SeancePalette::text_faint()
+                },
+            ),
+        };
         div()
             .id(SharedString::from(format!("bubble-video-{id}-{i}")))
             .flex_none()
@@ -3060,31 +3222,22 @@ impl SeanceApp {
             .px_3()
             .rounded_md()
             .overflow_hidden()
-            .bg(SeancePalette::bg().opacity(0.4))
+            .bg(fill)
             .flex()
             .flex_col()
             .items_center()
             .justify_center()
             .gap_1()
-            .child(div().text_color(SeancePalette::text()).child("▶ video"))
+            .child(div().text_color(title).child("▶ video"))
             .child(
                 div()
                     .max_w_full()
                     .truncate()
                     .text_xs()
-                    .text_color(SeancePalette::text_dim())
+                    .text_color(label)
                     .child(name.to_string()),
             )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(if matches!(state, Some(VideoState::Failed(_))) {
-                        SeancePalette::danger()
-                    } else {
-                        SeancePalette::text_faint()
-                    })
-                    .child(status),
-            )
+            .child(div().text_xs().text_color(note).child(status))
             .when(!busy, |d| {
                 d.cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| this.open_video(&file, cx)))
@@ -3131,11 +3284,12 @@ impl SeanceApp {
     fn chat_bubble(&self, m: &Msg, read: i64, cx: &Context<Self>) -> AnyElement {
         let me = m.from == "me";
         let system = !me && m.from != "lead";
+        let ink = active_me_ink(me);
         let mut body = div().flex().flex_col().gap_0p5();
         if let Some(r) = &m.reply {
             let id = r.id;
             body = body.child(
-                quote_block(&r.from, &r.text)
+                quote_block(&r.from, &r.text, ink)
                     .id(SharedString::from(format!("bubble-quote-{}", m.id)))
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| this.chat_quote_jump(id, cx))),
@@ -3146,7 +3300,7 @@ impl SeanceApp {
         // box until the file has arrived. Nothing can paint outside it.
         for (i, name) in m.image_names().into_iter().enumerate() {
             if is_video(name) {
-                body = body.child(self.video_tile(m.id, i, name, cx));
+                body = body.child(self.video_tile(m.id, i, name, ink, cx));
                 continue;
             }
             let found = self.chat.images.get(name);
@@ -3178,7 +3332,7 @@ impl SeanceApp {
             });
         }
         if let Some(a) = &m.attachment {
-            body = body.child(attachment_link(m.id, a));
+            body = body.child(attachment_link(m.id, a, ink.map(|i| hex(i.ink))));
         }
         let spec = m.spec.as_deref().filter(|_| !me);
         if let Some(title) = spec {
@@ -3215,14 +3369,22 @@ impl SeanceApp {
                             }
                         },
                     ))
-                    .child(
-                        TextView::markdown(
+                    .child({
+                        let view = TextView::markdown(
                             SharedString::from(format!("bubble-md-{}", m.id)),
                             markdown,
                         )
                         .style(bubble_text_style())
-                        .selectable(true),
-                    ),
+                        .selectable(true);
+                        match ink {
+                            Some(i) => LinkInk {
+                                child: view.into_any_element(),
+                                link: hex(i.ink),
+                            }
+                            .into_any_element(),
+                            None => view.into_any_element(),
+                        }
+                    }),
             );
         }
         let stamp = if m.ts > 0 { clock(m.ts) } else { String::new() };
@@ -3235,18 +3397,21 @@ impl SeanceApp {
                 .child(body)
                 .into_any_element();
         }
+        let (fill, words) = bubble_fill(
+            me,
+            ink,
+            SeancePalette::violet_dim(),
+            SeancePalette::surface(),
+            SeancePalette::text(),
+        );
         let bubble = div()
             .max_w(relative(0.72))
             .px_3()
             .py_2()
             .rounded_lg()
             .text_sm()
-            .text_color(SeancePalette::text())
-            .bg(if me {
-                SeancePalette::violet_dim()
-            } else {
-                SeancePalette::surface()
-            })
+            .text_color(words)
+            .bg(fill)
             .when(spec.is_some(), |d| {
                 d.border_1().border_color(SeancePalette::violet())
             })
@@ -3258,9 +3423,9 @@ impl SeanceApp {
                     .items_center()
                     .gap_1()
                     .text_xs()
-                    .text_color(SeancePalette::text_faint())
+                    .text_color(ink.map_or_else(SeancePalette::text_faint, |i| hex(i.soft)))
                     .child(stamp)
-                    .children(self.tick_marks(m, read)),
+                    .children(self.tick_marks(m, read, ink)),
             );
         let (weak, ws, msg) = (cx.weak_entity(), self.chat.selected.clone(), m.clone());
         let bubble = bubble
@@ -3309,13 +3474,14 @@ impl SeanceApp {
     /// Read ticks, as on the phone: one dim ✓ while a note waits for the lead,
     /// ✓✓ in the accent color once the lead has seen it and when answered; on a lead's
     /// message, ✓✓ in the accent once Brian has read it. A failed note says so
-    /// in red. Hover for what it means.
-    fn tick_marks(&self, m: &Msg, read: i64) -> Vec<AnyElement> {
+    /// in red. Hover for what it means. A recolored bubble draws them in its
+    /// ink: full once seen, softer while waiting.
+    fn tick_marks(&self, m: &Msg, read: i64, ink: Option<MeInk>) -> Vec<AnyElement> {
         let mut out = Vec::new();
         if m.from == "me" && m.status == "failed" {
             out.push(
                 div()
-                    .text_color(SeancePalette::danger())
+                    .text_color(ink.map_or_else(SeancePalette::danger, |i| hex(i.ink)))
                     .child("· not delivered")
                     .into_any_element(),
             );
@@ -3325,10 +3491,11 @@ impl SeanceApp {
                 div()
                     .id(SharedString::from(format!("tick-{}", m.id)))
                     .font_semibold()
-                    .text_color(if accent {
-                        SeancePalette::violet()
-                    } else {
-                        SeancePalette::text_dim()
+                    .text_color(match (ink, accent) {
+                        (Some(i), true) => hex(i.ink),
+                        (Some(i), false) => hex(i.soft),
+                        (None, true) => SeancePalette::violet(),
+                        (None, false) => SeancePalette::text_dim(),
                     })
                     .tooltip(tip(tip_text))
                     .child(glyph)
@@ -4266,5 +4433,58 @@ mod tests {
             (settled - before).abs() < 1.,
             "the marker took no room: {before} then {settled}"
         );
+    }
+
+    #[test]
+    fn only_brians_bubble_on_a_recoloring_scheme_gets_ink() {
+        let neon = seance_core::schemes::find("neon-district")
+            .unwrap()
+            .me_bubble;
+        let i = me_ink(true, neon).expect("his bubble on neon");
+        assert_eq!((i.bg, i.ink), (0xFF2FB5, 0x04010A));
+        // The lead's bubble and every scheme without the field keep the palette.
+        assert_eq!(me_ink(false, neon), None);
+        for s in &seance_core::schemes::SCHEMES {
+            if s.me_bubble.is_none() {
+                assert_eq!(me_ink(true, s.me_bubble), None, "{}", s.id);
+            }
+        }
+    }
+
+    #[test]
+    fn bubble_fill_falls_back_to_the_palette_without_ink() {
+        let (me_bg, lead_bg, text) = (hex(0x6C5B95), hex(0x211C1D), hex(0xEBE3DB));
+        assert_eq!(bubble_fill(true, None, me_bg, lead_bg, text), (me_bg, text));
+        assert_eq!(
+            bubble_fill(false, None, me_bg, lead_bg, text),
+            (lead_bg, text)
+        );
+        let neon = seance_core::schemes::find("neon-district")
+            .unwrap()
+            .me_bubble;
+        let ink = me_ink(true, neon);
+        assert_eq!(
+            bubble_fill(true, ink, me_bg, lead_bg, text),
+            (hex(0xFF2FB5), hex(0x04010A))
+        );
+    }
+
+    #[test]
+    fn every_ink_in_a_recolored_bubble_holds_4_5_to_1() {
+        use seance_core::schemes::contrast;
+        for s in &seance_core::schemes::SCHEMES {
+            let Some(i) = me_ink(true, s.me_bubble) else {
+                continue;
+            };
+            // Text, links, the seen tick: ink on the fill.
+            assert!(contrast(i.ink, i.bg) >= 4.5, "{} ink", s.id);
+            // The time and a waiting tick, on the fill.
+            assert!(contrast(i.soft, i.bg) >= 4.5, "{} soft", s.id);
+            // A quote's words and a video tile's lines, on the tint.
+            assert!(contrast(i.ink, i.quote_bg) >= 4.5, "{} quote", s.id);
+            // The tint and the softer ink still differ from what they sit on.
+            assert_ne!(i.quote_bg, i.bg, "{}", s.id);
+            assert_ne!(i.soft, i.ink, "{}", s.id);
+        }
     }
 }

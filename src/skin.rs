@@ -684,7 +684,16 @@ mod shots {
                 )
                 .child(div().text_color(P::text_faint()).child(note.to_string()))
         };
+        // The mock keeps its flame bubble for Brian where the scheme has no
+        // `me_bubble`; one that has it paints as the app does.
         let bubble = |me: bool, text: &str| {
+            let (fill, words) = crate::app::chat::bubble_fill(
+                me,
+                crate::app::chat::active_me_ink(me),
+                P::flame(),
+                P::surface(),
+                if me { P::bg() } else { P::text() },
+            );
             div().flex().when(me, |d| d.justify_end()).child(
                 div()
                     .max_w(px(320.))
@@ -692,8 +701,8 @@ mod shots {
                     .py_2()
                     .rounded_lg()
                     .text_sm()
-                    .text_color(if me { P::bg() } else { P::text() })
-                    .bg(if me { P::flame() } else { P::surface() })
+                    .text_color(words)
+                    .bg(fill)
                     .child(text.to_string()),
             )
         };
@@ -888,10 +897,14 @@ mod shots {
     /// it, and the quote bar over the composer strip, built with the app's own
     /// quote builders.
     fn chat_reply_panel(id: &str, hovered: bool) -> impl IntoElement {
-        use crate::app::chat::{quote_block, reply_arrow, reply_bar};
+        use crate::app::chat::{
+            active_me_ink, bubble_fill, hex, quote_block, reply_arrow, reply_bar,
+        };
         let ask = "Stone is on the chat rail now. Run the shots for castle, neon and one flat scheme, then post them here? The quote above a reply stops at three lines, so this long ask shows the cut.";
         let arrow = |me: bool| hovered.then(|| reply_arrow(i64::from(me)).opacity(1.));
         let bubble = |me: bool, quote: bool, text: &str| {
+            let ink = active_me_ink(me);
+            let (fill, words) = bubble_fill(me, ink, P::violet_dim(), P::surface(), P::text());
             div()
                 .flex()
                 .items_center()
@@ -904,10 +917,30 @@ mod shots {
                         .py_2()
                         .rounded_lg()
                         .text_sm()
-                        .text_color(P::text())
-                        .bg(if me { P::violet_dim() } else { P::surface() })
-                        .when(quote, |d| d.child(quote_block("lead", ask)))
-                        .child(text.to_string()),
+                        .text_color(words)
+                        .bg(fill)
+                        .when(quote, |d| d.child(quote_block("lead", ask, ink)))
+                        .child(text.to_string())
+                        // A recolored bubble also shows its time and ticks,
+                        // as the app draws them.
+                        .when_some(ink, |d, i| {
+                            d.child(
+                                div()
+                                    .mt_0p5()
+                                    .flex()
+                                    .gap_1()
+                                    .text_xs()
+                                    .text_color(hex(i.soft))
+                                    .child("9:41")
+                                    .child(div().text_color(hex(i.soft)).child("✓"))
+                                    .child(
+                                        div()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(hex(i.ink))
+                                            .child("✓✓"),
+                                    ),
+                            )
+                        }),
                 )
                 .when(!me, |d| d.children(arrow(me)))
         };

@@ -66,6 +66,14 @@ pub struct Texture {
     pub strength: f32,
 }
 
+/// Brian's own chat bubbles, recolored by a scheme: `bg` fills the bubble
+/// and `ink` draws everything in it (text, time, ticks, links, quote).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MeBubble {
+    pub bg: u32,
+    pub ink: u32,
+}
+
 #[derive(Debug)]
 pub struct Scheme {
     pub id: &'static str,
@@ -77,6 +85,8 @@ pub struct Scheme {
     pub term: Option<TermColors>,
     /// Optional chrome texture; `None` paints flat fills.
     pub texture: Option<Texture>,
+    /// `None` paints Brian's bubbles in the palette's `violet_dim`.
+    pub me_bubble: Option<MeBubble>,
 }
 
 /// Terminal source colors in the order the scheme specs list them.
@@ -255,6 +265,7 @@ pub static SCHEMES: [Scheme; 14] = [
         chrome: CANDLELIT,
         term: None,
         texture: None,
+        me_bubble: None,
     },
     Scheme {
         id: "abyssal",
@@ -270,6 +281,7 @@ pub static SCHEMES: [Scheme; 14] = [
             ]),
         )),
         texture: None,
+        me_bubble: None,
     },
     Scheme {
         id: "ectoplasm",
@@ -285,6 +297,7 @@ pub static SCHEMES: [Scheme; 14] = [
             ]),
         )),
         texture: None,
+        me_bubble: None,
     },
     Scheme {
         id: "ouija",
@@ -300,6 +313,7 @@ pub static SCHEMES: [Scheme; 14] = [
             ]),
         )),
         texture: None,
+        me_bubble: None,
     },
     Scheme {
         id: "monokai",
@@ -315,6 +329,7 @@ pub static SCHEMES: [Scheme; 14] = [
             ]),
         )),
         texture: None,
+        me_bubble: None,
     },
     Scheme {
         id: "tarot",
@@ -330,6 +345,7 @@ pub static SCHEMES: [Scheme; 14] = [
             ]),
         )),
         texture: None,
+        me_bubble: None,
     },
     Scheme {
         id: "mojave",
@@ -345,6 +361,7 @@ pub static SCHEMES: [Scheme; 14] = [
             ]),
         )),
         texture: None,
+        me_bubble: None,
     },
     Scheme {
         id: "riso",
@@ -360,6 +377,7 @@ pub static SCHEMES: [Scheme; 14] = [
             ]),
         )),
         texture: None,
+        me_bubble: None,
     },
     Scheme {
         id: "synth",
@@ -375,6 +393,7 @@ pub static SCHEMES: [Scheme; 14] = [
             ]),
         )),
         texture: None,
+        me_bubble: None,
     },
     Scheme {
         id: "fog",
@@ -390,6 +409,7 @@ pub static SCHEMES: [Scheme; 14] = [
             ]),
         )),
         texture: None,
+        me_bubble: None,
     },
     Scheme {
         id: "parlor",
@@ -405,6 +425,7 @@ pub static SCHEMES: [Scheme; 14] = [
             ]),
         )),
         texture: None,
+        me_bubble: None,
     },
     Scheme {
         id: "herbarium",
@@ -420,6 +441,7 @@ pub static SCHEMES: [Scheme; 14] = [
             ]),
         )),
         texture: None,
+        me_bubble: None,
     },
     Scheme {
         id: "castle",
@@ -435,6 +457,7 @@ pub static SCHEMES: [Scheme; 14] = [
             ]),
         )),
         texture: Some(CASTLE_STONE),
+        me_bubble: None,
     },
     Scheme {
         id: "neon-district",
@@ -450,6 +473,10 @@ pub static SCHEMES: [Scheme; 14] = [
             ]),
         )),
         texture: Some(NEON_STEEL),
+        me_bubble: Some(MeBubble {
+            bg: 0xFF2FB5,
+            ink: 0x04010A,
+        }),
     },
 ];
 
@@ -469,6 +496,33 @@ pub fn index_of(id: &str) -> Option<usize> {
 /// `candlelit, abyssal, ...` for error messages and help.
 pub fn id_list() -> String {
     SCHEMES.iter().map(|s| s.id).collect::<Vec<_>>().join(", ")
+}
+
+/// WCAG relative luminance of a packed `0xRRGGBB`.
+fn luminance(c: u32) -> f64 {
+    let lin = |v: u32| {
+        let v = f64::from(v & 0xFF) / 255.;
+        if v <= 0.03928 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * lin(c >> 16) + 0.7152 * lin(c >> 8) + 0.0722 * lin(c)
+}
+
+/// WCAG contrast ratio of two colors, 1.0 to 21.0, either order.
+pub fn contrast(a: u32, b: u32) -> f64 {
+    let (a, b) = (luminance(a), luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// `a` moved `t` (0.0 to 1.0) of the way to `b`, channel by channel.
+pub fn mix(a: u32, b: u32, t: f32) -> u32 {
+    [16, 8, 0].iter().fold(0, |out, s| {
+        let (x, y) = ((a >> s & 0xFF) as f32, (b >> s & 0xFF) as f32);
+        out | ((x + (y - x) * t).round() as u32) << s
+    })
 }
 
 #[cfg(test)]
@@ -534,6 +588,29 @@ mod tests {
             assert_eq!(tex.size, 256, "{}", s.id);
             assert!(luma(tex.frame) < luma(s.chrome.border), "{}", s.id);
         }
+    }
+
+    #[test]
+    fn only_neon_district_recolors_brians_bubbles_and_its_ink_reads() {
+        let recolored: Vec<_> = SCHEMES
+            .iter()
+            .filter(|s| s.me_bubble.is_some())
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(recolored, ["neon-district"]);
+        let b = find("neon-district").unwrap().me_bubble.unwrap();
+        assert_eq!((b.bg, b.ink), (0xFF2FB5, 0x04010A));
+        assert!(contrast(b.ink, b.bg) >= 6.0);
+    }
+
+    #[test]
+    fn contrast_and_mix_match_the_wcag_ends() {
+        assert!((contrast(0x000000, 0xFFFFFF) - 21.).abs() < 1e-9);
+        assert!((contrast(0xFFFFFF, 0x000000) - 21.).abs() < 1e-9);
+        assert!((contrast(0x777777, 0x777777) - 1.).abs() < 1e-9);
+        assert_eq!(mix(0x000000, 0xFFFFFF, 0.), 0x000000);
+        assert_eq!(mix(0x000000, 0xFFFFFF, 1.), 0xFFFFFF);
+        assert_eq!(mix(0x000000, 0xFF8000, 0.5), 0x804000);
     }
 
     #[test]

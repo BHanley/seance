@@ -99,6 +99,17 @@ scales the backdrop strengths by its `Texture::strength`; both skins use
 steel `#1B1A26`. Its accent is magenta, its second accent cyan, and
 `text_faint` is lifted to `#7C80AA` so faint labels hold 4.5:1 on the steel.
 
+**Brian's bubbles (`Scheme::me_bubble`).** A scheme can recolor Brian's own
+chat bubbles with `MeBubble { bg, ink }`; `None` (every scheme but Neon
+District) keeps `violet_dim` and the palette's colors. Neon District sets hot
+magenta `#FF2FB5` with ink `#04010A`, and everything in the bubble takes the
+ink (`me_ink` in `src/app/chat.rs`): text, links (ink, underlined), "not
+delivered", the seen ticks and the reply quote's bar and words at full ink;
+the time and a waiting tick at a softer ink (20% toward the fill, `#360A2C`);
+the quote and a video tile on a darker tint (12% toward the ink, `#E129A0`).
+WCAG ratios: ink on the fill 6.2, softer ink on the fill 5.1, ink on the tint
+5.0. A 25% tint would drop the quote to 3.8, so it stays at 12%.
+
 Label contrast on the skins (WCAG ratio against the textured ground: the
 mean ground, then its 95th-percentile brightest pixel; the tile math and
 the rendered shots agree to 0.1 on the mean). The brightest 5% of the neon
