@@ -57,6 +57,11 @@ rand = "0.8"
 # Replay ring segments + bundles (pure-rust gzip; decodes in wasm too).
 flate2 = { workspace = true }
 
+[dev-dependencies]
+# Headless Metal render for the ignored skin screenshot test (src/skin.rs).
+gpui = { git = "https://github.com/zed-industries/zed", features = ["test-support"] }
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["test-support"] }
+
 # gpui-component declares its zed deps rev-less (tracks HEAD) and cargo ignores
 # transitive git lockfiles, so zed HEAD drift breaks the build. Cargo forbids
 # same-source [patch] pins, so we patch to a local checkout held at the rev

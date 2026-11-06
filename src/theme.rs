@@ -44,6 +44,16 @@ pub fn active() -> &'static Scheme {
     &schemes::SCHEMES[ACTIVE.load(Ordering::Relaxed)]
 }
 
+/// Point the palette at a scheme without touching gpui-component's theme,
+/// for render tests that build plain gpui elements.
+#[cfg(test)]
+pub fn set_active_for_test(id: &str) {
+    ACTIVE.store(
+        schemes::index_of(id).expect("known scheme"),
+        Ordering::Relaxed,
+    );
+}
+
 /// Light ground (ouija, riso, parlor, herbarium): widgets run in gpui-component's light mode.
 pub fn is_light() -> bool {
     active().light

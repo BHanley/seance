@@ -122,3 +122,234 @@ mod tests {
         assert!(!Arc::ptr_eq(&a, &c));
     }
 }
+
+/// Screenshots of the skin without a window on screen: gpui's headless
+/// context with the Metal offscreen renderer. The layout is a simplified
+/// copy of the rail and two panes (the real app needs a daemon), built from
+/// the real tiler and the real `SeancePalette`.
+///
+/// `cargo test --bin seance skin_shots -- --ignored`; PNGs land in
+/// `shots/` (or `$SKIN_SHOTS_DIR`).
+#[cfg(all(test, target_os = "macos"))]
+mod shots {
+    use super::*;
+    use crate::theme::SeancePalette as P;
+    use gpui::prelude::FluentBuilder as _;
+    use gpui::{AppContext as _, Context, FontWeight, Hsla, Render};
+
+    struct Shot {
+        schemes: Vec<&'static str>,
+    }
+
+    impl Render for Shot {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let mut row = div()
+                .flex()
+                .size_full()
+                .gap(px(10.))
+                .p(px(10.))
+                .bg(gpui::rgb(0x000000));
+            for id in &self.schemes {
+                // Elements capture colors when built, so each panel can be
+                // built under its own scheme.
+                crate::theme::set_active_for_test(id);
+                row = row.child(panel(id));
+            }
+            row
+        }
+    }
+
+    fn panel(id: &str) -> impl IntoElement {
+        let scheme = crate::theme::active();
+        let (term_fg, term_bg): (Hsla, Hsla) = match scheme.term {
+            Some(t) => (gpui::rgb(t.fg).into(), gpui::rgb(t.bg).into()),
+            None => (P::text(), P::bg()),
+        };
+        let circle = |name: &str, selected: bool| {
+            div()
+                .px_3()
+                .py_1()
+                .text_xs()
+                .when(selected, |d| d.bg(P::flame().opacity(0.22)))
+                .text_color(if selected { P::text() } else { P::text_dim() })
+                .child(name.to_string())
+        };
+        let sidebar = div()
+            .relative()
+            .flex_none()
+            .w(px(180.))
+            .h_full()
+            .flex()
+            .flex_col()
+            .bg(P::bg_elevated())
+            .border_r_1()
+            .border_color(P::border())
+            .children(backdrop(1.0))
+            .child(
+                div()
+                    .px_3()
+                    .pt_2()
+                    .pb_1p5()
+                    .flex()
+                    .gap_2()
+                    .border_b_1()
+                    .border_color(P::border())
+                    .child(div().text_color(P::flame_dim()).child("✦"))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(P::text())
+                            .child("seance"),
+                    ),
+            )
+            .child(circle("l6-leveling", true))
+            .child(circle("rudle", false))
+            .child(circle("riff-raiders", false))
+            .child(circle("skins", false))
+            .child(
+                div()
+                    .mt_auto()
+                    .px_3()
+                    .pb_2()
+                    .text_xs()
+                    .text_color(P::text_faint())
+                    .child(format!("scheme: {id}")),
+            );
+        let pane = |name: &str, active: bool, lines: &[&str]| {
+            div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .rounded_md()
+                .map(|d| {
+                    if thin_lines() {
+                        d.border_1()
+                    } else {
+                        d.border_2()
+                    }
+                })
+                .border_color(if active { P::flame() } else { P::border() })
+                .bg(P::bg())
+                .child(
+                    div()
+                        .relative()
+                        .flex_none()
+                        .h(px(26.))
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .bg(if active {
+                            P::surface()
+                        } else {
+                            P::bg_elevated()
+                        })
+                        .children(backdrop(if active { 0.35 } else { 0.8 }))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(if active { P::flame() } else { P::text_faint() })
+                                .child("⌨ you"),
+                        )
+                        .child(div().size(px(6.)).rounded_full().bg(if active {
+                            P::flame()
+                        } else {
+                            P::text_faint()
+                        }))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(if active { P::text() } else { P::text_faint() })
+                                .child(name.to_string()),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .p_2()
+                        .bg(term_bg)
+                        .font_family("Menlo")
+                        .text_xs()
+                        .text_color(term_fg)
+                        .children(lines.iter().map(|l| div().child(l.to_string()))),
+                )
+        };
+        div()
+            .flex_1()
+            .h_full()
+            .flex()
+            .overflow_hidden()
+            .rounded_md()
+            .font_family("Helvetica Neue")
+            .bg(P::bg())
+            .child(sidebar)
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .p_1()
+                    .child(pane(
+                        "lead · claude",
+                        true,
+                        &[
+                            "$ cargo test -p seance-core",
+                            "test result: ok. 141 passed",
+                            "$ _",
+                        ],
+                    ))
+                    .child(pane(
+                        "worker · zsh",
+                        false,
+                        &[
+                            "~/work/seance-skins (bh/skins)",
+                            "$ git log --oneline -1",
+                            "c5e412e Paint the skin texture",
+                        ],
+                    )),
+            )
+    }
+
+    fn render(schemes: Vec<&'static str>, w: f32, h: f32, out: &std::path::Path) {
+        let platform = gpui_platform::current_platform(true);
+        let mut cx = gpui::HeadlessAppContext::with_platform(
+            platform.text_system(),
+            Arc::new(()),
+            gpui_platform::current_headless_renderer,
+        );
+        let win = cx
+            .open_window(size(px(w), px(h)), move |_, cx| {
+                cx.new(|_| Shot { schemes })
+            })
+            .expect("headless window");
+        cx.run_until_parked();
+        cx.update_window(win.into(), |_, window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+        })
+        .unwrap();
+        let img = cx.capture_screenshot(win.into()).expect("capture");
+        img.save(out).expect("save png");
+        eprintln!("wrote {} ({}x{})", out.display(), img.width(), img.height());
+    }
+
+    #[test]
+    #[ignore = "writes PNGs via headless Metal; run with --ignored"]
+    fn skin_shots() {
+        let dir = std::env::var("SKIN_SHOTS_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shots"));
+        std::fs::create_dir_all(&dir).unwrap();
+        render(
+            vec!["castle", "candlelit"],
+            1100.,
+            330.,
+            &dir.join("castle-vs-candlelit.png"),
+        );
+        render(vec!["castle"], 560., 330., &dir.join("castle-chrome.png"));
+    }
+}
