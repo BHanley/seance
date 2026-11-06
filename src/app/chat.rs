@@ -305,6 +305,17 @@ fn soft_ink(ink: u32, bg: u32) -> u32 {
         .unwrap_or(ink)
 }
 
+/// A bubble's time without a recolor. On a skin, `faint` sinks into the
+/// bubble (about 1.1:1 on Castle's blue-gray), so Brian's takes the text color
+/// and the lead's `dim`.
+fn plain_stamp(me: bool, skinned: bool, text: Hsla, dim: Hsla, faint: Hsla) -> Hsla {
+    match (skinned, me) {
+        (true, true) => text,
+        (true, false) => dim,
+        (false, _) => faint,
+    }
+}
+
 /// The selected circle row's fill: the rail's `surface`, or the recolored
 /// bubble's fill washed thin where the scheme has one, so the row stands out
 /// on a textured rail.
@@ -3476,7 +3487,18 @@ impl SeanceApp {
                     .items_center()
                     .gap_1()
                     .text_xs()
-                    .text_color(ink.map_or_else(SeancePalette::text_faint, |i| hex(i.soft)))
+                    .text_color(ink.map_or_else(
+                        || {
+                            plain_stamp(
+                                me,
+                                crate::theme::active().texture.is_some(),
+                                SeancePalette::text(),
+                                SeancePalette::text_dim(),
+                                SeancePalette::text_faint(),
+                            )
+                        },
+                        |i| hex(i.soft),
+                    ))
                     .child(stamp)
                     .children(self.tick_marks(m, read, ink)),
             );
@@ -4502,6 +4524,15 @@ mod tests {
                 assert_eq!(me_ink(true, s.me_bubble), None, "{}", s.id);
             }
         }
+    }
+
+    #[test]
+    fn a_skin_lifts_plain_bubble_times_and_flat_themes_stay_faint() {
+        let (text, dim, faint) = (hex(0xE6E1D6), hex(0xACA79D), hex(0x75716A));
+        assert_eq!(plain_stamp(true, true, text, dim, faint), text);
+        assert_eq!(plain_stamp(false, true, text, dim, faint), dim);
+        assert_eq!(plain_stamp(true, false, text, dim, faint), faint);
+        assert_eq!(plain_stamp(false, false, text, dim, faint), faint);
     }
 
     #[test]
