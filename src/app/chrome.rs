@@ -652,8 +652,8 @@ pub(super) fn render_pane(
                     SeancePalette::bg_elevated()
                 })
                 // Skin texture, lighter on the active strip so its fill
-                // still marks focus.
-                .relative()
+                // still marks focus. Flat schemes keep the old layout.
+                .when(crate::theme::active().texture.is_some(), |d| d.relative())
                 .children(crate::skin::backdrop(if is_active { 0.35 } else { 0.8 }))
                 .when(is_zoomed, |d| {
                     d.child(

@@ -46,7 +46,7 @@ pub fn active() -> &'static Scheme {
 
 /// Point the palette at a scheme without touching gpui-component's theme,
 /// for render tests that build plain gpui elements.
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 pub fn set_active_for_test(id: &str) {
     ACTIVE.store(
         schemes::index_of(id).expect("known scheme"),
