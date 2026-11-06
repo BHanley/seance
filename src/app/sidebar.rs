@@ -1442,6 +1442,7 @@ impl SeanceApp {
             .bg(SeancePalette::bg_elevated())
             .border_r_1()
             .border_color(SeancePalette::border())
+            .children(crate::skin::backdrop(1.0))
             .child(
                 // Brand header: the name on top, the new-space/circle buttons
                 // tucked under it so a narrow rail never squeezes either.

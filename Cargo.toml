@@ -42,6 +42,8 @@ alacritty_terminal = { git = "https://github.com/zed-industries/alacritty", rev 
 
 seance-core = { workspace = true }
 anyhow = "1"
+# Skin tiles (PNG) decode; same version gpui already pulls in.
+image = { version = "0.25", default-features = false, features = ["png"] }
 futures = "0.3"
 serde = { workspace = true }
 serde_json = { workspace = true }

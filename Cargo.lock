@@ -5769,6 +5769,7 @@ dependencies = [
  "gpui",
  "gpui-component",
  "gpui_platform",
+ "image",
  "libc",
  "markdown",
  "notify 8.2.0",
@@ -5787,6 +5788,7 @@ version = "0.27.0"
 dependencies = [
  "base64",
  "flate2",
+ "image",
  "serde",
  "serde_json",
 ]

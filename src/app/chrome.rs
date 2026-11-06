@@ -578,8 +578,15 @@ pub(super) fn render_pane(
         .flex_col()
         .rounded_md()
         // Always 2px border so focus only recolors — never reflows terminal
-        // cols (border_1 → border_2 used to steal a cell of width).
-        .border_2()
+        // cols (border_1 → border_2 used to steal a cell of width). A
+        // thin-lined skin keeps 1px for every state, so the same holds.
+        .map(|d| {
+            if crate::skin::thin_lines() {
+                d.border_1()
+            } else {
+                d.border_2()
+            }
+        })
         .border_color(frame_border)
         .bg(SeancePalette::bg())
         .opacity(if rail_hover {
@@ -644,6 +651,10 @@ pub(super) fn render_pane(
                 } else {
                     SeancePalette::bg_elevated()
                 })
+                // Skin texture, lighter on the active strip so its fill
+                // still marks focus.
+                .relative()
+                .children(crate::skin::backdrop(if is_active { 0.35 } else { 0.8 }))
                 .when(is_zoomed, |d| {
                     d.child(
                         div()
