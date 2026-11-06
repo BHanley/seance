@@ -28,6 +28,7 @@ from PIL import Image
 
 SIZE = 256
 SEED = 11
+STAIN_GAIN = 0.8  # neon staining turned down 20%
 
 # Palette, darkest first within each group.
 SEAM_DEEP = 0x010003
@@ -255,7 +256,7 @@ def build():
     img[on & (rust <= 0.5) & (rust > 0.25)] = rgb(RUST[1])
     img[on & (rust <= 0.25)] = rgb(RUST[0])
 
-    for stain, ramp in ((stain_p, PINK), (stain_c, CYAN)):
+    for stain, ramp in ((stain_p * STAIN_GAIN, PINK), (stain_c * STAIN_GAIN, CYAN)):
         on = stain * 0.95 > THRESH
         img[on & (stain <= 0.45)] = rgb(ramp[0])
         img[on & (stain > 0.45) & (stain <= 0.75)] = rgb(ramp[1])
