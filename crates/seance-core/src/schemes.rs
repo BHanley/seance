@@ -64,6 +64,10 @@ pub struct Texture {
     /// Scales every surface's backdrop strength (`src/skin.rs`), so each
     /// skin can sit at its own weight; capped at fully opaque.
     pub strength: f32,
+    /// Carved look: controls and bubbles are square plates with hard pixel
+    /// bevels cut from the wall, and Chat's messages sit on dim stone
+    /// (`src/carve.rs`). Other skins keep their stock rounded widgets.
+    pub carved: bool,
 }
 
 /// Brian's own chat bubbles, recolored by a scheme: `bg` fills the bubble
@@ -87,6 +91,8 @@ pub struct Scheme {
     pub texture: Option<Texture>,
     /// `None` paints Brian's bubbles in the palette's `violet_dim`.
     pub me_bubble: Option<MeBubble>,
+    /// The lead's bubbles recolored the same way; `None` keeps `surface`.
+    pub lead_bubble: Option<MeBubble>,
 }
 
 /// Terminal source colors in the order the scheme specs list them.
@@ -237,6 +243,7 @@ pub const CASTLE_STONE: Texture = Texture {
     frame: 0x141415,
     lamp: Some(Lamp::Torch),
     strength: 1.0,
+    carved: true,
 };
 
 // Neon District: grimy riveted steel in near-black violet, hot neon for the
@@ -254,6 +261,7 @@ pub const NEON_STEEL: Texture = Texture {
     frame: 0x1B1A26,
     lamp: Some(Lamp::Tube),
     strength: 1.0,
+    carved: false,
 };
 
 /// Every scheme, in menu order.
@@ -266,6 +274,7 @@ pub static SCHEMES: [Scheme; 14] = [
         term: None,
         texture: None,
         me_bubble: None,
+        lead_bubble: None,
     },
     Scheme {
         id: "abyssal",
@@ -282,6 +291,7 @@ pub static SCHEMES: [Scheme; 14] = [
         )),
         texture: None,
         me_bubble: None,
+        lead_bubble: None,
     },
     Scheme {
         id: "ectoplasm",
@@ -298,6 +308,7 @@ pub static SCHEMES: [Scheme; 14] = [
         )),
         texture: None,
         me_bubble: None,
+        lead_bubble: None,
     },
     Scheme {
         id: "ouija",
@@ -314,6 +325,7 @@ pub static SCHEMES: [Scheme; 14] = [
         )),
         texture: None,
         me_bubble: None,
+        lead_bubble: None,
     },
     Scheme {
         id: "monokai",
@@ -330,6 +342,7 @@ pub static SCHEMES: [Scheme; 14] = [
         )),
         texture: None,
         me_bubble: None,
+        lead_bubble: None,
     },
     Scheme {
         id: "tarot",
@@ -346,6 +359,7 @@ pub static SCHEMES: [Scheme; 14] = [
         )),
         texture: None,
         me_bubble: None,
+        lead_bubble: None,
     },
     Scheme {
         id: "mojave",
@@ -362,6 +376,7 @@ pub static SCHEMES: [Scheme; 14] = [
         )),
         texture: None,
         me_bubble: None,
+        lead_bubble: None,
     },
     Scheme {
         id: "riso",
@@ -378,6 +393,7 @@ pub static SCHEMES: [Scheme; 14] = [
         )),
         texture: None,
         me_bubble: None,
+        lead_bubble: None,
     },
     Scheme {
         id: "synth",
@@ -394,6 +410,7 @@ pub static SCHEMES: [Scheme; 14] = [
         )),
         texture: None,
         me_bubble: None,
+        lead_bubble: None,
     },
     Scheme {
         id: "fog",
@@ -410,6 +427,7 @@ pub static SCHEMES: [Scheme; 14] = [
         )),
         texture: None,
         me_bubble: None,
+        lead_bubble: None,
     },
     Scheme {
         id: "parlor",
@@ -426,6 +444,7 @@ pub static SCHEMES: [Scheme; 14] = [
         )),
         texture: None,
         me_bubble: None,
+        lead_bubble: None,
     },
     Scheme {
         id: "herbarium",
@@ -442,6 +461,7 @@ pub static SCHEMES: [Scheme; 14] = [
         )),
         texture: None,
         me_bubble: None,
+        lead_bubble: None,
     },
     Scheme {
         id: "castle",
@@ -457,7 +477,16 @@ pub static SCHEMES: [Scheme; 14] = [
             ]),
         )),
         texture: Some(CASTLE_STONE),
-        me_bubble: None,
+        // Brian's plate is the palette's `violet_dim` darkened 10% so the
+        // chalk ink holds 4.5:1 on it; the lead's is the palette's `surface`.
+        me_bubble: Some(MeBubble {
+            bg: 0x525F75,
+            ink: 0xE6E1D6,
+        }),
+        lead_bubble: Some(MeBubble {
+            bg: 0x3A3A3D,
+            ink: 0xE6E1D6,
+        }),
     },
     Scheme {
         id: "neon-district",
@@ -477,6 +506,7 @@ pub static SCHEMES: [Scheme; 14] = [
             bg: 0xD6168F,
             ink: 0xFFFFFF,
         }),
+        lead_bubble: None,
     },
 ];
 
@@ -596,13 +626,13 @@ mod tests {
     }
 
     #[test]
-    fn only_neon_district_recolors_brians_bubbles_and_its_ink_reads() {
-        let recolored: Vec<_> = SCHEMES
-            .iter()
-            .filter(|s| s.me_bubble.is_some())
-            .map(|s| s.id)
-            .collect();
-        assert_eq!(recolored, ["neon-district"]);
+    fn only_the_skins_recolor_bubbles_and_castle_alone_recolors_the_leads() {
+        let ids = |f: fn(&Scheme) -> bool| -> Vec<_> {
+            SCHEMES.iter().filter(|s| f(s)).map(|s| s.id).collect()
+        };
+        assert_eq!(ids(|s| s.me_bubble.is_some()), ["castle", "neon-district"]);
+        assert_eq!(ids(|s| s.lead_bubble.is_some()), ["castle"]);
+        assert_eq!(ids(|s| s.texture.is_some_and(|t| t.carved)), ["castle"]);
         let b = find("neon-district").unwrap().me_bubble.unwrap();
         assert_eq!((b.bg, b.ink), (0xD6168F, 0xFFFFFF));
         assert!(contrast(b.ink, b.bg) >= 4.5);

@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use gpui::{div, prelude::*, px, Context, SharedString};
 pub(crate) use seance_core::views::ViewMode;
 
+use crate::carve::{self, Cut, Stock};
 use crate::theme::SeancePalette;
 
 use super::util::tip;
@@ -225,19 +226,24 @@ impl SeanceApp {
             .flex_none()
             .flex()
             .flex_row()
-            .p(px(2.))
+            .p(px(if carve::on() { 3. } else { 2. }))
             .gap(px(2.))
-            .rounded_md()
-            .border_1()
-            .border_color(SeancePalette::border())
+            .map(|d| carve::plate(d, SeancePalette::bg(), Stock::Md, Cut::Slot))
+            .when(!carve::on(), |d| {
+                d.border_1().border_color(SeancePalette::border())
+            })
             .children(ViewMode::ALL.map(|mode| {
                 let on = mode == current;
-                div()
-                    .id(SharedString::from(format!("view-{key}-{}", mode.id())))
-                    .flex_1()
+                let fill = SeancePalette::surface();
+                let tab = div().id(SharedString::from(format!("view-{key}-{}", mode.id())));
+                let tab = if on {
+                    carve::plate(tab, fill, Stock::Sm, Cut::Control)
+                } else {
+                    carve::corners(tab, Stock::Sm)
+                };
+                tab.flex_1()
                     .min_w_0()
                     .px_1p5()
-                    .rounded_sm()
                     .flex()
                     .justify_center()
                     .text_xs()

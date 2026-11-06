@@ -2,6 +2,7 @@ mod agency;
 mod agents;
 mod app;
 mod caps;
+mod carve;
 mod chain;
 mod chat_api;
 mod clipboard;

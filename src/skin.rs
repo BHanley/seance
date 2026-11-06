@@ -79,7 +79,29 @@ pub fn backdrop(opacity: f32) -> Option<impl IntoElement> {
             .child(
                 canvas(
                     |_, _, _| {},
-                    move |bounds, _, window, _| paint_tiles(tex, bounds, window),
+                    move |bounds, _, window, _| paint_tiles(tex, bounds, window, false),
+                )
+                .size_full(),
+            ),
+    )
+}
+
+/// A texture layer for one element (a plate), at `opacity`: unlike
+/// [`backdrop`] its stones start at the element's own corner, so the wear
+/// moves with the element instead of swimming under it as it scrolls.
+pub fn worn(opacity: f32) -> Option<impl IntoElement> {
+    let tex = active()?;
+    Some(
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .opacity(opacity.min(1.0))
+            .child(
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| paint_tiles(tex, bounds, window, true),
                 )
                 .size_full(),
             ),
@@ -87,8 +109,14 @@ pub fn backdrop(opacity: f32) -> Option<impl IntoElement> {
 }
 
 /// Tiles are anchored to the window origin, so the rail and every title
-/// strip share one grid of stones.
-fn paint_tiles(tex: &'static Texture, bounds: Bounds<Pixels>, window: &mut Window) {
+/// strip share one grid of stones; `own_corner` starts them at the bounds'
+/// corner instead (see [`worn`]).
+fn paint_tiles(
+    tex: &'static Texture,
+    bounds: Bounds<Pixels>,
+    window: &mut Window,
+    own_corner: bool,
+) {
     let scale = window.scale_factor();
     let k = scale.round().max(1.0) as u32;
     let Some(image) = render_image(tex, k) else {
@@ -100,8 +128,17 @@ fn paint_tiles(tex: &'static Texture, bounds: Bounds<Pixels>, window: &mut Windo
     let step = (tex.size * k) as f32 / scale;
     let x_end = f32::from(bounds.origin.x + bounds.size.width);
     let y_end = f32::from(bounds.origin.y + bounds.size.height);
-    let x0 = (f32::from(bounds.origin.x) / step).floor() * step;
-    let y0 = (f32::from(bounds.origin.y) / step).floor() * step;
+    let snap = |v: f32| {
+        if own_corner {
+            v.round()
+        } else {
+            (v / step).floor() * step
+        }
+    };
+    let (x0, y0) = (
+        snap(f32::from(bounds.origin.x)),
+        snap(f32::from(bounds.origin.y)),
+    );
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
         let mut y = y0;
         while y < y_end {
@@ -194,6 +231,7 @@ mod tests {
 #[cfg(all(test, target_os = "macos"))]
 mod shots {
     use super::*;
+    use crate::carve::{self, Cut, Stock};
     use crate::theme::SeancePalette as P;
     use crate::torch::Torch;
     use gpui::prelude::FluentBuilder as _;
@@ -624,14 +662,13 @@ mod shots {
             )
         });
         let chip = |text: &str, fill: bool| {
-            div()
+            carve::plate(div(), P::surface(), Stock::Sm, Cut::Control)
                 .flex_none()
                 .px_2()
                 .py_0p5()
-                .rounded_sm()
                 .text_xs()
                 .text_color(P::text_dim())
-                .when(fill, |d| d.bg(P::surface()))
+                .when(fill || carve::on(), |d| d.bg(P::surface()))
                 .child(text.to_string())
         };
         div()
@@ -680,7 +717,16 @@ mod shots {
     const CHAT_HEADER_W: f32 = 900. - 20. - 220.;
 
     fn chat_view(id: &str, ink_override: Option<MeBubble>, rail_w: f32) -> impl IntoElement {
-        let custom = ink_override.or(crate::theme::active().me_bubble);
+        // The selected row's pink wash and bar are Neon's; castle's frame is
+        // its chain.
+        let custom = ink_override
+            .or(crate::theme::active().me_bubble)
+            .filter(|_| neon());
+        // Brian's bubble takes the override; every other follows the scheme.
+        let ink_of = move |me: bool| match ink_override {
+            Some(c) if me => crate::app::chat::me_ink(true, Some(c)),
+            _ => crate::app::chat::active_me_ink(me),
+        };
         let torches = torches();
         let (ask, reply) = if neon() {
             (
@@ -713,22 +759,21 @@ mod shots {
                 )
                 .child(div().text_color(P::text_faint()).child(note.to_string()))
         };
-        // The mock keeps its flame bubble for Brian where the scheme has no
-        // `me_bubble`; one that has it paints as the app does.
+        // Brian's bubble is the palette's `violet_dim` where the scheme has no
+        // `me_bubble`, as in the app; one that has it paints as the app does.
         let bubble = |me: bool, text: &str| {
             let (fill, words) = crate::app::chat::bubble_fill(
                 me,
-                crate::app::chat::me_ink(me, custom),
-                P::flame(),
+                ink_of(me),
+                P::violet_dim(),
                 P::surface(),
-                if me { P::bg() } else { P::text() },
+                P::text(),
             );
             div().flex().when(me, |d| d.justify_end()).child(
-                div()
+                carve::worn_plate(div(), fill, Stock::Lg)
                     .max_w(px(320.))
                     .px_3()
                     .py_2()
-                    .rounded_lg()
                     .text_sm()
                     .text_color(words)
                     .bg(fill)
@@ -766,20 +811,22 @@ mod shots {
                     )
                     .child(
                         // The view switch, as `render_view_switch` draws it.
-                        div()
+                        carve::plate(div(), P::bg(), Stock::Md, Cut::Slot)
                             .flex()
-                            .p(px(2.))
+                            .p(px(if carve::on() { 3. } else { 2. }))
                             .gap(px(2.))
-                            .rounded_md()
-                            .border_1()
-                            .border_color(P::border())
+                            .when(!carve::on(), |d| d.border_1().border_color(P::border()))
                             .children(["Classic", "Stage", "Chat", "Wall"].map(|m| {
                                 let on = m == "Chat";
-                                div()
-                                    .flex_1()
+                                let tab = div();
+                                let tab = if on {
+                                    carve::plate(tab, P::surface(), Stock::Sm, Cut::Control)
+                                } else {
+                                    carve::corners(tab, Stock::Sm)
+                                };
+                                tab.flex_1()
                                     .flex()
                                     .justify_center()
-                                    .rounded_sm()
                                     .text_xs()
                                     .when(on, |d| d.bg(P::surface()).text_color(P::flame()))
                                     .when(!on, |d| d.text_color(P::text_dim()))
@@ -839,12 +886,11 @@ mod shots {
                     .flex()
                     .gap_1p5()
                     .children(["ok", "go", "status?"].map(|t| {
-                        div()
+                        carve::plate(div(), P::surface(), Stock::Full, Cut::Control)
                             .px_2()
                             .py_0p5()
-                            .rounded_full()
-                            .border_1()
-                            .border_color(P::border())
+                            .when(carve::on(), |d| d.bg(P::surface()))
+                            .when(!carve::on(), |d| d.border_1().border_color(P::border()))
                             .text_xs()
                             .text_color(P::text_dim())
                             .child(t)
@@ -855,32 +901,28 @@ mod shots {
                     .flex()
                     .gap_2()
                     .child(
-                        div()
+                        carve::plate(div(), P::surface(), Stock::Md, Cut::Control)
                             .px_2()
                             .py_1p5()
-                            .rounded_md()
                             .bg(P::surface())
                             .text_sm()
                             .child("📎"),
                     )
                     .child(
-                        div()
+                        carve::plate(div(), P::bg(), Stock::Md, Cut::Slot)
                             .flex_1()
                             .px_2()
                             .py_1p5()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(P::border())
+                            .when(!carve::on(), |d| d.border_1().border_color(P::border()))
                             .bg(P::bg())
                             .text_sm()
                             .text_color(P::text_faint())
                             .child("Message the lead"),
                     )
                     .child(
-                        div()
+                        carve::plate(div(), P::flame(), Stock::Md, Cut::Control)
                             .px_3()
                             .py_1p5()
-                            .rounded_md()
                             .bg(P::flame())
                             .text_sm()
                             .text_color(P::bg())
@@ -914,6 +956,9 @@ mod shots {
                             .flex()
                             .flex_col()
                             .gap_2()
+                            .when(carve::on(), |d| {
+                                d.relative().children(backdrop(carve::STONE))
+                            })
                             .child(bubble(false, ask))
                             .child(bubble(true, reply))
                             .child(bubble(false, "Both written to shots/.")),
@@ -930,7 +975,10 @@ mod shots {
         let ask = "Stone is on the chat rail now. Run the shots for castle, neon and one flat scheme, then post them here? The quote above a reply stops at three lines, so this long ask shows the cut.";
         let arrow = |me: bool| hovered.then(|| reply_arrow(i64::from(me)).opacity(1.));
         let bubble = |me: bool, quote: bool, text: &str| {
-            let ink = me_ink(me, custom.or(crate::theme::active().me_bubble));
+            let ink = match custom {
+                Some(c) if me => me_ink(true, Some(c)),
+                _ => crate::app::chat::active_me_ink(me),
+            };
             let (fill, words) = bubble_fill(me, ink, P::violet_dim(), P::surface(), P::text());
             div()
                 .flex()
@@ -938,11 +986,10 @@ mod shots {
                 .when(me, |d| d.justify_end())
                 .when(me, |d| d.children(arrow(me)))
                 .child(
-                    div()
+                    carve::worn_plate(div(), fill, Stock::Lg)
                         .max_w(px(260.))
                         .px_3()
                         .py_2()
-                        .rounded_lg()
                         .text_sm()
                         .text_color(words)
                         .bg(fill)
@@ -1174,29 +1221,50 @@ mod shots {
         eprintln!("wrote {}", out.display());
     }
 
-    /// The castle chain on the selected row: the whole Chat view, a tight
-    /// crop of the row, and the narrowest sidebar's crop.
+    /// Castle's carved look beside today's: the whole Chat view each way, a
+    /// reply bubble over the composer, the composer, and the narrowest rail.
     #[test]
     #[ignore = "writes PNGs via headless Metal; run with --ignored"]
-    fn castle_chain_shots() {
+    fn castle_carved_shots() {
         let dir = std::env::var("SKIN_SHOTS_DIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| std::path::PathBuf::from("shots"));
         std::fs::create_dir_all(&dir).unwrap();
-        let whole = dir.join("castle-chain-chat.png");
+        let today = |on: bool| carve::TODAY.with(|t| t.set(on));
+        today(true);
+        render(
+            Scene::Chat("castle"),
+            900.,
+            460.,
+            &dir.join("castle-today-chat.png"),
+        );
+        render(
+            Scene::ChatReply(vec!["castle"], false),
+            330.,
+            460.,
+            &dir.join("castle-today-reply.png"),
+        );
+        today(false);
+        let whole = dir.join("castle-carved-chat.png");
         render(Scene::Chat("castle"), 900., 460., &whole);
-        // The harness renders at 2x: the selected row is at 10..230 pt wide.
-        let crop = |from: &std::path::Path, to: &str, x: u32, w: u32| {
+        render(
+            Scene::ChatReply(vec!["castle"], false),
+            330.,
+            460.,
+            &dir.join("castle-carved-reply.png"),
+        );
+        let narrow = dir.join("castle-carved-narrow-chat.png");
+        render(Scene::ChatNarrow("castle"), 560., 460., &narrow);
+        // The harness renders at 2x: crop the composer and the selected row.
+        let crop = |from: &std::path::Path, to: &str, x: u32, y: u32, w: u32, h: u32| {
             image::open(from)
                 .unwrap()
-                .crop_imm(x, 300, w, 92)
+                .crop_imm(x, y, w, h)
                 .save(dir.join(to))
                 .unwrap();
         };
-        crop(&whole, "castle-chain-row.png", 20, 440);
-        let narrow = dir.join("castle-chain-narrow-chat.png");
-        render(Scene::ChatNarrow("castle"), 560., 460., &narrow);
-        crop(&narrow, "castle-chain-narrow-row.png", 20, 320);
+        crop(&whole, "castle-carved-composer.png", 460, 690, 1320, 230);
+        crop(&whole, "castle-carved-row.png", 20, 270, 440, 150);
     }
 
     /// Neon District's bubble ink options, each as the whole Chat view with

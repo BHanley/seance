@@ -21,6 +21,7 @@ use gpui_component::{StyledExt as _, WindowExt as _};
 use regex::Regex;
 use seance_core::schemes;
 
+use crate::carve::{self, Cut, Stock};
 use crate::chat_api::{
     self, Attachment, CircleRow, Circles, Hit, Msg, PaneRow, Progress, ReplyRef, Thread, Usage,
     UsageWindow,
@@ -331,9 +332,13 @@ pub(crate) fn selected_row_bar(custom: Option<schemes::MeBubble>) -> Option<gpui
     )
 }
 
-/// [`me_ink`] for the active scheme.
+/// [`me_ink`] for the active scheme: Brian's plate, or the lead's.
 pub(crate) fn active_me_ink(me: bool) -> Option<MeInk> {
-    me_ink(me, crate::theme::active().me_bubble)
+    let s = crate::theme::active();
+    if carve::today() && s.texture.as_ref().is_some_and(|t| t.carved) {
+        return None;
+    }
+    me_ink(true, if me { s.me_bubble } else { s.lead_bubble })
 }
 
 /// A bubble's fill and text color: the recolored ones when `ink` is set,
@@ -448,7 +453,7 @@ pub(crate) fn quote_block(from: &str, text: &str, ink: Option<MeInk>) -> gpui::D
         .mb_1()
         .pl_2()
         .py_0p5()
-        .rounded_sm()
+        .map(|d| carve::corners(d, Stock::Sm))
         .border_l_2()
         .border_color(bar)
         .bg(fill)
@@ -2553,7 +2558,10 @@ impl SeanceApp {
         let ws = c.ws.clone();
         let (menu_ws, weak) = (c.ws.clone(), cx.weak_entity());
         let pulse = 0.45 + 0.55 * (((now_ms() / 300) % 2) as f32);
-        let me = crate::theme::active().me_bubble;
+        // Neon's wash and bar; a carved skin frames the row with its chain.
+        let me = crate::theme::active()
+            .me_bubble
+            .filter(|_| !crate::skin::active().is_some_and(|t| t.carved));
         div()
             .id(SharedString::from(format!("chat-circle-{}", c.ws)))
             .flex_none()
@@ -2620,7 +2628,7 @@ impl SeanceApp {
                     div()
                         .flex_none()
                         .px_1p5()
-                        .rounded_full()
+                        .map(|d| carve::corners(d, Stock::Full))
                         .bg(SeancePalette::flame())
                         .text_xs()
                         .text_color(SeancePalette::bg())
@@ -2781,13 +2789,12 @@ impl SeanceApp {
             .children(say.map(|line| {
                 // Deferred, so the thread below cannot paint over it.
                 gpui::deferred(
-                    div()
+                    carve::plate(div(), SeancePalette::bg_elevated(), Stock::Md, Cut::Control)
                         .absolute()
                         .top(px(34.))
                         .left(px(0.))
                         .px_2()
                         .py_1()
-                        .rounded_md()
                         .border_1()
                         .border_color(SeancePalette::border())
                         .bg(SeancePalette::bg_elevated())
@@ -2908,54 +2915,61 @@ impl SeanceApp {
         let chip_lead = lead.clone();
         header = header.when(!read_only, |header| {
             header.child(
-                div()
-                    .id("chat-todo")
-                    .flex_none()
-                    .px_2()
-                    .py_0p5()
-                    .rounded_sm()
-                    .text_xs()
-                    .text_color(if tasks_open {
-                        SeancePalette::bg()
-                    } else {
-                        SeancePalette::text_dim()
-                    })
-                    .when(tasks_open, |d| d.bg(SeancePalette::violet()))
-                    .hover(|s| s.text_color(SeancePalette::flame()))
-                    .cursor_pointer()
-                    .tooltip(tip("the lead's tasks"))
-                    .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
-                        if let Some(lead) = chip_lead.as_deref() {
-                            this.toggle_tasks_popover(lead, ev.position(), cx);
-                        }
-                    }))
-                    .child(format!("☑ {todo}"))
-                    .when(crate::skin::torches(), |d| {
-                        d.relative().child(decor::by_tasks(self.torch_frame))
-                    }),
+                carve::plate(
+                    div().id("chat-todo"),
+                    SeancePalette::surface(),
+                    Stock::Sm,
+                    Cut::Control,
+                )
+                .flex_none()
+                .px_2()
+                .py_0p5()
+                .when(carve::on() && !tasks_open, |d| {
+                    d.bg(SeancePalette::surface())
+                })
+                .text_xs()
+                .text_color(if tasks_open {
+                    SeancePalette::bg()
+                } else {
+                    SeancePalette::text_dim()
+                })
+                .when(tasks_open, |d| d.bg(SeancePalette::violet()))
+                .hover(|s| s.text_color(SeancePalette::flame()))
+                .cursor_pointer()
+                .tooltip(tip("the lead's tasks"))
+                .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
+                    if let Some(lead) = chip_lead.as_deref() {
+                        this.toggle_tasks_popover(lead, ev.position(), cx);
+                    }
+                }))
+                .child(format!("☑ {todo}"))
+                .when(crate::skin::torches(), |d| {
+                    d.relative().child(decor::by_tasks(self.torch_frame))
+                }),
             )
         });
         header = header.when(!read_only, |header| {
             header.child(
-                div()
-                    .id("chat-terminal")
-                    .flex_none()
-                    .px_2()
-                    .py_0p5()
-                    .rounded_sm()
-                    .text_xs()
-                    .text_color(SeancePalette::text_dim())
-                    .bg(SeancePalette::surface())
-                    .hover(|s| s.text_color(SeancePalette::flame()))
-                    .cursor_pointer()
-                    .tooltip(tip("flip to Classic, on this circle's lead"))
-                    .on_click({
-                        let ws = ws.clone();
-                        cx.listener(move |this, _, window, cx| {
-                            this.chat_show_terminal(&ws, window, cx)
-                        })
-                    })
-                    .child("show terminal"),
+                carve::plate(
+                    div().id("chat-terminal"),
+                    SeancePalette::surface(),
+                    Stock::Sm,
+                    Cut::Control,
+                )
+                .flex_none()
+                .px_2()
+                .py_0p5()
+                .text_xs()
+                .text_color(SeancePalette::text_dim())
+                .bg(SeancePalette::surface())
+                .hover(|s| s.text_color(SeancePalette::flame()))
+                .cursor_pointer()
+                .tooltip(tip("flip to Classic, on this circle's lead"))
+                .on_click({
+                    let ws = ws.clone();
+                    cx.listener(move |this, _, window, cx| this.chat_show_terminal(&ws, window, cx))
+                })
+                .child("show terminal"),
             )
         });
 
@@ -2978,23 +2992,26 @@ impl SeanceApp {
         let win = ThreadWindow::new(all.len(), self.chat.shown);
         if win.has_earlier() {
             thread = thread.child(
-                div()
-                    .id("chat-earlier")
-                    .flex_none()
-                    .self_center()
-                    .px_3()
-                    .py_1()
-                    .rounded_md()
-                    .text_xs()
-                    .text_color(SeancePalette::text_dim())
-                    .bg(SeancePalette::surface())
-                    .hover(|s| s.text_color(SeancePalette::flame()))
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, _, cx| this.chat_show_earlier(cx)))
-                    .child(format!(
-                        "Show earlier ({} more)",
-                        win.start.min(THREAD_STEP)
-                    )),
+                carve::plate(
+                    div().id("chat-earlier"),
+                    SeancePalette::surface(),
+                    Stock::Md,
+                    Cut::Control,
+                )
+                .flex_none()
+                .self_center()
+                .px_3()
+                .py_1()
+                .text_xs()
+                .text_color(SeancePalette::text_dim())
+                .bg(SeancePalette::surface())
+                .hover(|s| s.text_color(SeancePalette::flame()))
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _, _, cx| this.chat_show_earlier(cx)))
+                .child(format!(
+                    "Show earlier ({} more)",
+                    win.start.min(THREAD_STEP)
+                )),
             );
         }
         for (i, m) in all.iter().enumerate().skip(win.start) {
@@ -3028,6 +3045,9 @@ impl SeanceApp {
                     .absolute()
                     .size_full(),
                 )
+            })
+            .when(carve::on(), |d| {
+                d.relative().children(crate::skin::backdrop(carve::STONE))
             })
             .child(header)
             .children(usage_strip(
@@ -3104,17 +3124,22 @@ impl SeanceApp {
         let typed = input.read(cx).value().to_string();
         let ws = self.chat.selected.clone().unwrap_or_default();
         let chip = |id: SharedString| {
-            div()
-                .id(id)
-                .px_2()
-                .py_0p5()
-                .rounded_full()
-                .border_1()
-                .border_color(SeancePalette::border())
-                .text_xs()
-                .text_color(SeancePalette::text_dim())
-                .hover(|s| s.text_color(SeancePalette::flame()))
-                .cursor_pointer()
+            carve::plate(
+                div().id(id),
+                SeancePalette::surface(),
+                Stock::Full,
+                Cut::Control,
+            )
+            .px_2()
+            .py_0p5()
+            .when(carve::on(), |d| d.bg(SeancePalette::surface()))
+            .when(!carve::on(), |d| {
+                d.border_1().border_color(SeancePalette::border())
+            })
+            .text_xs()
+            .text_color(SeancePalette::text_dim())
+            .hover(|s| s.text_color(SeancePalette::flame()))
+            .cursor_pointer()
         };
         // Above the input: quick replies while it is empty, or the panes an
         // `@` at the start can name.
@@ -3199,38 +3224,48 @@ impl SeanceApp {
                     .items_end()
                     .gap_2()
                     .child(
-                        div()
-                            .id("chat-attach")
-                            .flex_none()
-                            .px_2()
-                            .py_1p5()
-                            .rounded_md()
-                            .text_sm()
-                            .text_color(SeancePalette::text_dim())
-                            .bg(SeancePalette::surface())
-                            .hover(|s| s.text_color(SeancePalette::flame()))
-                            .cursor_pointer()
-                            .tooltip(tip("send a file or picture"))
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.chat_attach(window, cx)),
-                            )
-                            .child("📎"),
+                        carve::plate(
+                            div().id("chat-attach"),
+                            SeancePalette::surface(),
+                            Stock::Md,
+                            Cut::Control,
+                        )
+                        .flex_none()
+                        .px_2()
+                        .py_1p5()
+                        .text_sm()
+                        .text_color(SeancePalette::text_dim())
+                        .bg(SeancePalette::surface())
+                        .hover(|s| s.text_color(SeancePalette::flame()))
+                        .cursor_pointer()
+                        .tooltip(tip("send a file or picture"))
+                        .on_click(cx.listener(|this, _, window, cx| this.chat_attach(window, cx)))
+                        .child("📎"),
                     )
-                    .child(div().flex_1().min_w_0().child(Input::new(input)))
                     .child(
-                        div()
-                            .id("chat-send")
-                            .flex_none()
-                            .px_3()
-                            .py_1p5()
-                            .rounded_md()
-                            .text_sm()
-                            .text_color(SeancePalette::bg())
-                            .bg(SeancePalette::flame())
-                            .hover(|s| s.bg(SeancePalette::flame_dim()))
-                            .cursor_pointer()
-                            .on_click(cx.listener(|this, _, window, cx| this.chat_send(window, cx)))
-                            .child("Send"),
+                        carve::carve(div(), SeancePalette::bg(), Cut::Slot)
+                            .flex_1()
+                            .min_w_0()
+                            .when(carve::on(), |d| d.bg(SeancePalette::bg()).px_1())
+                            .child(Input::new(input).appearance(!carve::on())),
+                    )
+                    .child(
+                        carve::plate(
+                            div().id("chat-send"),
+                            SeancePalette::flame(),
+                            Stock::Md,
+                            Cut::Control,
+                        )
+                        .flex_none()
+                        .px_3()
+                        .py_1p5()
+                        .text_sm()
+                        .text_color(SeancePalette::bg())
+                        .bg(SeancePalette::flame())
+                        .hover(|s| s.bg(SeancePalette::flame_dim()))
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, window, cx| this.chat_send(window, cx)))
+                        .child("Send"),
                     ),
             )
             .into_any_element()
@@ -3275,7 +3310,7 @@ impl SeanceApp {
             .w(px(IMG_MAX_W))
             .h(px(IMG_MAX_W * 9. / 16.))
             .px_3()
-            .rounded_md()
+            .map(|d| carve::corners(d, Stock::Md))
             .overflow_hidden()
             .bg(fill)
             .flex()
@@ -3365,7 +3400,7 @@ impl SeanceApp {
                 .flex_none()
                 .w(px(bw))
                 .h(px(bh))
-                .rounded_md()
+                .map(|d| carve::corners(d, Stock::Md))
                 .overflow_hidden()
                 .bg(SeancePalette::bg().opacity(0.4));
             body = body.child(match found {
@@ -3459,11 +3494,10 @@ impl SeanceApp {
             SeancePalette::surface(),
             SeancePalette::text(),
         );
-        let bubble = div()
+        let bubble = carve::worn_plate(div(), fill, Stock::Lg)
             .max_w(relative(0.72))
             .px_3()
             .py_2()
-            .rounded_lg()
             .text_sm()
             .text_color(words)
             .bg(fill)
@@ -3577,29 +3611,32 @@ impl SeanceApp {
             .children(m.choices.iter().enumerate().map(|(i, choice)| {
                 let is_picked = picked.as_deref() == Some(choice.as_str());
                 let lead_pick = i == 0 && picked.is_none();
-                let pill = div()
-                    .id(SharedString::from(format!("choice-{id}-{i}")))
-                    .px_3()
-                    .py_1()
-                    .rounded_full()
-                    .text_sm()
-                    .border_1()
-                    .border_color(if is_picked || lead_pick {
-                        SeancePalette::violet()
-                    } else {
-                        SeancePalette::border()
-                    })
-                    .text_color(if is_picked {
-                        SeancePalette::bg()
-                    } else if lead_pick {
-                        SeancePalette::violet()
-                    } else {
-                        SeancePalette::text()
-                    })
-                    .when(is_picked, |d| d.bg(SeancePalette::violet()))
-                    .when(lead_pick, |d| d.bg(SeancePalette::violet().opacity(0.14)))
-                    .when(picked.is_some() && !is_picked, |d| d.opacity(0.4))
-                    .child(choice.clone());
+                let pill = carve::plate(
+                    div().id(SharedString::from(format!("choice-{id}-{i}"))),
+                    SeancePalette::surface(),
+                    Stock::Full,
+                    Cut::Control,
+                )
+                .px_3()
+                .py_1()
+                .text_sm()
+                .border_1()
+                .border_color(if is_picked || lead_pick {
+                    SeancePalette::violet()
+                } else {
+                    SeancePalette::border()
+                })
+                .text_color(if is_picked {
+                    SeancePalette::bg()
+                } else if lead_pick {
+                    SeancePalette::violet()
+                } else {
+                    SeancePalette::text()
+                })
+                .when(is_picked, |d| d.bg(SeancePalette::violet()))
+                .when(lead_pick, |d| d.bg(SeancePalette::violet().opacity(0.14)))
+                .when(picked.is_some() && !is_picked, |d| d.opacity(0.4))
+                .child(choice.clone());
                 if picked.is_some() {
                     return pill;
                 }

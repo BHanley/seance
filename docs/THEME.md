@@ -299,3 +299,31 @@ Color transforms (`.opacity/.lighten/.darken`) come from `gpui_component`'s
    `activity.rs`, `menus.rs`, `probe.rs`). Values currently match; there is no
    compile-time link, so a change here must be mirrored there by hand.
 ```
+
+## Carved stone (`Texture::carved`, castle)
+
+A skin with `carved: true` cuts its widgets from the wall (`src/carve.rs`).
+Builders call `carve::plate`, `corners`, `carve` or `worn_plate`; a scheme
+that does not carve gets the stock rounded widget back from the same call.
+
+- **Corners and bevels.** Square. A bevel is one canvas of whole-pixel strips:
+  a 1 px dark outline, then a lit top and left and a shadowed bottom and
+  right (2 px on message plates, 1 px on buttons, tabs and chips; the
+  composer and the view switch are slots, lit side below). No blur, gradient
+  or transparency. Covered: bubbles, header buttons, "Show earlier", quick
+  reply chips, choice pills, attach and Send, the composer, the view switch,
+  the popover. Picture and video frames and quote blocks are square.
+- **Plates.** `me_bubble` is the palette's `violet_dim` darkened 10%
+  (`#525F75`, chalk ink 4.9:1; stock `violet_dim` was 4.2:1); `lead_bubble` is
+  the palette's `surface` (`#3A3A3D`). Both take the stone tile at 45% from
+  their own corner (so the wear moves with the plate), plus the bevel.
+  Worst case over the tile's brightest pixel: ink 5.4 (Brian) and 7.4 (lead),
+  time and ticks 4.9 and 5.3, quote text on its tint 5.9 and 9.7.
+- **Stone behind messages.** The tile at 55% over the ground, painted by
+  `skin::backdrop` anchored to the window, so it stays fixed while the thread
+  scrolls. Over its brightest pixel: text 8.8, dim text 4.8. Faint text (the
+  palette's own `text_faint`) is 2.4, as it is on the flat ground (3.5).
+- **Selected row.** The chain frames it (3 pt texels, rings 5 texels tall,
+  hanging 9 pt over the row's top and bottom, deferred so it paints above its
+  neighbours). Neon's wash and bar are for schemes that recolor bubbles and
+  do not carve.
