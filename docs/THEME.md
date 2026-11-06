@@ -1,6 +1,6 @@
 # seance — theme & branding
 
-seance ships thirteen color schemes (see [Schemes](#schemes)); the default, and
+seance ships fourteen color schemes (see [Schemes](#schemes)); the default, and
 the one this page's palette tables describe, is **candlelit**.
 
 Aesthetic: **candlelit**. A dark room lit by one candle — deep warm charcoal
@@ -65,10 +65,12 @@ name a scheme.
 | `parlor` | Parlor (light) | `#CDC3B2` | `#8A2419` | `#24527A` |
 | `herbarium` | Herbarium (light) | `#BDC5B3` | `#8E3B14` | `#43407F` |
 | `castle` | Castle (skin) | `#1B1B1D` | `#E39A43` | `#93A6C2` |
+| `neon-district` | Neon District (skin) | `#04010A` | `#FF2FB5` | `#12F7FF` |
 
 **Skins.** A scheme may also carry a `texture` (`Texture` in
 `seance-core/src/schemes.rs`): a seamless square PNG tile, one texel per
-logical pixel, plus the stone frame color and a `torches` flag. Castle is the
+logical pixel, plus the frame color and a `lamp` (`Lamp::Torch`,
+`Lamp::Tube` or none). Castle is the
 first: a 256 px tile of grey dithered stone with cracks, damp and rust
 streaks and a little moss, on the rail, the pane title strips, the minimize
 shelf, the dock tab strip and drawer headers. The tile comes from
@@ -82,7 +84,30 @@ Skinned panes keep the 2px frame but draw it in the skin's dark stone color
 with square corners; schemes without a texture paint exactly as before
 (rounded frame, `border` color).
 
-**Torches.** A skin with `torches` puts a 12x20 pixel wall torch in each
+Neon District is the second skin: a 256 px tile of riveted steel plates in
+near-black violet (17 colors) with bevelled seams, rust bleeding from a few
+rivets, one short strip of worn hazard tape, faint scanlines and magenta and
+cyan neon staining out of some seams, from `scripts/gen-neon-tile.py` (run
+it with `uv run --offline --no-project --with numpy --with pillow python
+scripts/gen-neon-tile.py`). It covers the same surfaces as Castle, Chat
+included, at the same backdrop strengths; its pane frame is dark steel
+`#1B1A26`. Its accent is magenta, its second accent cyan, and `text_faint`
+is lifted to `#7C80AA` so faint labels hold 4.5:1 on the steel.
+
+Label contrast on the skins (WCAG ratio against the textured ground: the
+mean ground, then its 95th-percentile brightest pixel; the tile math and
+the rendered shots agree to 0.1):
+
+| surface | scheme | text | text_dim | text_faint |
+|---------|--------|------|----------|------------|
+| rail (0.6) | neon-district | 16.1 / 15.5 | 6.4 / 6.1 | 5.2 / 5.0 |
+| title strip (0.55) | neon-district | 16.2 / 15.6 | 6.4 / 6.2 | 5.2 / 5.0 |
+| active title (0.3) | neon-district | 15.3 / 14.9 | 6.1 / 5.9 | 4.9 / 4.8 |
+| rail (0.6) | castle | 11.1 / 9.3 | 6.0 / 5.1 | 3.0 / 2.5 |
+| title strip (0.55) | castle | 11.0 / 9.4 | 6.0 / 5.1 | 3.0 / 2.5 |
+| active title (0.3) | castle | 9.4 / 8.6 | 5.1 / 4.7 | 2.5 / 2.3 |
+
+**Torches.** A skin with `Lamp::Torch` puts a 12x20 pixel wall torch in each
 pane's title strip (`src/torch.rs`, painted as quad runs in one canvas). It
 burns the way the pane is doing, in Stage's `pane_state` order: stopped (out,
 ember and smoke) when the pane exited, sleeps or has no process; needs-you
@@ -93,13 +118,25 @@ ticks seen with a torch on screen), and that tick renders at most once
 whether the spinner, a torch or both asked. With no torch on screen
 (another scheme, another view, an empty circle) they add nothing.
 
+**Neon tubes.** A skin with `Lamp::Tube` (Neon District) hangs a 12x20
+neon tube on a metal bracket in every spot a torch would take (`src/tube.rs`;
+`torch::element` and `torch::tall_element` pick tube or torch texels from
+the active skin, so no call site changes), with the same states, seeds and
+tick. Idle burns steady cyan and flickers once every 24 ticks (dim for a
+tick, then a stretch cuts out); working buzzes magenta, swapping hot and lit
+every tick with a hot band and sparks off the caps; needs-you blinks amber
+every tick; stopped is dead glass that sputters faintly once every 40 ticks.
+Each tube's rare events sit at its own phase (`seed % period`), so Chat's
+nine decorative tubes never flicker together. The standing torch becomes a
+tall cyan tube on a post, 8x40 like the torch.
+
 **Who owns the choice.** The daemon. It saves it in the state dir
 (`theme.json`, `{"scheme": ID}`), sends it to each window on attach and
 broadcasts `GuiEvent::Theme` on every switch, so the Mac thin client and the
 XPS GUI change together. At boot the saved choice wins, then `seance-theme`
 in `terminal.conf`, then candlelit; an unknown id falls back to candlelit.
 
-**Switching.** The ✦ menu at the top of the rail lists the thirteen, dark ones then
+**Switching.** The ✦ menu at the top of the rail lists the fourteen, dark ones then
 light ones under their own headings, active one marked; `seance ctl theme` lists them and `seance ctl theme ID` switches (an
 unknown ID is refused with the list). A window that hears the switch sets
 the active scheme, re-runs `theme::init` and refreshes every window.

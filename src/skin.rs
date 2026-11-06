@@ -12,7 +12,7 @@ use gpui::{
     canvas, div, point, px, size, Bounds, ContentMask, Corners, IntoElement, ParentElement, Pixels,
     RenderImage, Styled, Window,
 };
-use seance_core::schemes::Texture;
+use seance_core::schemes::{Lamp, Texture};
 
 /// The active scheme's skin, or `None` on a flat scheme.
 pub fn active() -> Option<&'static Texture> {
@@ -32,9 +32,15 @@ pub fn idle_frame() -> gpui::Hsla {
     }
 }
 
-/// Wall torches in the pane title strips.
+/// Lamps (wall torches or neon tubes) in the pane title strips and around
+/// Chat: whether the skin hangs any, which drives their tick too.
 pub fn torches() -> bool {
-    active().is_some_and(|t| t.torches)
+    lamp().is_some()
+}
+
+/// Which lamp the active skin hangs, if any.
+pub fn lamp() -> Option<Lamp> {
+    active().and_then(|t| t.lamp)
 }
 
 /// Texture strength per surface: low enough that the stone reads as a calm
@@ -159,6 +165,21 @@ mod tests {
         let c = render_image(tex, 1).unwrap();
         assert!(!Arc::ptr_eq(&a, &c));
     }
+
+    #[test]
+    fn neon_tile_decodes_upscaled_apart_from_castles() {
+        let neon = seance_core::schemes::find("neon-district")
+            .and_then(|s| s.texture.as_ref())
+            .unwrap();
+        let castle = seance_core::schemes::find("castle")
+            .and_then(|s| s.texture.as_ref())
+            .unwrap();
+        let a = render_image(neon, 2).unwrap();
+        let sz = a.size(0);
+        assert_eq!((sz.width.0, sz.height.0), (512, 512));
+        assert!(!Arc::ptr_eq(&a, &render_image(castle, 2).unwrap()));
+        assert!(Arc::ptr_eq(&a, &render_image(neon, 2).unwrap()));
+    }
 }
 
 /// Screenshots of the skin without a window on screen: gpui's headless
@@ -180,7 +201,8 @@ mod shots {
 
     enum Scene {
         Chrome(Vec<&'static str>),
-        Torches,
+        /// Every lamp state across frames, on this scheme's skin.
+        Torches(&'static str),
         /// The Chat view: list rail, header with the lead's torch, plain
         /// bubbles, composer.
         Chat(&'static str),
@@ -210,8 +232,8 @@ mod shots {
                     }
                     row
                 }
-                Scene::Torches => {
-                    crate::theme::set_active_for_test("castle");
+                Scene::Torches(id) => {
+                    crate::theme::set_active_for_test(id);
                     row.child(torch_sheet())
                 }
                 Scene::Chat(id) => {
@@ -472,10 +494,7 @@ mod shots {
     }
 
     fn panel(id: &str) -> impl IntoElement {
-        let torches = crate::theme::active()
-            .texture
-            .as_ref()
-            .is_some_and(|t| t.torches);
+        let torches = torches();
         let t = |s: Torch| torches.then_some(s);
         div()
             .flex_1()
@@ -615,10 +634,7 @@ mod shots {
     const CHAT_HEADER_W: f32 = 900. - 20. - 220.;
 
     fn chat_view(id: &str) -> impl IntoElement {
-        let torches = crate::theme::active()
-            .texture
-            .as_ref()
-            .is_some_and(|t| t.torches);
+        let torches = torches();
         let row = |name: &str, on: bool, note: &str| {
             div()
                 .px_3()
@@ -846,21 +862,26 @@ mod shots {
             (Torch::NeedsYou, "needs you"),
             (Torch::Stopped, "stopped"),
         ];
+        let tubes = lamp() == Some(Lamp::Tube);
+        let sd = crate::torch::seed("a");
         let rows: Vec<AnyElement> = states
             .iter()
             .map(|(state, name)| {
-                let frames = (0..6u64).map(|f| {
+                // Tubes hold still between rare events, so start their row
+                // a tick before the first one.
+                let first = (0..64u64)
+                    .find(|&f| {
+                        crate::tube::texels(*state, f + 1, sd) != crate::tube::texels(*state, f, sd)
+                    })
+                    .unwrap_or(0);
+                let start = if tubes { first } else { 0 };
+                let frames = (start..start + 6).map(|f| {
                     div()
                         .p(px(6.))
                         .relative()
                         .bg(P::bg_elevated())
                         .children(backdrop(TITLE))
-                        .child(crate::torch::element(
-                            *state,
-                            f,
-                            crate::torch::seed("a"),
-                            4.0,
-                        ))
+                        .child(crate::torch::element(*state, f, sd, 4.0))
                 });
                 div()
                     .flex()
@@ -877,7 +898,35 @@ mod shots {
                     .into_any_element()
             })
             .collect();
-        div().flex().flex_col().gap(px(8.)).children(rows)
+        let standing = div()
+            .flex()
+            .items_end()
+            .gap(px(8.))
+            .child(
+                div()
+                    .w(px(110.))
+                    .text_sm()
+                    .text_color(P::text())
+                    .child("standing"),
+            )
+            .children((0..6u64).map(|f| {
+                div()
+                    .p(px(6.))
+                    .relative()
+                    .bg(P::bg_elevated())
+                    .children(backdrop(TITLE))
+                    .child(crate::torch::tall_element(
+                        f,
+                        crate::torch::seed("post"),
+                        2.0,
+                    ))
+            }));
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .children(rows)
+            .child(standing)
     }
 
     fn render(scene: Scene, w: f32, h: f32, out: &std::path::Path) {
@@ -902,8 +951,8 @@ mod shots {
     }
 
     /// The bare tile repeated 3x3 at 3x, so the repeat and seams show.
-    fn tile_preview(out: &std::path::Path) {
-        let tex = seance_core::schemes::find("castle")
+    fn tile_preview(id: &str, out: &std::path::Path) {
+        let tex = seance_core::schemes::find(id)
             .and_then(|s| s.texture.as_ref())
             .unwrap();
         let tile = image::load_from_memory(tex.png).unwrap().into_rgba8();
@@ -939,7 +988,12 @@ mod shots {
             420.,
             &dir.join("castle-vs-candlelit.png"),
         );
-        render(Scene::Torches, 560., 470., &dir.join("torch-sheet.png"));
+        render(
+            Scene::Torches("castle"),
+            560.,
+            560.,
+            &dir.join("torch-sheet.png"),
+        );
         render(
             Scene::Chat("castle"),
             900.,
@@ -958,6 +1012,25 @@ mod shots {
             300.,
             &dir.join("chat-header-torches.png"),
         );
-        tile_preview(&dir.join("castle-tile-3x3.png"));
+        tile_preview("castle", &dir.join("castle-tile-3x3.png"));
+        render(
+            Scene::Chrome(vec!["neon-district"]),
+            900.,
+            420.,
+            &dir.join("neon-classic.png"),
+        );
+        render(
+            Scene::Chat("neon-district"),
+            900.,
+            460.,
+            &dir.join("neon-chat.png"),
+        );
+        render(
+            Scene::Torches("neon-district"),
+            560.,
+            560.,
+            &dir.join("neon-tube-sheet.png"),
+        );
+        tile_preview("neon-district", &dir.join("neon-tile-3x3.png"));
     }
 }

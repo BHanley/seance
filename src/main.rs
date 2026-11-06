@@ -37,6 +37,7 @@ mod term_font;
 mod term_shared;
 mod theme;
 mod torch;
+mod tube;
 mod tunnel;
 mod webbridge;
 

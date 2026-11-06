@@ -39,6 +39,15 @@ pub struct TermColors {
     pub cursor: u32,
 }
 
+/// The lamp a skin hangs in each pane's title strip and around Chat.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lamp {
+    /// A pixel wall torch (castle).
+    Torch,
+    /// A flickering neon tube on a metal bracket (neon-district).
+    Tube,
+}
+
 /// A skin: a tiling image for chrome surfaces (rail, title and tab strips)
 /// plus the chrome that goes with it. Never drawn under terminal text.
 #[derive(Debug)]
@@ -49,8 +58,9 @@ pub struct Texture {
     pub size: u32,
     /// Frame color of an unfocused pane. Skinned panes are square.
     pub frame: u32,
-    /// A pixel wall torch in each pane's title strip, lit by the pane's state.
-    pub torches: bool,
+    /// A pixel lamp in each pane's title strip, lit by the pane's state;
+    /// `None` hangs none.
+    pub lamp: Option<Lamp>,
 }
 
 #[derive(Debug)]
@@ -212,11 +222,27 @@ pub const CASTLE_STONE: Texture = Texture {
     png: include_bytes!("../../../assets/skins/castle-stone.png"),
     size: 256,
     frame: 0x141415,
-    torches: true,
+    lamp: Some(Lamp::Torch),
+};
+
+// Neon District: grimy riveted steel in near-black violet, hot neon for the
+// accents (magenta first, cyan second). Faint text is lifted past the
+// palette's dim so it holds 4.5:1 on the steel (see docs/THEME.md).
+const NEON: Chrome = chrome([
+    0x04010A, 0x0A0512, 0x1A0F2A, 0x2C1C44, 0xE8E6FF, 0x8B90BB, 0x7C80AA, 0xFF2FB5, 0xA8207A,
+    0x12F7FF, 0x0B8C99, 0xA8FF3E, 0xFF3B4E,
+]);
+
+/// The Neon District steel tile, made by `scripts/gen-neon-tile.py`.
+pub const NEON_STEEL: Texture = Texture {
+    png: include_bytes!("../../../assets/skins/neon-steel.png"),
+    size: 256,
+    frame: 0x1B1A26,
+    lamp: Some(Lamp::Tube),
 };
 
 /// Every scheme, in menu order.
-pub static SCHEMES: [Scheme; 13] = [
+pub static SCHEMES: [Scheme; 14] = [
     Scheme {
         id: "candlelit",
         label: "Candlelit",
@@ -405,6 +431,21 @@ pub static SCHEMES: [Scheme; 13] = [
         )),
         texture: Some(CASTLE_STONE),
     },
+    Scheme {
+        id: "neon-district",
+        label: "Neon District",
+        light: false,
+        chrome: NEON,
+        term: Some(term(
+            false,
+            &NEON,
+            spec([
+                0x07030E, 0xE0DEF5, 0xA8FF3E, 0xFFB627, 0x7C8CFF, 0xC47BFF, 0xFF4D6A, 0x12F7FF,
+                0x7A7EA8,
+            ]),
+        )),
+        texture: Some(NEON_STEEL),
+    },
 ];
 
 /// Look a scheme up by id. Ids are lowercase; input is trimmed and
@@ -455,17 +496,38 @@ mod tests {
     }
 
     #[test]
-    fn only_castle_is_skinned_and_it_has_torches() {
+    fn castle_and_neon_district_are_the_skins_and_only_castle_burns_torches() {
         let castle = find("castle").expect("castle scheme");
-        assert!(!castle.light);
-        let tex = castle.texture.as_ref().expect("castle texture");
-        assert_eq!(tex.size, 256);
-        assert!(tex.torches);
-        // The stone frame is darker than the hairline border it replaces.
+        assert_eq!(castle.texture.as_ref().unwrap().lamp, Some(Lamp::Torch));
+        let neon = find("neon-district").expect("neon-district scheme");
+        assert_eq!(neon.label, "Neon District");
+        assert_eq!(neon.texture.as_ref().unwrap().lamp, Some(Lamp::Tube));
+        // Appended last, so no saved index moves.
+        assert_eq!(index_of("neon-district"), Some(SCHEMES.len() - 1));
+        assert_eq!(index_of("castle"), Some(12));
+        let skinned: Vec<_> = SCHEMES
+            .iter()
+            .filter(|s| s.texture.is_some())
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(skinned, ["castle", "neon-district"]);
+        let torches: Vec<_> = SCHEMES
+            .iter()
+            .filter(|s| {
+                s.texture
+                    .as_ref()
+                    .is_some_and(|t| t.lamp == Some(Lamp::Torch))
+            })
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(torches, ["castle"]);
+        // A skin's frame is darker than the hairline border it replaces.
         let luma = |c: u32| (c >> 16 & 0xFF) + (c >> 8 & 0xFF) + (c & 0xFF);
-        assert!(luma(tex.frame) < luma(castle.chrome.border));
-        for s in SCHEMES.iter().filter(|s| s.id != "castle") {
-            assert!(s.texture.is_none(), "{}", s.id);
+        for s in SCHEMES.iter().filter(|s| s.texture.is_some()) {
+            let tex = s.texture.as_ref().unwrap();
+            assert!(!s.light, "{}", s.id);
+            assert_eq!(tex.size, 256, "{}", s.id);
+            assert!(luma(tex.frame) < luma(s.chrome.border), "{}", s.id);
         }
     }
 

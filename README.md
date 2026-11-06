@@ -21,8 +21,8 @@ All of it is in the Mac and Linux GUI. The daemon work below is small.
 - **Wall.** A tile per circle and a Today feed, reached with the
   ctrl+shift+space peek. In this build the layout switch cycles classic,
   stage and chat, and `seance ctl layout wall` opens Chat.
-- **Spaces** as tabs, thirteen color schemes (including Fog, Parlor,
-  Herbarium and the stone Castle skin), a pixel creature per circle lead,
+- **Spaces** as tabs, fourteen color schemes (including Fog, Parlor,
+  Herbarium, the stone Castle skin and the neon Neon District skin), a pixel creature per circle lead,
   an AFK chip, auto-sleep for idle Claude panes, docked file panes, and
   opt-in sounds. The full list is
   in [`CHANGELOG.md`](CHANGELOG.md) under Unreleased and 0.27.0.

@@ -1,5 +1,7 @@
 //! Pixel wall torches for skins that ask for them (castle): one per pane,
-//! in its title strip, burning the way the pane is doing.
+//! in its title strip, burning the way the pane is doing. A skin that hangs
+//! neon tubes instead (`Lamp::Tube`) gets `crate::tube`'s texels in the same
+//! spots from the same `element` calls.
 //!
 //! A torch is 12x20 texels drawn as a handful of `paint_quad` runs in one
 //! canvas, so it adds no elements per pixel. Its frame is the app's tick
@@ -56,7 +58,7 @@ const CORE: u32 = 0xFFD27A;
 const HOT: u32 = 0xFFF3C4;
 const SMOKE: [u32; 3] = [0x6E6A65, 0x5A5652, 0x47443F];
 
-type Grid = [[Option<u32>; W]; H];
+pub type Grid = [[Option<u32>; W]; H];
 
 /// The sconce: a bowl on a short stem, bolted to a wall plate.
 fn sconce(g: &mut Grid) {
@@ -211,9 +213,19 @@ pub fn texels(state: Torch, frame: u64, seed: u64) -> Grid {
     g
 }
 
-/// A torch at `scale` points per texel, at animation frame `frame`.
+/// Whether the active skin hangs neon tubes instead of torches.
+fn tubes() -> bool {
+    crate::skin::lamp() == Some(seance_core::schemes::Lamp::Tube)
+}
+
+/// The active skin's lamp (a torch, or a tube) at `scale` points per texel,
+/// at animation frame `frame`.
 pub fn element(state: Torch, frame: u64, seed: u64, scale: f32) -> impl IntoElement {
-    let grid = texels(state, frame, seed);
+    let grid = if tubes() {
+        crate::tube::texels(state, frame, seed)
+    } else {
+        texels(state, frame, seed)
+    };
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| paint(&grid, bounds, scale, window),
@@ -227,7 +239,7 @@ pub fn element(state: Torch, frame: u64, seed: u64, scale: f32) -> impl IntoElem
 pub const TALL_W: usize = 8;
 pub const TALL_H: usize = 40;
 
-type TallGrid = [[Option<u32>; TALL_W]; TALL_H];
+pub type TallGrid = [[Option<u32>; TALL_W]; TALL_H];
 
 /// A standing torch, always calm: the Idle flame and bowl of the wall torch
 /// (its columns 2..10) on an iron post with two bands and a foot.
@@ -254,9 +266,13 @@ pub fn tall_texels(frame: u64, seed: u64) -> TallGrid {
     g
 }
 
-/// A standing torch at `scale` points per texel.
+/// A standing torch (or tube) at `scale` points per texel.
 pub fn tall_element(frame: u64, seed: u64, scale: f32) -> impl IntoElement {
-    let grid = tall_texels(frame, seed);
+    let grid = if tubes() {
+        crate::tube::tall_texels(frame, seed)
+    } else {
+        tall_texels(frame, seed)
+    };
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| paint(&grid, bounds, scale, window),
