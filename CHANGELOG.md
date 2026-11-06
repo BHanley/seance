@@ -19,6 +19,9 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Added
 
+- `seance ctl move-pane PANE CIRCLE [--before PANE]` moves a pane into another
+  existing circle (slug or label) without changing the human's selection.
+- Web: sleep / awaken the selected circle from the phone circle sheet.
 - Lifetime UUIDv4 identities for panes and circles: `SEANCE_PANE_ID` and
   `SEANCE_WORKSPACE_ID` in launched processes, `pane_id` and `workspace_id`
   in ctl pane rows and `whoami`, and `id:<pane_id>` pane addressing. IDs
@@ -29,6 +32,14 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ### Fixed
 
+- A sleeping circle no longer shows as working off its last agent status.
+- Attach no longer resize-bounces every pane: only blank (post-handoff)
+  Terms are kicked, so a reconnect-looping client can't flicker every TUI.
+- Message resubmit types space+backspace before Enter, so Claude's footer
+  can't swallow it.
+- New circles from quicklaunch / "+ circle" land in the space on screen
+  even when the slug reuses a dead circle's space entry.
+- `restart-gui` relaunches the GUI detached instead of as its own child.
 - A new pane that is given a dead pane's slug no longer inherits its task,
   scratchpad, sidecars (`.taskid` / `.task.json` / `.telegram.json`),
   messages, asks or pad revs. Closing a pane retires its slug-keyed state

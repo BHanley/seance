@@ -646,7 +646,7 @@ impl SeanceApp {
     fn workspace_has_working_agent(&self, workspace: &str) -> bool {
         self.panes
             .iter()
-            .any(|p| p.workspace == workspace && self.pane_is_live_working(&p.slug))
+            .any(|p| p.workspace == workspace && !p.asleep && self.pane_is_live_working(&p.slug))
     }
 
     /// Live-busy, as the DAEMON sees it: braille OSC title spinner, or
@@ -799,7 +799,12 @@ impl SeanceApp {
         if self.workspace_has_working_agent(workspace) {
             return Some(WorkspaceAttention::Working);
         }
-        self.workspace_unread.get(workspace).copied()
+        // An asleep pane keeps its last agent status ("working") and any
+        // unread Working it raised; neither is true of a sleeping circle.
+        self.workspace_unread
+            .get(workspace)
+            .copied()
+            .filter(|a| !(*a == WorkspaceAttention::Working && self.workspace_asleep(workspace)))
     }
 
     /// Sidebar right-edge label: relative time since the last pane output in
