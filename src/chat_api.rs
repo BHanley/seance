@@ -74,6 +74,23 @@ pub struct Msg {
     /// A document sent with the note (pdf, csv and the like).
     #[serde(default)]
     pub attachment: Option<Attachment>,
+    /// The message this one replies to, as Invoke copied it at send time.
+    #[serde(default)]
+    pub reply: Option<ReplyRef>,
+}
+
+/// The quoted message on a reply: its id, who wrote it ("me" or "lead"),
+/// when, and its words.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct ReplyRef {
+    #[serde(default)]
+    pub id: i64,
+    #[serde(default)]
+    pub from: String,
+    #[serde(default)]
+    pub ts: u64,
+    #[serde(default)]
+    pub text: String,
 }
 
 /// A document on a note: the file name under `/api/file/` and what to call it.
@@ -411,13 +428,18 @@ pub fn poll(v: u64, wait: u64) -> Result<u64> {
     Ok(get::<Poll>(&format!("/api/poll?v={v}"), wait + 10)?.v)
 }
 
-pub fn send(ws: &str, text: &str) -> Result<()> {
-    curl(
-        "/api/send",
-        REQUEST_SECS,
-        Some(&serde_json::json!({ "ws": ws, "text": text })),
-    )
-    .map(|_| ())
+/// Send a note to the circle's lead; with `reply`, as a reply to that message.
+pub fn send(ws: &str, text: &str, reply: Option<i64>) -> Result<()> {
+    curl("/api/send", REQUEST_SECS, Some(&send_body(ws, text, reply))).map(|_| ())
+}
+
+/// The body of a send. Without a reply it is exactly `{ws, text}`.
+fn send_body(ws: &str, text: &str, reply: Option<i64>) -> serde_json::Value {
+    let mut body = serde_json::json!({ "ws": ws, "text": text });
+    if let Some(id) = reply {
+        body["reply"] = id.into();
+    }
+    body
 }
 
 /// Send a parked task back to the circle's lead as Brian's message and close
@@ -681,6 +703,48 @@ fn size_from_header(b: &[u8]) -> Option<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reply_parses_and_is_optional() {
+        let m: Msg = serde_json::from_str(
+            r#"{"id":12,"from":"me","text":"yes","reply":{"id":9,"from":"lead","ts":5,"text":"go?"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            m.reply,
+            Some(ReplyRef {
+                id: 9,
+                from: "lead".into(),
+                ts: 5,
+                text: "go?".into()
+            })
+        );
+        let plain: Msg = serde_json::from_str(r#"{"id":13,"from":"lead","text":"hi"}"#).unwrap();
+        assert!(plain.reply.is_none());
+        let null: Msg = serde_json::from_str(r#"{"id":14,"from":"me","reply":null}"#).unwrap();
+        assert!(null.reply.is_none());
+        let thin: Msg = serde_json::from_str(r#"{"id":15,"reply":{"id":3}}"#).unwrap();
+        assert_eq!(
+            thin.reply,
+            Some(ReplyRef {
+                id: 3,
+                ..Default::default()
+            })
+        );
+    }
+
+    #[test]
+    fn a_send_carries_reply_only_when_there_is_one() {
+        assert_eq!(
+            send_body("l6", "hi", None).to_string(),
+            serde_json::json!({ "ws": "l6", "text": "hi" }).to_string()
+        );
+        let with = send_body("l6", "hi", Some(42));
+        assert_eq!(with["reply"], 42);
+        assert_eq!(with["ws"], "l6");
+        assert_eq!(with["text"], "hi");
+        assert_eq!(with.as_object().unwrap().len(), 3);
+    }
 
     #[test]
     fn picture_sizes_come_from_the_header() {

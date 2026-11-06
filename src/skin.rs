@@ -208,6 +208,9 @@ mod shots {
         Chat(&'static str),
         /// The Chat header once per torch state.
         ChatHeaders,
+        /// A quoted reply bubble and the quote bar over the composer, once
+        /// per scheme.
+        ChatReply(Vec<&'static str>),
     }
 
     struct Shot(Scene);
@@ -239,6 +242,14 @@ mod shots {
                 Scene::Chat(id) => {
                     crate::theme::set_active_for_test(id);
                     row.child(chat_view(id))
+                }
+                Scene::ChatReply(schemes) => {
+                    let mut row = row;
+                    for id in schemes {
+                        crate::theme::set_active_for_test(id);
+                        row = row.child(chat_reply_panel(id));
+                    }
+                    row
                 }
                 Scene::ChatHeaders => {
                     crate::theme::set_active_for_test("castle");
@@ -870,6 +881,96 @@ mod shots {
                     )
                     .child(composer),
             )
+    }
+
+    /// The thread's foot with a reply: the lead's ask, Brian's answer quoting
+    /// it, and the quote bar over the composer strip, built with the app's own
+    /// quote builders.
+    fn chat_reply_panel(id: &str) -> impl IntoElement {
+        use crate::app::chat::{quote_block, reply_bar};
+        let ask = "Stone is on the chat rail now. Run the shots for castle, neon and one flat scheme, then post them here? The quote above a reply stops at three lines, so this long ask shows the cut.";
+        let bubble = |me: bool, quote: bool, text: &str| {
+            div().flex().when(me, |d| d.justify_end()).child(
+                div()
+                    .max_w(px(260.))
+                    .px_3()
+                    .py_2()
+                    .rounded_lg()
+                    .text_sm()
+                    .text_color(P::text())
+                    .bg(if me { P::violet_dim() } else { P::surface() })
+                    .when(quote, |d| d.child(quote_block("lead", ask)))
+                    .child(text.to_string()),
+            )
+        };
+        div()
+            .flex_1()
+            .h_full()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .rounded_md()
+            .bg(P::bg())
+            .child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .text_xs()
+                    .text_color(P::text_faint())
+                    .child(format!("scheme: {id}")),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .px_3()
+                    .flex()
+                    .flex_col()
+                    .justify_end()
+                    .gap_2()
+                    .pb_2()
+                    .child(bubble(false, false, ask))
+                    .child(bubble(true, true, "yes, all three")),
+            )
+            .child(reply_bar(
+                "Both written to shots/.\nNeon looks right.",
+                div().px_1().child("✕"),
+            ))
+            .child(
+                div()
+                    .flex_none()
+                    .p_3()
+                    .border_t_1()
+                    .border_color(P::border())
+                    .map(|d| under(d, STRIP))
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1p5()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(P::border())
+                            .bg(P::bg())
+                            .text_sm()
+                            .text_color(P::text_faint())
+                            .child("Message the lead"),
+                    ),
+            )
+    }
+
+    /// Only the reply shot: `cargo test --bin seance chat_reply_shot -- --ignored`.
+    #[test]
+    #[ignore = "writes a PNG via headless Metal; run with --ignored"]
+    fn chat_reply_shot() {
+        let dir = std::env::var("SKIN_SHOTS_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shots"));
+        std::fs::create_dir_all(&dir).unwrap();
+        render(
+            Scene::ChatReply(vec!["candlelit", "castle", "neon-district"]),
+            1200.,
+            460.,
+            &dir.join("chat-reply.png"),
+        );
     }
 
     /// Every state down the side, frames across, at 4 points per texel on

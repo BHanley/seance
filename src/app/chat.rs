@@ -21,7 +21,8 @@ use gpui_component::{StyledExt as _, WindowExt as _};
 use regex::Regex;
 
 use crate::chat_api::{
-    self, Attachment, CircleRow, Circles, Hit, Msg, PaneRow, Progress, Thread, Usage, UsageWindow,
+    self, Attachment, CircleRow, Circles, Hit, Msg, PaneRow, Progress, ReplyRef, Thread, Usage,
+    UsageWindow,
 };
 use crate::events;
 use crate::theme::SeancePalette;
@@ -121,6 +122,140 @@ impl ThreadWindow {
 /// How many to draw so that message `at` of `len` is among them.
 fn widen_to(shown: usize, len: usize, at: usize) -> usize {
     shown.max(THREAD_WINDOW).max(len.saturating_sub(at))
+}
+
+/// Where a jump to message `id` lands: how many to draw so it is among them,
+/// and its place among the scroll's children. None when the thread does not
+/// hold it.
+fn jump_plan(shown: usize, ids: &[i64], id: i64) -> Option<(usize, usize)> {
+    let at = ids.iter().position(|m| *m == id)?;
+    let shown = widen_to(shown, ids.len(), at);
+    Some((shown, ThreadWindow::new(ids.len(), shown).child(at)?))
+}
+
+/// The message a note in the composer will reply to, and the circle it is in.
+#[derive(Clone, Debug, PartialEq)]
+struct ReplyDraft {
+    ws: String,
+    id: i64,
+    from: String,
+    ts: u64,
+    text: String,
+}
+
+impl ReplyDraft {
+    fn of(ws: &str, m: &Msg) -> Self {
+        Self {
+            ws: ws.to_string(),
+            id: m.id,
+            from: m.from.clone(),
+            ts: m.ts,
+            text: m.text.clone(),
+        }
+    }
+
+    /// The quote the sent bubble shows until Invoke's own copy arrives.
+    fn quote(&self) -> ReplyRef {
+        ReplyRef {
+            id: self.id,
+            from: self.from.clone(),
+            ts: self.ts,
+            text: self.text.clone(),
+        }
+    }
+}
+
+/// Brian's and the lead's messages can be replied to once Invoke has them;
+/// system notes and the read-only alerts circle cannot.
+fn can_reply(ws: &str, m: &Msg) -> bool {
+    m.id > 0 && ws != ALERTS_WS && (m.from == "me" || m.from == "lead")
+}
+
+/// Opening a circle drops a reply meant for another one.
+fn reply_after_select(cur: Option<ReplyDraft>, ws: &str) -> Option<ReplyDraft> {
+    cur.filter(|r| r.ws == ws)
+}
+
+/// A send that went through clears the reply it carried; a failed one, or a
+/// reply picked since, stays.
+fn reply_after_send(cur: Option<ReplyDraft>, sent: Option<i64>, ok: bool) -> Option<ReplyDraft> {
+    cur.filter(|r| !(ok && sent == Some(r.id)))
+}
+
+/// Who a quote names, as the phone does.
+fn quote_label(from: &str) -> &'static str {
+    if from == "me" {
+        "You"
+    } else {
+        "Lead"
+    }
+}
+
+/// A quote's words on one line.
+fn one_line(text: &str) -> String {
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.is_empty() {
+        "Photo or file".to_string()
+    } else {
+        line
+    }
+}
+
+/// The quote on top of a reply's bubble: who wrote the original and up to
+/// three lines of it.
+pub(crate) fn quote_block(from: &str, text: &str) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .mb_1()
+        .pl_2()
+        .py_0p5()
+        .rounded_sm()
+        .border_l_2()
+        .border_color(SeancePalette::violet())
+        .bg(SeancePalette::bg().opacity(0.3))
+        .text_xs()
+        .child(
+            div()
+                .font_semibold()
+                .text_color(SeancePalette::text_dim())
+                .child(quote_label(from)),
+        )
+        .child(
+            div()
+                .text_color(SeancePalette::text_dim())
+                .line_clamp(3)
+                .text_ellipsis()
+                .child(text.to_string()),
+        )
+}
+
+/// The bar above the composer while a reply is set: the quoted words on one
+/// line, then `cancel`.
+pub(crate) fn reply_bar(text: &str, cancel: impl IntoElement) -> gpui::Div {
+    div()
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .py_1p5()
+        .border_t_1()
+        .border_color(SeancePalette::border())
+        .bg(SeancePalette::bg_elevated())
+        .text_xs()
+        .text_color(SeancePalette::text_dim())
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .pl_2()
+                .border_l_2()
+                .border_color(SeancePalette::violet())
+                .truncate()
+                .child(one_line(text)),
+        )
+        .child(cancel)
 }
 
 /// How many to draw after a click on "Show earlier".
@@ -386,6 +521,8 @@ pub(super) struct ChatState {
     search_note: Option<String>,
     /// A message to scroll to once its thread is showing.
     jump: Option<i64>,
+    /// The message the composer's next note replies to.
+    reply: Option<ReplyDraft>,
     /// A circle scrolled to a search result: new messages do not pin it to
     /// the bottom until Brian sends something or opens another circle.
     no_pin: Option<String>,
@@ -910,8 +1047,16 @@ fn bubble_menu(
     ws: &str,
     m: &Msg,
 ) -> PopupMenu {
+    let mut menu = menu;
+    if can_reply(ws, m) {
+        let (weak, draft) = (app.clone(), ReplyDraft::of(ws, m));
+        menu = menu.item(PopupMenuItem::new("Reply").on_click(move |_, _, cx| {
+            let draft = draft.clone();
+            let _ = weak.update(cx, |a, cx| a.chat_reply_to(draft, cx));
+        }));
+    }
     let text = m.text.clone();
-    let mut menu = menu.item(PopupMenuItem::new("Copy text").on_click(move |_, _, cx| {
+    menu = menu.item(PopupMenuItem::new("Copy text").on_click(move |_, _, cx| {
         let _ = crate::clipboard::copy_text_to_clipboard(&text, cx);
     }));
     if m.id > 0 {
@@ -1190,6 +1335,7 @@ impl SeanceApp {
             self.chat.selected = Some(ws.to_string());
             self.tasks_popover = None;
         }
+        self.chat.reply = reply_after_select(self.chat.reply.take(), ws);
         // Opening a circle, or clicking the open one, shows its newest message.
         self.chat.arrive();
         self.chat.jump = None;
@@ -1595,7 +1741,32 @@ impl SeanceApp {
             return;
         }
         input.update(cx, |i, cx| i.set_value("", window, cx));
-        self.chat_post(ws, text, None, true, cx);
+        let reply = self.chat.reply.clone().filter(|r| r.ws == ws);
+        self.chat_post_reply(ws, text, None, true, reply, cx);
+    }
+
+    /// Reply to a message: the quote bar shows over the composer, which
+    /// takes the focus.
+    fn chat_reply_to(&mut self, draft: ReplyDraft, cx: &mut Context<Self>) {
+        self.chat.reply = Some(draft);
+        self.chat.focus_input = true;
+        cx.notify();
+    }
+
+    /// A click on a quote: scroll to the original, drawing more of the
+    /// thread if it is older than what shows. One that is not loaded stays put.
+    fn chat_quote_jump(&mut self, id: i64, cx: &mut Context<Self>) {
+        let ws = self.chat.selected.clone().unwrap_or_default();
+        let ids: Vec<i64> = self
+            .chat
+            .threads
+            .get(&ws)
+            .map(|t| t.messages.iter().map(|m| m.id).collect())
+            .unwrap_or_default();
+        if jump_plan(self.chat.shown, &ids, id).is_some() {
+            self.chat.jump = Some(id);
+            cx.notify();
+        }
     }
 
     /// Send a note to `ws`'s lead, with a file if there is one. Shown at once;
@@ -1607,6 +1778,20 @@ impl SeanceApp {
         text: String,
         file: Option<PathBuf>,
         typed: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.chat_post_reply(ws, text, file, typed, None, cx);
+    }
+
+    /// [`Self::chat_post`], as a reply to `reply` when there is one. The
+    /// reply is cleared once Invoke takes the note, kept if it does not.
+    fn chat_post_reply(
+        &mut self,
+        ws: String,
+        text: String,
+        file: Option<PathBuf>,
+        typed: bool,
+        reply: Option<ReplyDraft>,
         cx: &mut Context<Self>,
     ) {
         let shown = match (&file, text.is_empty()) {
@@ -1627,10 +1812,12 @@ impl SeanceApp {
             text: shown,
             ts: now_ms(),
             status: "sending".into(),
+            reply: reply.as_ref().map(ReplyDraft::quote),
             ..Default::default()
         });
         self.chat.arrive();
         let thread_ws = ws.clone();
+        let reply_id = reply.map(|r| r.id);
         cx.spawn(async move |this, cx| {
             let to = ws.clone();
             let body = text.clone();
@@ -1639,7 +1826,7 @@ impl SeanceApp {
                 .spawn(async move {
                     match file {
                         Some(path) => chat_api::send_file(&to, &body, &path),
-                        None => chat_api::send(&to, &body),
+                        None => chat_api::send(&to, &body, reply_id),
                     }
                 })
                 .await;
@@ -1650,6 +1837,7 @@ impl SeanceApp {
             let Some(this) = this.upgrade() else { return };
             this.update(cx, |app: &mut SeanceApp, cx| {
                 app.apply_round(round, cx);
+                app.chat.reply = reply_after_send(app.chat.reply.take(), reply_id, sent.is_ok());
                 if let Err(e) = sent {
                     // Not sent: the bubble goes and the words go back where
                     // they were typed.
@@ -1846,15 +2034,12 @@ impl SeanceApp {
         // A search result waits here for its thread to arrive; it takes the
         // frame from the pin to the bottom, and widens what is drawn to reach it.
         if let Some(id) = self.chat.jump {
-            if let Some(at) = ids.iter().position(|m| *m == id) {
+            if let Some((shown, child)) = jump_plan(self.chat.shown, &ids, id) {
                 self.chat.jump = None;
                 self.chat.stick = 0;
                 self.chat.no_pin = self.chat.selected.clone();
-                self.chat.shown = widen_to(self.chat.shown, ids.len(), at);
-                let win = ThreadWindow::new(ids.len(), self.chat.shown);
-                if let Some(child) = win.child(at) {
-                    self.chat.scroll.scroll_to_item(child);
-                }
+                self.chat.shown = shown;
+                self.chat.scroll.scroll_to_item(child);
                 window.request_animation_frame();
             }
         }
@@ -2638,7 +2823,29 @@ impl SeanceApp {
                     .child(n.clone()),
             );
         }
+        let reply = self
+            .chat
+            .reply
+            .as_ref()
+            .filter(|r| r.ws == ws && !read_only);
         col.child(thread)
+            .when_some(reply, |col, r| {
+                col.child(reply_bar(
+                    &r.text,
+                    div()
+                        .id("chat-reply-x")
+                        .flex_none()
+                        .px_1()
+                        .cursor_pointer()
+                        .hover(|s| s.text_color(SeancePalette::flame()))
+                        .tooltip(tip("cancel the reply"))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.chat.reply = None;
+                            cx.notify();
+                        }))
+                        .child("✕"),
+                ))
+            })
             .when(!read_only, |col| {
                 col.child(self.render_chat_composer(thread_w, cx))
             })
@@ -2875,6 +3082,15 @@ impl SeanceApp {
         let me = m.from == "me";
         let system = !me && m.from != "lead";
         let mut body = div().flex().flex_col().gap_0p5();
+        if let Some(r) = &m.reply {
+            let id = r.id;
+            body = body.child(
+                quote_block(&r.from, &r.text)
+                    .id(SharedString::from(format!("bubble-quote-{}", m.id)))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| this.chat_quote_jump(id, cx))),
+            );
+        }
         // Every picture, stacked above the text, each in a box whose size is
         // fixed up front: the decoded size fitted to the bubble, or a plain
         // box until the file has arrived. Nothing can paint outside it.
@@ -3534,6 +3750,81 @@ mod tests {
         // It stops at the whole thread.
         assert_eq!(show_earlier(990, 1000), 1000);
         assert!(!ThreadWindow::new(1000, show_earlier(990, 1000)).has_earlier());
+    }
+
+    #[test]
+    fn only_brian_s_and_the_lead_s_saved_messages_take_a_reply() {
+        let m = |id: i64, from: &str| Msg {
+            id,
+            from: from.into(),
+            ..Default::default()
+        };
+        assert!(can_reply("l6", &m(5, "me")));
+        assert!(can_reply("l6", &m(5, "lead")));
+        assert!(!can_reply("l6", &m(5, "system")));
+        assert!(!can_reply("l6", &m(5, "")));
+        // A bubble Invoke has not confirmed yet has no id to reply to.
+        assert!(!can_reply("l6", &m(-1, "me")));
+        assert!(!can_reply(ALERTS_WS, &m(5, "lead")));
+    }
+
+    #[test]
+    fn a_reply_clears_on_a_sent_note_and_stays_on_a_failed_one() {
+        let draft = |ws: &str, id| ReplyDraft {
+            ws: ws.into(),
+            id,
+            from: "lead".into(),
+            ts: 0,
+            text: "go?".into(),
+        };
+        assert_eq!(reply_after_send(Some(draft("l6", 9)), Some(9), true), None);
+        assert_eq!(
+            reply_after_send(Some(draft("l6", 9)), Some(9), false),
+            Some(draft("l6", 9))
+        );
+        // Another reply picked while the first was on its way stays.
+        assert_eq!(
+            reply_after_send(Some(draft("l6", 10)), Some(9), true),
+            Some(draft("l6", 10))
+        );
+        assert_eq!(
+            reply_after_send(Some(draft("l6", 9)), None, true),
+            Some(draft("l6", 9))
+        );
+        assert_eq!(reply_after_send(None, Some(9), true), None);
+        // Opening another circle drops it; the same circle keeps it.
+        assert_eq!(reply_after_select(Some(draft("l6", 9)), "rudle"), None);
+        assert_eq!(
+            reply_after_select(Some(draft("l6", 9)), "l6"),
+            Some(draft("l6", 9))
+        );
+        // The bubble shown while it sends quotes the same message.
+        assert_eq!(draft("l6", 9).quote().id, 9);
+    }
+
+    #[test]
+    fn a_quote_names_its_writer_and_reads_on_one_line() {
+        assert_eq!(quote_label("me"), "You");
+        assert_eq!(quote_label("lead"), "Lead");
+        assert_eq!(one_line("two\n  lines\there"), "two lines here");
+        assert_eq!(one_line(" \n"), "Photo or file");
+    }
+
+    #[test]
+    fn a_quote_click_widens_to_an_old_original_and_skips_a_missing_one() {
+        let ids: Vec<i64> = (1..=500).collect();
+        // Message 10 sits well above the newest 80.
+        let (shown, child) = jump_plan(THREAD_WINDOW, &ids, 10).unwrap();
+        let w = ThreadWindow::new(ids.len(), shown);
+        assert!(w.start <= 9);
+        assert_eq!(w.child(9), Some(child));
+        // One already drawn leaves the window as it is.
+        assert_eq!(
+            jump_plan(THREAD_WINDOW, &ids, 490).unwrap().0,
+            THREAD_WINDOW
+        );
+        // An original that is not loaded is no jump at all.
+        assert_eq!(jump_plan(THREAD_WINDOW, &ids, 9999), None);
     }
 
     #[test]
