@@ -2045,6 +2045,7 @@ impl SeanceApp {
                 .flex_col()
                 .gap_1()
                 .child(match &self.chat.error {
+                    Some(e) if e == chat_api::NO_URL_MESSAGE => e.clone(),
                     Some(e) => format!("Can't reach Invoke: {e}"),
                     None => "Loading circles…".to_string(),
                 })

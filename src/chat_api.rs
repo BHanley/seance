@@ -13,7 +13,8 @@ use std::process::{Command, Stdio};
 use anyhow::{anyhow, Context as _, Result};
 use serde::{de::DeserializeOwned, Deserialize};
 
-const DEFAULT_BASE: &str = "https://xps.tail5c9413.ts.net:8443";
+/// Shown in the Chat view when no Invoke server URL is configured.
+pub const NO_URL_MESSAGE: &str = "Chat needs an Invoke server URL. Set the SEANCE_INVOKE_URL environment variable, or put the URL on one line in ~/.config/seance/invoke-url, then reopen Chat.";
 /// Plain requests give up here; the long-poll gets its own, longer limit.
 const REQUEST_SECS: u64 = 10;
 
@@ -277,11 +278,30 @@ struct Poll {
     v: u64,
 }
 
+/// The Invoke URL: the env var wins, then the first non-empty line of the
+/// config file. Empty when neither is set.
+fn resolve_base(env: Option<&str>, file: Option<&str>) -> String {
+    let clean = |s: &str| s.trim().to_string();
+    if let Some(e) = env.map(clean).filter(|e| !e.is_empty()) {
+        return e;
+    }
+    file.and_then(|f| f.lines().map(clean).find(|l| !l.is_empty()))
+        .unwrap_or_default()
+}
+
+fn invoke_url_path() -> PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        if !xdg.is_empty() {
+            return PathBuf::from(xdg).join("seance/invoke-url");
+        }
+    }
+    PathBuf::from(shellexpand::tilde("~/.config/seance/invoke-url").as_ref())
+}
+
 fn base() -> String {
-    std::env::var("SEANCE_INVOKE_URL")
-        .ok()
-        .filter(|u| !u.is_empty())
-        .unwrap_or_else(|| DEFAULT_BASE.to_string())
+    let env = std::env::var("SEANCE_INVOKE_URL").ok();
+    let file = std::fs::read_to_string(invoke_url_path()).ok();
+    resolve_base(env.as_deref(), file.as_deref())
 }
 
 /// Percent-encode a query value (circle slugs are plain, but be safe).
@@ -308,6 +328,9 @@ fn origin(base: &str) -> String {
 }
 
 fn curl(path: &str, secs: u64, post: Option<&serde_json::Value>) -> Result<Vec<u8>> {
+    if base().is_empty() {
+        return Err(anyhow!(NO_URL_MESSAGE));
+    }
     let mut cmd = Command::new("curl");
     // --fail-with-body: a refusal still hands back Invoke's {"error": ...}.
     cmd.args(["-sS", "--fail-with-body", "-m", &secs.to_string()]);
@@ -455,6 +478,9 @@ pub fn check_upload(path: &std::path::Path) -> Result<()> {
 
 /// Send a file as Brian's note (`text` rides along as its caption).
 pub fn send_file(ws: &str, text: &str, path: &std::path::Path) -> Result<()> {
+    if base().is_empty() {
+        return Err(anyhow!(NO_URL_MESSAGE));
+    }
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -550,6 +576,9 @@ pub fn file_within(name: &str, secs: u64) -> Result<PathBuf> {
     let path = dir.join(leaf);
     if path.exists() {
         return Ok(path);
+    }
+    if base().is_empty() {
+        return Err(anyhow!(NO_URL_MESSAGE));
     }
     std::fs::create_dir_all(&dir)?;
     // Not `with_extension`: a.mp4 and a.png must not share a partial file.
@@ -820,10 +849,29 @@ mod tests {
     }
 
     #[test]
+    fn base_resolution_order() {
+        let file = Some("\n  https://file.example:1  \nignored\n");
+        assert_eq!(
+            resolve_base(Some(" https://env.example "), file),
+            "https://env.example"
+        );
+        assert_eq!(resolve_base(Some(""), file), "https://file.example:1");
+        assert_eq!(resolve_base(None, file), "https://file.example:1");
+        assert_eq!(resolve_base(Some("  "), Some("\n\n")), "");
+        assert_eq!(resolve_base(None, None), "");
+    }
+
+    #[test]
+    fn no_url_message_names_both_settings() {
+        assert!(NO_URL_MESSAGE.contains("SEANCE_INVOKE_URL"));
+        assert!(NO_URL_MESSAGE.contains("~/.config/seance/invoke-url"));
+    }
+
+    #[test]
     fn origin_drops_the_path() {
         assert_eq!(
-            origin("https://xps.tail5c9413.ts.net:8443"),
-            "https://xps.tail5c9413.ts.net:8443"
+            origin("https://invoke.example:8443"),
+            "https://invoke.example:8443"
         );
         assert_eq!(
             origin("http://localhost:9000/invoke/"),
