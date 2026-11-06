@@ -1,3 +1,89 @@
+# Seance, Brian Hanley's build
+
+**Built on [zackham/seance](https://github.com/zackham/seance).** Seance is
+Zack Ham's project: the daemon, the terminals, the control plane, the browser
+client and most of what is below this section are his. This fork (branch
+`brian`) adds a few screens on top. It is not upstream, and it is not
+supported by upstream. Upstream's README follows unchanged, MIT license
+included.
+
+## What this build adds
+
+All of it is in the Mac and Linux GUI. The daemon work below is small.
+
+- **Chat layout.** A third layout next to classic and stage: a circle list
+  and a message thread per circle, with replies, tap-to-answer choices, read
+  ticks, search, photos and files, and a tasks card. It talks to an
+  **Invoke** server (see the requirements below).
+- **Stage layout.** One circle's lead up front and live, a strip of circles
+  with their states, needs-you and done chips (with Snooze 1h), the crew as
+  cards, and a health footer.
+- **Wall.** A tile per circle and a Today feed, reached with the
+  ctrl+shift+space peek. In this build the layout switch cycles classic,
+  stage and chat, and `seance ctl layout wall` opens Chat.
+- **Spaces** as tabs, nine color schemes (including Fog, Parlor and
+  Herbarium), a pixel creature per circle lead, an AFK chip, auto-sleep for
+  idle Claude panes, docked file panes, and opt-in sounds. The full list is
+  in [`CHANGELOG.md`](CHANGELOG.md) under Unreleased and 0.27.0.
+
+## What you need
+
+| Part | Needs |
+|------|-------|
+| The Mac app (GUI) | A Mac. The download is Apple Silicon (arm64) only. |
+| Classic, Stage, Wall and terminals | A **daemon**. The Mac app's launch picker offers "connect to remote host" (an ssh destination) or "run locally". The docs describe the Mac as a thin client, and the daemon is meant to run on a Linux machine; I have not tested the Mac "run locally" option. |
+| A Linux machine | Where the daemon (and your agents' terminals) normally live. It needs this same build of `seance` on the `PATH` that a non-interactive `ssh` sees, and **passwordless ssh** from the Mac (keys or agent). The daemon refuses a GUI whose version does not match exactly, so build both sides from this fork. |
+| Tailscale | **Not required by the app.** Any ssh destination works. Tailscale shows up in two places: the Chat layout's default server address is a Tailscale host (so set your own, below), and `seance web` leaves remote access to Tailscale (`docs/WEB.md`). |
+| Chat layout | An **Invoke** server, a separate service that is not in this repo. Point the app at it with `SEANCE_INVOKE_URL`. The built-in default is the author's own Tailscale address and will not work for you. It expects the server to identify you itself (Tailscale Serve), so there is no token. Without Invoke, Chat has nothing to show; use classic or stage. |
+| Stage extras | Optional `terminal.conf` keys `seance-circle-map` and `seance-health-file`, files on the daemon's machine. Leave them out and those parts stay hidden. |
+
+## Install
+
+**Fastest, no building: the Mac app.**
+
+1. Download `Seance-brian-<version>-macos-arm64.zip` from the
+   [Releases page](https://github.com/BHanley/seance/releases) and unzip it.
+2. Drag `Seance.app` to `/Applications`.
+3. It is **not Apple-signed**, so macOS blocks the first open. Do one of:
+   right-click the app, choose **Open**, then **Open** again; or System
+   Settings, Privacy & Security, **Open Anyway**; or run
+   `xattr -dr com.apple.quarantine /Applications/Seance.app`.
+4. Set up a daemon (next section), then pick "connect to remote host" in
+   the launch picker.
+
+**Build the Mac app yourself.** You need a recent Rust toolchain and the
+Xcode command line tools.
+
+```bash
+git clone -b brian https://github.com/BHanley/seance.git
+cd seance
+./scripts/bootstrap-deps.sh     # pinned gpui checkout
+./scripts/bundle-macos.sh --user   # builds (about 10 to 15 min), installs ~/Applications/Seance.app
+```
+
+`bundle-macos.sh` also links `~/.local/bin/seance` to the app. See
+[docs/REMOTE.md](docs/REMOTE.md).
+
+**Set up the daemon on a Linux machine.**
+
+```bash
+git clone -b brian https://github.com/BHanley/seance.git
+cd seance
+./scripts/bootstrap-deps.sh
+cargo build --release           # Vulkan-capable drivers and a recent Rust
+install -m755 target/release/seance ~/.local/bin/seance   # must be on the ssh PATH
+```
+
+Then open the Mac app, choose "connect to remote host" and type the ssh
+destination. The app starts the daemon over ssh if it is not running.
+
+**Using Chat.** Set `SEANCE_INVOKE_URL` to your Invoke server's `https://`
+address before launching. A Dock launch does not see your shell's
+environment, so run `launchctl setenv SEANCE_INVOKE_URL https://...` first
+(or start the app from a terminal).
+
+---
+
 # seance
 
 **A shared space where humans and agents work together, live.**

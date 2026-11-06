@@ -348,7 +348,7 @@ const PATH_ROWS: u16 = 6;
 
 /// File paths a double-click on `(row, col)` could mean, longest first.
 ///
-/// Agents print paths like `/home/bhanley/Claude/Projects/Seance Demo/LOG.md`
+/// Agents print paths like `/home/you/Claude/Projects/My Demo/LOG.md`
 /// or `~/sites/rüdle/` in prose, wrapped across rows and with spaces in them,
 /// so the grid can't say where one ends. Every absolute or `~/` path that
 /// starts at a word boundary and runs over the hit is offered, ending at each
