@@ -129,14 +129,26 @@ fn show_earlier(shown: usize, len: usize) -> usize {
 }
 
 /// How many to draw once `added` messages have come in. Pinned to the
-/// bottom, the window slides with them; reading older ones (`held`), it
-/// grows so nothing above him drops out and moves what he is reading.
+/// bottom, the window goes back to the newest [`THREAD_WINDOW`] (he is taken
+/// to the bottom anyway); reading older ones (`held`), it grows so nothing
+/// above him drops out and moves what he is reading.
 fn shown_after_arrival(shown: usize, added: usize, held: bool) -> usize {
     if held {
         shown.max(THREAD_WINDOW) + added
     } else {
-        shown
+        THREAD_WINDOW
     }
+}
+
+/// Sits `below` points above the message that was first before "Show
+/// earlier", for the scroll to put at the top edge. Takes no room: its
+/// margins and the thread's `gap` after it cancel.
+fn earlier_marker(below: f32, gap: f32) -> gpui::Div {
+    div()
+        .flex_none()
+        .h(px(0.))
+        .mt(px(-below))
+        .mb(px(below - gap))
 }
 
 /// Crew dances step at about 12 frames a second from a timer: every frame
@@ -2557,14 +2569,7 @@ impl SeanceApp {
         }
         for (i, m) in all.iter().enumerate().skip(win.start) {
             if let Some((_, below, gap)) = marker.filter(|(at, ..)| *at == i) {
-                // Takes no room: its margins and the gap after it cancel.
-                thread = thread.child(
-                    div()
-                        .flex_none()
-                        .h(px(0.))
-                        .mt(px(-below))
-                        .mb(px(below - gap)),
-                );
+                thread = thread.child(earlier_marker(below, gap));
             }
             thread = thread.child(self.chat_bubble(m, read, cx));
         }
@@ -3551,6 +3556,8 @@ mod tests {
         // Pinned to the bottom: the newest stay drawn, the oldest drop off.
         let shown = shown_after_arrival(THREAD_WINDOW, 3, false);
         assert_eq!(ThreadWindow::new(503, shown).start, 503 - THREAD_WINDOW);
+        // Even after "Show earlier": back to the newest window.
+        assert_eq!(shown_after_arrival(400, 1, false), THREAD_WINDOW);
         // Scrolled up reading: the first drawn message stays the first.
         let before = ThreadWindow::new(500, THREAD_WINDOW).start;
         let shown = shown_after_arrival(THREAD_WINDOW, 3, true);
@@ -3747,5 +3754,117 @@ mod tests {
                 all / win
             );
         }
+    }
+
+    /// "Show earlier" in a headless window: the message that was first is
+    /// at the same place on screen after more are drawn above it, and still
+    /// there once the marker is gone.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn show_earlier_keeps_the_first_message_in_place() {
+        use gpui::AppContext as _;
+        use std::sync::Arc;
+
+        struct Mock {
+            n: usize,
+            from: usize,
+            marker: Option<(usize, f32, f32)>,
+            scroll: ScrollHandle,
+        }
+        impl gpui::Render for Mock {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let mut thread = div()
+                    .id("t")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.scroll)
+                    .px_4()
+                    .py_3()
+                    .flex()
+                    .flex_col()
+                    .gap_2();
+                if self.from > 0 {
+                    thread = thread.child(div().flex_none().h(px(28.)));
+                }
+                for i in self.from..self.n {
+                    if let Some((_, below, gap)) = self.marker.filter(|(at, ..)| *at == i) {
+                        thread = thread.child(earlier_marker(below, gap));
+                    }
+                    let h = 40. + (i % 5) as f32 * 13.;
+                    thread = thread.child(div().flex_none().h(px(h)));
+                }
+                div().size_full().flex().child(thread)
+            }
+        }
+
+        let platform = gpui_platform::current_platform(true);
+        let mut cx = gpui::HeadlessAppContext::with_platform(
+            platform.text_system(),
+            Arc::new(()),
+            gpui_platform::current_headless_renderer,
+        );
+        let n = 300;
+        let scroll = ScrollHandle::new();
+        let first = ThreadWindow::new(n, 0);
+        let handle = scroll.clone();
+        let win = cx
+            .open_window(gpui::size(px(600.), px(500.)), move |_, cx| {
+                cx.new(|_| Mock {
+                    n,
+                    from: first.start,
+                    marker: None,
+                    scroll: handle,
+                })
+            })
+            .expect("headless window");
+        cx.run_until_parked();
+        let draw = |cx: &mut gpui::HeadlessAppContext| {
+            cx.update_window(win.into(), |_, window, cx| {
+                window.refresh();
+                window.draw(cx).clear();
+            })
+            .unwrap();
+        };
+        let on_screen = |child: usize| {
+            let b = scroll.bounds_for_item(child).expect("laid out");
+            f32::from(b.top() + scroll.offset().y - scroll.bounds().top())
+        };
+        draw(&mut cx);
+        // Scrolled up near the top, the row and the first message in view.
+        scroll.set_offset(gpui::point(px(0.), px(-20.)));
+        draw(&mut cx);
+        let at = first.start;
+        let before = on_screen(first.child(at).unwrap());
+        assert!(
+            before > 0.,
+            "the first message sits under the row: {before}"
+        );
+
+        let wider = ThreadWindow::new(n, show_earlier(0, n));
+        let gap = cx
+            .update_window(win.into(), |_, window, _| {
+                f32::from(window.rem_size()) * 0.5
+            })
+            .unwrap();
+        win.update(&mut cx, |m, _, _| {
+            m.from = wider.start;
+            m.marker = Some((at, before, gap));
+        })
+        .unwrap();
+        scroll.scroll_to_top_of_item(wider.child(at).unwrap());
+        draw(&mut cx);
+        // The marker is the child at the old index; the message is next.
+        let after = on_screen(wider.child(at).unwrap() + 1);
+        assert!(
+            (after - before).abs() < 1.,
+            "kept its place: {before} then {after}"
+        );
+        win.update(&mut cx, |m, _, _| m.marker = None).unwrap();
+        draw(&mut cx);
+        let settled = on_screen(wider.child(at).unwrap());
+        assert!(
+            (settled - before).abs() < 1.,
+            "the marker took no room: {before} then {settled}"
+        );
     }
 }
