@@ -201,6 +201,9 @@ pub(super) fn confirm(
                     // Enter for it; twice at most per attempt.
                     let since = *stuck_since.get_or_insert_with(Instant::now);
                     if since.elapsed() >= Duration::from_millis(1200) && resubmits < 2 {
+                        // Same reclaim-then-Enter as PtySession::resubmit.
+                        raw(pane, b" \x7f", scope, from)?;
+                        std::thread::sleep(Duration::from_millis(120));
                         raw(pane, b"\r", scope, from)?;
                         resubmits += 1;
                         stuck_since = None;

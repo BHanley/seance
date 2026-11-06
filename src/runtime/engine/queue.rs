@@ -53,7 +53,7 @@ pub struct Inflight {
 /// Ephemeral pump state (not persisted).
 #[derive(Default)]
 pub struct SendQueueState {
-    idle_since: HashMap<String, u64>,
+    pub(super) idle_since: HashMap<String, u64>,
     pub(super) inflight: HashMap<String, Inflight>,
 }
 
@@ -555,7 +555,7 @@ impl Engine {
                 let since = *f.stuck_since.get_or_insert(now);
                 if now.saturating_sub(since) >= STUCK_ENTER_MS {
                     if let Some(s) = session {
-                        s.write_bytes(b"\r".to_vec());
+                        s.resubmit();
                     }
                     f.resubmits += 1;
                     f.stuck_since = None;

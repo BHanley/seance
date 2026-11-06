@@ -332,7 +332,7 @@ impl ClientState {
     pub fn workspace_has_working_agent(&self, workspace: &str) -> bool {
         self.panes
             .iter()
-            .any(|p| p.workspace == workspace && self.pane_is_live_working(&p.slug))
+            .any(|p| p.workspace == workspace && !p.asleep && self.pane_is_live_working(&p.slug))
     }
 
     /// Live attention badge for a sidebar row (native `workspace_attention_cx`).
@@ -340,7 +340,11 @@ impl ClientState {
         if self.workspace_has_working_agent(workspace) {
             return Some(Attention::Working);
         }
-        self.workspace_unread.get(workspace).copied()
+        // Asleep panes keep a stale "working" status / unread (native twin).
+        self.workspace_unread
+            .get(workspace)
+            .copied()
+            .filter(|a| !(*a == Attention::Working && self.workspace_asleep(workspace)))
     }
 
     /// Ctrl+PageUp/Down walks EXACTLY what the sidebar displays, read live at
@@ -1451,6 +1455,18 @@ mod tests {
         st.panes[2].asleep = true;
         assert!(st.workspace_asleep("lab"));
         assert!(!st.workspace_asleep("cadence"));
+    }
+
+    #[test]
+    fn asleep_circle_never_reads_working() {
+        let mut st = ClientState::default();
+        st.apply_event(state_with(&[("lab", "w-1", true)]), 0.0);
+        st.workspace_unread.insert("lab".into(), Attention::Working);
+        st.panes[0].asleep = true;
+        assert!(!st.workspace_has_working_agent("lab"));
+        assert_eq!(st.workspace_attention("lab"), None);
+        st.workspace_unread.insert("lab".into(), Attention::Done);
+        assert_eq!(st.workspace_attention("lab"), Some(Attention::Done));
     }
 
     /// The whole point: a circle leaves the working band on the daemon's

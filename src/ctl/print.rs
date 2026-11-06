@@ -403,6 +403,9 @@ COMMANDS:
     space [list]                  spaces and the circles in each
     space new NAME · rename SPACE NAME · rm SPACE · default SPACE
     move [CIRCLE] SPACE           put a circle in a space
+    move-pane PANE CIRCLE [--before PANE]  move a pane into another circle
+         (the pane keeps its old $SEANCE_WORKSPACE: its own ctl stays scoped
+          there until restarted — use --all from inside it)
     sleep [WS]                    sleep a circle (frees its RAM; wakes on resume)
     wake [WS]                     wake a sleeping circle
     theme [ID]                    color scheme: show the list, or switch every window

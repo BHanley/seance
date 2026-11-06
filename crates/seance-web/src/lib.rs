@@ -1936,6 +1936,43 @@ pub fn seance_mobile_set_circle_mode(mode: &str, on: bool) -> bool {
     .unwrap_or(false)
 }
 
+/// Sleep state of the selected circle for the phone sheet: `"asleep"`,
+/// `"sleepable"` (every pane restorable, per the daemon), `"no"`, or `None`
+/// with nothing selected. Same gate as the rail menu's sleep verb.
+#[wasm_bindgen]
+pub fn seance_mobile_sleep_state() -> Option<String> {
+    with_mobile_app(|app| {
+        let ws = app.selected_workspace()?;
+        let st = app.state.borrow();
+        Some(if st.workspace_asleep(&ws) {
+            "asleep"
+        } else if st.workspace_sleepable(&ws) {
+            "sleepable"
+        } else {
+            "no"
+        })
+        .map(str::to_string)
+    })
+    .flatten()
+}
+
+/// Sleep (`true`) or wake the selected circle. Returns its label for the toast.
+#[wasm_bindgen]
+pub fn seance_mobile_set_asleep(asleep: bool) -> Option<String> {
+    with_mobile_app(|app| {
+        let ws = app.selected_workspace()?;
+        let label = app.state.borrow().workspace_label(&ws);
+        let workspace = ws.clone();
+        app.send(&if asleep {
+            GuiRequest::SleepWorkspace { workspace }
+        } else {
+            GuiRequest::WakeWorkspace { workspace }
+        });
+        Some(label)
+    })
+    .flatten()
+}
+
 /// Banish the selected circle — kill every pane in it — and land on a
 /// neighbour. Returns the label of what was banished, for the toast.
 ///

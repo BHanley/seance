@@ -166,6 +166,18 @@ pub(crate) fn with_identity(
             scope,
             from,
         },
+        MovePane {
+            pane,
+            workspace,
+            before,
+            ..
+        } => MovePane {
+            pane,
+            workspace,
+            before,
+            scope,
+            from,
+        },
         Wake { workspace, .. } => Wake {
             workspace,
             scope,
@@ -1097,6 +1109,29 @@ pub(crate) fn parse_rename_pane(args: Vec<String>) -> Result<ControlRequest, Str
     Ok(ControlRequest::RenamePane {
         name,
         pane,
+        scope: None,
+        from: None,
+    })
+}
+
+/// `move-pane PANE CIRCLE [--before PANE]`.
+pub(crate) fn parse_move_pane(args: Vec<String>) -> Result<ControlRequest, String> {
+    let mut it = args.into_iter();
+    let mut before = None;
+    let mut positionals: Vec<String> = Vec::new();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--before" => before = Some(take_value(&mut it, "--before")?),
+            other => positionals.push(other.to_string()),
+        }
+    }
+    let [pane, workspace]: [String; 2] = positionals
+        .try_into()
+        .map_err(|_| "move-pane: expected PANE CIRCLE [--before PANE]".to_string())?;
+    Ok(ControlRequest::MovePane {
+        pane,
+        workspace,
+        before,
         scope: None,
         from: None,
     })

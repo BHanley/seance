@@ -1091,13 +1091,7 @@ impl Engine {
             .count();
         // Active open task, else most recent task for this pane (so wait --task
         // still sees done after complete_active_task clears the active map).
-        let task_id = self.active_tasks.get(&p.slug).cloned().or_else(|| {
-            self.tasks
-                .values()
-                .filter(|t| t.pane == p.slug)
-                .max_by_key(|t| t.created_ms)
-                .map(|t| t.id.clone())
-        });
+        let task_id = self.current_task_id(&p.slug);
         let task_status = task_id
             .as_ref()
             .and_then(|id| self.tasks.get(id).map(|t| t.status.clone()));
@@ -1313,7 +1307,9 @@ impl Engine {
                     .collect();
                 for slug in &slugs {
                     if let Some(s) = self.session_mut(slug) {
-                        s.kick_redraw();
+                        if s.screen_blank() {
+                            s.kick_redraw();
+                        }
                     }
                 }
                 // Before the state, so the first paint is already in the

@@ -58,6 +58,8 @@
         seance_mobile_set_circle_mode,
         seance_mobile_spaces,
         seance_mobile_move_to_space,
+        seance_mobile_sleep_state,
+        seance_mobile_set_asleep,
       } from './seance_web.js';
       await init();
       // The phone chrome below is plain JS and can't reach the websocket —
@@ -77,6 +79,8 @@
         setCircleMode: seance_mobile_set_circle_mode,
         spaces: seance_mobile_spaces,
         moveToSpace: seance_mobile_move_to_space,
+        sleepState: seance_mobile_sleep_state,
+        setAsleep: seance_mobile_set_asleep,
       };
       window.dispatchEvent(new Event('seance-ready'));
     </script>
@@ -249,6 +253,10 @@
         // Host circle modes (AFK) — one toggle each, only when host.json
         // defines any. The daemon prompts the circle's first pane.
         var modeBtns = mk('div', 'm-menu-modes');
+        // Sleep: the desktop spelling is the rail row's right-click menu.
+        // Shown only when the daemon says every pane can be put back.
+        var sleepBtn = mk('button', 'm-menu-sleep', 'm-sheet-btn', 'sleep circle');
+        sleepBtn.type = 'button';
         var menuSpacesHead = mk('div', null, 'm-menu-sec', 'move to space');
         var spaceBtns = mk('div', 'm-menu-spaces');
         var menuConnHead = mk('div', null, 'm-menu-sec', 'connection');
@@ -267,6 +275,7 @@
           menuName,
           menuRailHead,
           pinBtn,
+          sleepBtn,
           modeBtns,
           menuSpacesHead,
           spaceBtns,
@@ -328,9 +337,28 @@
           menuRailHead.hidden = on === undefined;
           pinBtn.textContent = on ? 'unpin' : 'pin';
           pinBtn.classList.toggle('on', !!on);
+          paintSleep();
           paintModes();
           paintSpaces();
         }
+        function paintSleep() {
+          var s = window.seanceMobile && window.seanceMobile.sleepState
+            ? window.seanceMobile.sleepState()
+            : undefined;
+          sleepBtn.hidden = s !== 'asleep' && s !== 'sleepable';
+          sleepBtn.textContent = s === 'asleep' ? 'awaken circle' : 'sleep circle';
+        }
+        sleepBtn.addEventListener('click', function (e) {
+          e.preventDefault();
+          var asleep = window.seanceMobile.sleepState() === 'asleep';
+          var label = window.seanceMobile.setAsleep(!asleep);
+          if (!label) {
+            toast('no circle selected');
+            return;
+          }
+          closeMenu();
+          toast((asleep ? 'waking ' : 'sleeping ') + label);
+        });
         function paintSpaces() {
           spaceBtns.textContent = '';
           var spaces = [];

@@ -498,6 +498,17 @@ impl SeanceApp {
         })
     }
 
+    /// Pin a circle this window is about to create to the space on screen.
+    /// A reused slug can still carry a dead circle's `spaces.of` entry, and
+    /// reconcile only places circles that have none — so without this the new
+    /// circle inherits the old space (usually the default).
+    pub(super) fn claim_new_circle_for_current_space(&mut self, ws: &str) {
+        let space = self.current_space();
+        if self.subs_pref.spaces.move_circle(ws, &space) {
+            self.save_arrangement();
+        }
+    }
+
     pub(super) fn move_circle_to_space(&mut self, ws: &str, space: &str) {
         if self.subs_pref.spaces.move_circle(ws, space) {
             self.client.log_event(
@@ -737,7 +748,7 @@ impl SeanceApp {
     pub(super) fn workspace_has_working_agent(&self, workspace: &str) -> bool {
         self.panes
             .iter()
-            .any(|p| p.workspace == workspace && self.pane_is_live_working(&p.slug))
+            .any(|p| p.workspace == workspace && !p.asleep && self.pane_is_live_working(&p.slug))
     }
 
     /// Live-busy, as the DAEMON sees it: braille OSC title spinner, or
@@ -933,12 +944,18 @@ impl SeanceApp {
         if self.workspace_has_working_agent(workspace) {
             return Some(WorkspaceAttention::Working);
         }
-        self.workspace_unread.get(workspace).copied().or_else(|| {
-            self.panes
-                .iter()
-                .any(|p| p.workspace == workspace && self.subs_pref.later.contains(&p.slug))
-                .then_some(WorkspaceAttention::Later)
-        })
+        // An asleep pane keeps its last agent status ("working") and any
+        // unread Working it raised; neither is true of a sleeping circle.
+        self.workspace_unread
+            .get(workspace)
+            .copied()
+            .filter(|a| !(*a == WorkspaceAttention::Working && self.workspace_asleep(workspace)))
+            .or_else(|| {
+                self.panes
+                    .iter()
+                    .any(|p| p.workspace == workspace && self.subs_pref.later.contains(&p.slug))
+                    .then_some(WorkspaceAttention::Later)
+            })
     }
 
     /// Sidebar right-edge label: relative time since the last pane output in
@@ -1026,6 +1043,7 @@ impl SeanceApp {
             }
             n += 1;
         };
+        self.claim_new_circle_for_current_space(&name);
         let _ = self.client.create_workspace(&name);
         // Born here → looked at here; the daemon subscribes us on create.
         self.subs_pref.mark_seen(&name);

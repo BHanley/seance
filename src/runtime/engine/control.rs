@@ -429,7 +429,10 @@ impl Engine {
                     Err(e) => return err(e),
                 };
                 let hit = |m: &MessageRecord| match (&pane, &circle) {
-                    (Some(p), _) => &m.to_pane == p || m.from_pane.as_ref() == Some(p),
+                    (Some(p), _) => {
+                        (&m.to_pane == p || m.from_pane.as_ref() == Some(p))
+                            && self.owns_record(p, m.created_ms)
+                    }
                     (None, Some(c)) => {
                         m.to_circle.as_ref() == Some(c)
                             || m.from_circle.as_ref() == Some(c)
@@ -1064,13 +1067,7 @@ impl Engine {
                 let (task_id, task_status, task_chars) = session
                     .as_ref()
                     .and_then(|slug| {
-                        let tid = self.active_tasks.get(slug).cloned().or_else(|| {
-                            self.tasks
-                                .values()
-                                .filter(|t| t.pane == *slug)
-                                .max_by_key(|t| t.created_ms)
-                                .map(|t| t.id.clone())
-                        })?;
+                        let tid = self.current_task_id(slug)?;
                         let t = self.tasks.get(&tid)?;
                         Some((Some(tid), Some(t.status.clone()), Some(t.body.len())))
                     })
@@ -1270,6 +1267,52 @@ impl Engine {
                     }
                     None => err(format!("no circle '{key}'")),
                 }
+            }
+            MovePane {
+                pane,
+                workspace,
+                before,
+                scope,
+                from,
+            } => {
+                let idx = match find(self, &pane, &scope) {
+                    Ok(i) => i,
+                    Err(e) => return err(e),
+                };
+                let Some(target) = self.resolve_workspace(&workspace) else {
+                    return err(if self.workspace_key_is_ambiguous(&workspace) {
+                        format!("circle '{workspace}' is ambiguous — use its slug")
+                    } else {
+                        format!("no circle '{workspace}'")
+                    });
+                };
+                let slug = self.panes[idx].slug.clone();
+                let source = self.panes[idx].workspace.clone();
+                let before = match before {
+                    Some(b) => match find(self, &b, &None) {
+                        Ok(bi) if self.panes[bi].workspace == target => {
+                            Some(self.panes[bi].slug.clone())
+                        }
+                        Ok(_) => return err(format!("--before '{b}' is not in '{target}'")),
+                        Err(e) => return err(e),
+                    },
+                    None => None,
+                };
+                // reorder_pane is the GUI drag path and moves the selection
+                // with the pane; a ctl move must not yank the human's view.
+                let selected = self.selected_workspace.clone();
+                self.reorder_pane(&slug, &target, before.as_deref());
+                self.selected_workspace = selected;
+                self.persist();
+                self.push_state_to_all();
+                events::log(
+                    &actor(&from),
+                    Some(&target),
+                    Some(&slug),
+                    "ctl_move_pane",
+                    format!("{source} -> {target}"),
+                );
+                ok(json!({"pane": slug, "from": source, "workspace": target}))
             }
             Sleep {
                 workspace,
@@ -1633,20 +1676,12 @@ impl Engine {
                     match find(self, &target, &scope) {
                         Ok(idx) => {
                             let slug = self.panes[idx].slug.clone();
-                            if let Some(tid) = self.active_tasks.get(&slug) {
-                                match self.tasks.get(tid) {
+                            match self.current_task_id(&slug) {
+                                Some(tid) => match self.tasks.get(&tid) {
                                     Some(t) => ok(task_json(t)),
                                     None => err(format!("active task '{tid}' missing")),
-                                }
-                            } else {
-                                // Fall back to most recent task for this pane.
-                                let mut candidates: Vec<_> =
-                                    self.tasks.values().filter(|t| t.pane == slug).collect();
-                                candidates.sort_by_key(|t| std::cmp::Reverse(t.created_ms));
-                                match candidates.first() {
-                                    Some(t) => ok(task_json(t)),
-                                    None => err(format!("no task for pane '{slug}'")),
-                                }
+                                },
+                                None => err(format!("no task for pane '{slug}'")),
                             }
                         }
                         Err(e) => err(e),

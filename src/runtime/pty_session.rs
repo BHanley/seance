@@ -539,6 +539,18 @@ impl PtySession {
         (*self.cols.lock().unwrap(), *self.rows.lock().unwrap())
     }
 
+    /// Nothing drawn on the visible screen — what a Term adopted across a
+    /// handoff looks like until the child repaints.
+    pub fn screen_blank(&self) -> bool {
+        let term = self.term.lock();
+        let grid = term.grid();
+        let cols = grid.columns();
+        (0..grid.screen_lines() as i32).all(|l| {
+            let row = &grid[Line(l)];
+            (0..cols).all(|c| matches!(row[Column(c)].c, ' ' | '\0'))
+        })
+    }
+
     pub fn write_bytes(&self, bytes: Vec<u8>) {
         self.io_tx.send(IoMsg::Write(bytes));
     }
@@ -584,6 +596,20 @@ impl PtySession {
                 }
             });
         }
+    }
+
+    /// Enter for text already sitting in an agent's composer. Claude's footer
+    /// (background-agent list) can hold focus and eat a bare Enter ("Cannot
+    /// open agents — you have unsent text"); a typed key hands focus back to
+    /// the composer, and space+backspace leaves its text unchanged. Enter goes
+    /// in a separate write so the TUI can't read the three bytes as a paste.
+    pub fn resubmit(&self) {
+        self.write_bytes(b" \x7f".to_vec());
+        let tx = self.io_tx.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(120));
+            tx.send(IoMsg::Write(b"\r".to_vec()));
+        });
     }
 
     pub fn resize(&self, cols: u16, rows: u16) {

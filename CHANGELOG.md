@@ -259,6 +259,9 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
   every platform.
 - `seance ctl rename-pane [PANE] NAME` sets a pane's display name from a
   script (the slug never moves).
+- `seance ctl move-pane PANE CIRCLE [--before PANE]` moves a pane into another
+  existing circle (slug or label) without changing the human's selection.
+- Web: sleep / awaken the selected circle from the phone circle sheet.
 - Lifetime UUIDv4 identities for panes and circles: `SEANCE_PANE_ID` and
   `SEANCE_WORKSPACE_ID` in launched processes, `pane_id` and `workspace_id`
   in ctl pane rows and `whoami`, and `id:<pane_id>` pane addressing. IDs
@@ -355,6 +358,26 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 - macOS banners (with terminal-notifier) are one per pane: a pane's new
   banner replaces its old one, and opening the pane, or Seen on its Stage
   peek card, takes it out of Notification Center.
+### Fixed
+
+- A sleeping circle no longer shows as working off its last agent status.
+- Attach no longer resize-bounces every pane: only blank (post-handoff)
+  Terms are kicked, so a reconnect-looping client can't flicker every TUI.
+- Message resubmit types space+backspace before Enter, so Claude's footer
+  can't swallow it.
+- New circles from quicklaunch / "+ circle" land in the space on screen
+  even when the slug reuses a dead circle's space entry.
+- `restart-gui` relaunches the GUI detached instead of as its own child.
+- A new pane that is given a dead pane's slug no longer inherits its task,
+  scratchpad, sidecars (`.taskid` / `.task.json` / `.telegram.json`),
+  messages, asks or pad revs. Closing a pane retires its slug-keyed state
+  and moves its pad files to `scratch/archive/<pane_id>.*`; task and message
+  history stays in the stores but is hidden from a later owner of the slug
+  (records older than the pane's birth). On load, active tasks whose pane is
+  gone or predates the live pane's birth are marked `orphaned`. Pads of
+  panes already running are left alone (their `$SEANCE_SCRATCHPAD` points
+  there); leftover pads under a free slug are archived as
+  `orphan-<slug>-<ms>.*` when the slug is next used.
 
 ### Removed
 
