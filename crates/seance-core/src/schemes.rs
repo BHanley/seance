@@ -67,7 +67,17 @@ pub struct Texture {
     /// Carved look: controls and bubbles are square plates with hard pixel
     /// bevels cut from the wall, and Chat's messages sit on dim stone
     /// (`src/carve.rs`). Other skins keep their stock rounded widgets.
-    pub carved: bool,
+    pub carved: Option<Carve>,
+}
+
+/// How a carved skin cuts its widgets (`src/carve.rs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Carve {
+    /// Chiseled stone: a dark outline with a lit top and left, a shadowed
+    /// bottom and right.
+    Stone,
+    /// A hand-cut block, printed: a rough ink outline, no lit side.
+    Block,
 }
 
 /// Brian's own chat bubbles, recolored by a scheme: `bg` fills the bubble
@@ -243,7 +253,7 @@ pub const CASTLE_STONE: Texture = Texture {
     frame: 0x141415,
     lamp: Some(Lamp::Torch),
     strength: 1.0,
-    carved: true,
+    carved: Some(Carve::Stone),
 };
 
 // Neon District: grimy riveted steel in near-black violet, hot neon for the
@@ -261,11 +271,43 @@ pub const NEON_STEEL: Texture = Texture {
     frame: 0x1B1A26,
     lamp: Some(Lamp::Tube),
     strength: 1.0,
-    carved: false,
+    carved: None,
 };
 
 /// Every scheme, in menu order.
-pub static SCHEMES: [Scheme; 14] = [
+// Linocut: a hand-cut, hand-printed block. Paper is cream stock with black
+// ink and a red-orange accent; Night is the black block with cream and amber
+// (the app icon's palette). Flat colors only; the texture is the tile.
+const LINOCUT_PAPER: Chrome = chrome([
+    0xEDE3CD, 0xE3D7BD, 0xD6C7A8, 0x9A8A70, 0x171213, 0x40352E, 0x5C4E42, 0xA6401F, 0x7A2E15,
+    0x5E3A2A, 0x8A6A4F, 0x3D6B2E, 0x8E1F17,
+]);
+const LINOCUT_NIGHT: Chrome = chrome([
+    0x161216, 0x1E1819, 0x2A2220, 0x4F3B24, 0xEDE3CD, 0xC4B8A2, 0xA39782, 0xD79B4B, 0x9C6E2E,
+    0xC48A3C, 0x503B24, 0x9BB35A, 0xE0654A,
+]);
+
+/// The Linocut Paper tile, made by `scripts/gen-linocut-tile.py`.
+pub const LINOCUT_PAPER_TILE: Texture = Texture {
+    png: include_bytes!("../../../assets/skins/linocut-paper.png"),
+    size: 256,
+    frame: 0x171213,
+    lamp: None,
+    strength: 1.0,
+    carved: Some(Carve::Block),
+};
+
+/// The Linocut Night tile.
+pub const LINOCUT_NIGHT_TILE: Texture = Texture {
+    png: include_bytes!("../../../assets/skins/linocut-night.png"),
+    size: 256,
+    frame: 0x2E2118,
+    lamp: None,
+    strength: 1.0,
+    carved: Some(Carve::Block),
+};
+
+pub static SCHEMES: [Scheme; 16] = [
     Scheme {
         id: "candlelit",
         label: "Candlelit",
@@ -508,6 +550,54 @@ pub static SCHEMES: [Scheme; 14] = [
         }),
         lead_bubble: None,
     },
+    Scheme {
+        id: "linocut-paper",
+        label: "Linocut Paper",
+        light: true,
+        chrome: LINOCUT_PAPER,
+        term: Some(term(
+            true,
+            &LINOCUT_PAPER,
+            spec([
+                0xF4ECDB, 0x171213, 0x3D6B2E, 0x8A6100, 0x2F3F7A, 0x7A2E6E, 0x9E2A1A, 0x1F6B6B,
+                0x6B5D4F,
+            ]),
+        )),
+        texture: Some(LINOCUT_PAPER_TILE),
+        // Brian's plate is the accent, printed solid; the lead's is a darker
+        // sheet of the same stock.
+        me_bubble: Some(MeBubble {
+            bg: 0xA6401F,
+            ink: 0xF6EEDC,
+        }),
+        lead_bubble: Some(MeBubble {
+            bg: 0xDCCDAE,
+            ink: 0x171213,
+        }),
+    },
+    Scheme {
+        id: "linocut-night",
+        label: "Linocut Night",
+        light: false,
+        chrome: LINOCUT_NIGHT,
+        term: Some(term(
+            false,
+            &LINOCUT_NIGHT,
+            spec([
+                0x120E11, 0xEDE3CD, 0x9BB35A, 0xD79B4B, 0x8FA8C8, 0xB890B5, 0xD9654A, 0x7FB5A8,
+                0xA39782,
+            ]),
+        )),
+        texture: Some(LINOCUT_NIGHT_TILE),
+        me_bubble: Some(MeBubble {
+            bg: 0xD79B4B,
+            ink: 0x161216,
+        }),
+        lead_bubble: Some(MeBubble {
+            bg: 0x2A2220,
+            ink: 0xEDE3CD,
+        }),
+    },
 ];
 
 /// Look a scheme up by id. Ids are lowercase; input is trimmed and
@@ -586,7 +676,10 @@ mod tests {
             assert!(id_list().contains(s.id));
         }
         let light: Vec<_> = SCHEMES.iter().filter(|s| s.light).map(|s| s.id).collect();
-        assert_eq!(light, ["ouija", "riso", "parlor", "herbarium"]);
+        assert_eq!(
+            light,
+            ["ouija", "riso", "parlor", "herbarium", "linocut-paper"]
+        );
     }
 
     #[test]
@@ -597,14 +690,19 @@ mod tests {
         assert_eq!(neon.label, "Neon District");
         assert_eq!(neon.texture.as_ref().unwrap().lamp, Some(Lamp::Tube));
         // Appended last, so no saved index moves.
-        assert_eq!(index_of("neon-district"), Some(SCHEMES.len() - 1));
+        assert_eq!(index_of("neon-district"), Some(13));
         assert_eq!(index_of("castle"), Some(12));
         let skinned: Vec<_> = SCHEMES
             .iter()
             .filter(|s| s.texture.is_some())
             .map(|s| s.id)
             .collect();
-        assert_eq!(skinned, ["castle", "neon-district"]);
+        assert_eq!(
+            skinned,
+            ["castle", "neon-district", "linocut-paper", "linocut-night"]
+        );
+        assert_eq!(index_of("linocut-paper"), Some(14));
+        assert_eq!(index_of("linocut-night"), Some(15));
         let torches: Vec<_> = SCHEMES
             .iter()
             .filter(|s| {
@@ -619,7 +717,8 @@ mod tests {
         let luma = |c: u32| (c >> 16 & 0xFF) + (c >> 8 & 0xFF) + (c & 0xFF);
         for s in SCHEMES.iter().filter(|s| s.texture.is_some()) {
             let tex = s.texture.as_ref().unwrap();
-            assert!(!s.light, "{}", s.id);
+            // Paper is the one light skin.
+            assert!(!s.light || s.id == "linocut-paper", "{}", s.id);
             assert_eq!(tex.size, 256, "{}", s.id);
             assert!(luma(tex.frame) < luma(s.chrome.border), "{}", s.id);
         }
@@ -630,9 +729,18 @@ mod tests {
         let ids = |f: fn(&Scheme) -> bool| -> Vec<_> {
             SCHEMES.iter().filter(|s| f(s)).map(|s| s.id).collect()
         };
-        assert_eq!(ids(|s| s.me_bubble.is_some()), ["castle", "neon-district"]);
-        assert_eq!(ids(|s| s.lead_bubble.is_some()), ["castle"]);
-        assert_eq!(ids(|s| s.texture.is_some_and(|t| t.carved)), ["castle"]);
+        assert_eq!(
+            ids(|s| s.me_bubble.is_some()),
+            ["castle", "neon-district", "linocut-paper", "linocut-night"]
+        );
+        assert_eq!(
+            ids(|s| s.lead_bubble.is_some()),
+            ["castle", "linocut-paper", "linocut-night"]
+        );
+        assert_eq!(
+            ids(|s| s.texture.as_ref().is_some_and(|t| t.carved.is_some())),
+            ["castle", "linocut-paper", "linocut-night"]
+        );
         let b = find("neon-district").unwrap().me_bubble.unwrap();
         assert_eq!((b.bg, b.ink), (0xD6168F, 0xFFFFFF));
         assert!(contrast(b.ink, b.bg) >= 4.5);

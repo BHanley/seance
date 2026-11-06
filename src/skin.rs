@@ -689,9 +689,10 @@ mod shots {
             )
             .child(
                 div()
+                    .relative()
                     .size(px(30.))
-                    .rounded_sm()
-                    .bg(P::violet().opacity(0.6)),
+                    .children(carve::rays())
+                    .child(div().size_full().rounded_sm().bg(P::violet().opacity(0.6))),
             )
             .child(
                 div()
@@ -728,7 +729,12 @@ mod shots {
             _ => crate::app::chat::active_me_ink(me),
         };
         let torches = torches();
-        let (ask, reply) = if neon() {
+        let (ask, reply) = if id.starts_with("linocut") {
+            (
+                "The block is cut and inked. Run the shots?",
+                "yes, paper and night",
+            )
+        } else if neon() {
             (
                 "Steel is on the chat rail now. Run the shots?",
                 "yes, neon and a flat one",
@@ -739,7 +745,12 @@ mod shots {
                 "yes, castle and a flat one",
             )
         };
+        let slab = carve::slab();
         let row = |name: &str, on: bool, note: &str| {
+            let (name_ink, note_ink) = match slab.as_ref().filter(|_| on) {
+                Some(s) => (s.name, s.sub),
+                None => (if on { P::text() } else { P::text_dim() }, P::text_faint()),
+            };
             div()
                 .px_3()
                 .py_2()
@@ -747,17 +758,16 @@ mod shots {
                 .justify_between()
                 .text_xs()
                 .relative()
-                .when(on, |d| {
+                .when(on && slab.is_none(), |d| {
                     d.bg(crate::app::chat::selected_row_bg(custom))
                         .children(crate::app::chat::selected_row_bar(custom))
                         .children(crate::chain::frame())
                 })
-                .child(
-                    div()
-                        .text_color(if on { P::text() } else { P::text_dim() })
-                        .child(name.to_string()),
-                )
-                .child(div().text_color(P::text_faint()).child(note.to_string()))
+                .when_some(slab.as_ref().filter(|_| on), |d, s| {
+                    d.child(carve::slab_layer(s.fill))
+                })
+                .child(div().text_color(name_ink).child(name.to_string()))
+                .child(div().text_color(note_ink).child(note.to_string()))
         };
         // Brian's bubble is the palette's `violet_dim` where the scheme has no
         // `me_bubble`, as in the app; one that has it paints as the app does.
@@ -1265,6 +1275,37 @@ mod shots {
         };
         crop(&whole, "castle-carved-composer.png", 460, 690, 1320, 230);
         crop(&whole, "castle-carved-row.png", 20, 270, 440, 150);
+    }
+
+    /// The two Linocut skins: the Chat view and the chrome panel for each, and
+    /// the reply bubble over the composer.
+    #[test]
+    #[ignore = "writes PNGs via headless Metal; run with --ignored"]
+    fn linocut_shots() {
+        let dir = std::env::var("SKIN_SHOTS_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("shots"));
+        std::fs::create_dir_all(&dir).unwrap();
+        for id in ["linocut-paper", "linocut-night"] {
+            render(
+                Scene::Chat(id),
+                900.,
+                460.,
+                &dir.join(format!("{id}-chat.png")),
+            );
+            render(
+                Scene::Chrome(vec![id]),
+                900.,
+                460.,
+                &dir.join(format!("{id}-chrome.png")),
+            );
+            render(
+                Scene::ChatReply(vec![id], false),
+                330.,
+                460.,
+                &dir.join(format!("{id}-reply.png")),
+            );
+        }
     }
 
     /// Neon District's bubble ink options, each as the whole Chat view with

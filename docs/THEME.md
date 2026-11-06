@@ -1,6 +1,6 @@
 # seance — theme & branding
 
-seance ships fourteen color schemes (see [Schemes](#schemes)); the default, and
+seance ships sixteen color schemes (see [Schemes](#schemes)); the default, and
 the one this page's palette tables describe, is **candlelit**.
 
 Aesthetic: **candlelit**. A dark room lit by one candle — deep warm charcoal
@@ -161,7 +161,7 @@ broadcasts `GuiEvent::Theme` on every switch, so the Mac thin client and the
 XPS GUI change together. At boot the saved choice wins, then `seance-theme`
 in `terminal.conf`, then candlelit; an unknown id falls back to candlelit.
 
-**Switching.** The ✦ menu at the top of the rail lists the fourteen, dark ones then
+**Switching.** The ✦ menu at the top of the rail lists the sixteen, dark ones then
 light ones under their own headings, active one marked; `seance ctl theme` lists them and `seance ctl theme ID` switches (an
 unknown ID is refused with the list). A window that hears the switch sets
 the active scheme, re-runs `theme::init` and refreshes every window.
@@ -327,3 +327,36 @@ that does not carve gets the stock rounded widget back from the same call.
   hanging 9 pt over the row's top and bottom, deferred so it paints above its
   neighbours). Neon's wash and bar are for schemes that recolor bubbles and
   do not carve.
+
+## Linocut Paper and Linocut Night (`Carve::Block`)
+
+A hand-cut, hand-printed block, in the app icon's palette. Paper is cream
+stock, black ink and a red-orange accent; Night is the black block with
+cream and amber. Flat colors only; the texture is the tile.
+
+| | Paper (`linocut-paper`, light) | Night (`linocut-night`, dark) |
+|---|---|---|
+| bg / bg_elevated / surface | `#EDE3CD` `#E3D7BD` `#D6C7A8` | `#161216` `#1E1819` `#2A2220` |
+| border | `#9A8A70` | `#4F3B24` |
+| text / dim / faint | `#171213` `#40352E` `#5C4E42` | `#EDE3CD` `#C4B8A2` `#A39782` |
+| flame / flame_dim | `#A6401F` `#7A2E15` | `#D79B4B` `#9C6E2E` |
+| violet / violet_dim | `#5E3A2A` `#8A6A4F` | `#C48A3C` `#503B24` |
+| success / danger | `#3D6B2E` `#8E1F17` | `#9BB35A` `#E0654A` |
+| frame | `#171213` | `#2E2118` |
+| terminal bg / fg | `#F4ECDB` `#171213` | `#120E11` `#EDE3CD` |
+
+- **Tile** (`scripts/gen-linocut-tile.py`): parallel gouge strokes tapered at
+  both ends, varied in length and weight, chatter ticks in the gaps, ink
+  speckle and a second, offset pass for mis-registration; hard pixels.
+- **Shapes** (`src/carve.rs`): square, with an ink outline of broken,
+  uneven runs (a thin line never breaks into a dashed rule); no lit side, no
+  shadow. Bubbles, buttons, tabs, chips, the composer: same helpers as Castle.
+  Plates are flat printed colors (no tile over them).
+- **Bubbles**: Paper, Brian's is the accent with cream ink and the lead's is a
+  darker sheet; Night, Brian's is amber with black ink and the lead's the
+  dark surface with cream ink.
+- **Selected row**: a hand-inked slab with ragged edges, text reversed out.
+- **Rays**: radiating hatch rays around the thread header's creature, in the
+  accent and the ink. The only place, and static.
+- Flat accent. Paper's flame is a shade darker than the icon's `#C55834` so
+  it holds 4.5:1 as text on the paper.

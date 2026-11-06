@@ -346,7 +346,7 @@ pub(crate) fn selected_row_bar(custom: Option<schemes::MeBubble>) -> Option<gpui
 /// [`me_ink`] for the active scheme: Brian's plate, or the lead's.
 pub(crate) fn active_me_ink(me: bool) -> Option<MeInk> {
     let s = crate::theme::active();
-    if carve::today() && s.texture.as_ref().is_some_and(|t| t.carved) {
+    if carve::today() && s.texture.as_ref().is_some_and(|t| t.carved.is_some()) {
         return None;
     }
     me_ink(true, if me { s.me_bubble } else { s.lead_bubble })
@@ -2570,9 +2570,18 @@ impl SeanceApp {
         let (menu_ws, weak) = (c.ws.clone(), cx.weak_entity());
         let pulse = 0.45 + 0.55 * (((now_ms() / 300) % 2) as f32);
         // Neon's wash and bar; a carved skin frames the row with its chain.
+        let slab = carve::slab();
+        let name_ink = slab
+            .as_ref()
+            .filter(|_| on)
+            .map_or_else(SeancePalette::text, |s| s.name);
+        let sub_ink = slab
+            .as_ref()
+            .filter(|_| on)
+            .map_or_else(SeancePalette::text_faint, |s| s.sub);
         let me = crate::theme::active()
             .me_bubble
-            .filter(|_| !crate::skin::active().is_some_and(|t| t.carved));
+            .filter(|_| !crate::skin::active().is_some_and(|t| t.carved.is_some()));
         div()
             .id(SharedString::from(format!("chat-circle-{}", c.ws)))
             .flex_none()
@@ -2583,10 +2592,14 @@ impl SeanceApp {
             .gap_3()
             .cursor_pointer()
             .relative()
-            .when(on, |d| {
+            .when(on && slab.is_none(), |d| {
                 d.bg(selected_row_bg(me))
                     .children(selected_row_bar(me))
                     .children(crate::chain::frame())
+            })
+            // A printed-block skin inks the selected row and reverses the text.
+            .when_some(slab.as_ref().filter(|_| on), |d, s| {
+                d.child(carve::slab_layer(s.fill))
             })
             .hover(|s| s.bg(SeancePalette::surface()))
             .on_click(cx.listener(move |this, _, window, cx| this.chat_select(&ws, window, cx)))
@@ -2613,7 +2626,7 @@ impl SeanceApp {
                                 div()
                                     .truncate()
                                     .text_sm()
-                                    .text_color(SeancePalette::text())
+                                    .text_color(name_ink)
                                     .child(c.name.clone()),
                             )
                             .when(c.working, |d| {
@@ -2630,7 +2643,7 @@ impl SeanceApp {
                         div()
                             .truncate()
                             .text_xs()
-                            .text_color(SeancePalette::text_faint())
+                            .text_color(sub_ink)
                             .child(c.last.as_ref().map(preview).unwrap_or_default()),
                     ),
             )
@@ -2792,6 +2805,7 @@ impl SeanceApp {
                     .absolute()
                     .size_full()
             })
+            .children(carve::rays())
             .child(if cuts.is_empty() {
                 super::sprite::render_move(&sprite, 2.5, working, moving)
             } else {
