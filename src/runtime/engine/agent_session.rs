@@ -225,6 +225,8 @@ fn rollout_meta(path: &Path) -> Option<(String, bool)> {
     Some((id, sub))
 }
 
+// Codex discovery reads /proc (children and /proc/<pid>/fd), so it finds nothing
+// off Linux; macOS support is deferred past v1.
 fn proc_children() -> HashMap<u32, Vec<u32>> {
     let mut kids: HashMap<u32, Vec<u32>> = HashMap::new();
     let Ok(rd) = std::fs::read_dir("/proc") else {
