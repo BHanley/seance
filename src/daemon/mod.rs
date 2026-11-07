@@ -24,6 +24,11 @@ use crate::runtime::{daemon_pid_path, SessionEvent, SharedEngine};
 
 /// Entry: `seance daemon` or `seance daemon --takeover PATH`.
 pub fn run_daemon(args: Vec<String>) -> ! {
+    // main() restores SIG_DFL for CLI pipes; the daemon must survive a write to a closed pipe
+    // (pane wake pipe, handoff socket) and handle EPIPE instead.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+    }
     let code = match run_daemon_inner(args) {
         Ok(()) => 0,
         Err(e) => {
