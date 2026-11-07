@@ -257,6 +257,9 @@ mod shots {
         ChatReply(Vec<&'static str>, bool),
         /// One reply panel with Brian's bubble set to this fill and ink.
         ChatReplyInk(&'static str, u32, u32),
+        /// Castle's selected row at the app's heights, so the chain's short
+        /// sides show at each.
+        ChainRows,
     }
 
     struct Shot(Scene);
@@ -311,6 +314,19 @@ mod shots {
                         id,
                         false,
                         Some(MeBubble { bg: *bg, ink: *ink }),
+                    ))
+                }
+                Scene::ChainRows => {
+                    crate::theme::set_active_for_test("castle");
+                    row.child(div().flex().flex_col().gap(px(24.)).p(px(12.)).children(
+                        [36., 52., 70.].map(|h| {
+                            div()
+                                .w(px(220.))
+                                .h(px(h))
+                                .relative()
+                                .bg(crate::app::chat::selected_row_bg(None))
+                                .children(crate::chain::frame())
+                        }),
                     ))
                 }
                 Scene::ChatHeaders => {
@@ -1265,6 +1281,35 @@ mod shots {
         };
         crop(&whole, "castle-carved-composer.png", 460, 690, 1320, 230);
         crop(&whole, "castle-carved-row.png", 20, 270, 440, 150);
+    }
+
+    /// The chain options around Castle's selected row: the whole Chat view
+    /// and a crop of the row (the harness renders at 2x) for each.
+    #[test]
+    #[ignore = "writes PNGs via headless Metal; run with --ignored"]
+    fn castle_chain_v3_shots() {
+        use crate::chain::{ChainOption, PICK};
+        let dir = std::env::var("SKIN_SHOTS_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("shots"));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, pick) in [
+            ("frame", ChainOption::Frame),
+            ("rails", ChainOption::Rails),
+            ("heavy", ChainOption::Heavy),
+        ] {
+            PICK.with(|p| p.set(Some(pick)));
+            let whole = dir.join(format!("castle-chain-v3-{name}-chat.png"));
+            render(Scene::Chat("castle"), 900., 460., &whole);
+            image::open(&whole)
+                .unwrap()
+                .crop_imm(20, 270, 440, 150)
+                .save(dir.join(format!("castle-chain-v3-{name}-row.png")))
+                .unwrap();
+            let rows = dir.join(format!("castle-chain-v3-{name}-heights.png"));
+            render(Scene::ChainRows, 270., 280., &rows);
+        }
+        PICK.with(|p| p.set(None));
     }
 
     /// Neon District's bubble ink options, each as the whole Chat view with

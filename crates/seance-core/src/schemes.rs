@@ -632,7 +632,10 @@ mod tests {
         };
         assert_eq!(ids(|s| s.me_bubble.is_some()), ["castle", "neon-district"]);
         assert_eq!(ids(|s| s.lead_bubble.is_some()), ["castle"]);
-        assert_eq!(ids(|s| s.texture.is_some_and(|t| t.carved)), ["castle"]);
+        assert_eq!(
+            ids(|s| s.texture.as_ref().is_some_and(|t| t.carved)),
+            ["castle"]
+        );
         let b = find("neon-district").unwrap().me_bubble.unwrap();
         assert_eq!((b.bg, b.ink), (0xD6168F, 0xFFFFFF));
         assert!(contrast(b.ink, b.bg) >= 4.5);

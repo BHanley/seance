@@ -325,5 +325,10 @@ that does not carve gets the stock rounded widget back from the same call.
   palette's own `text_faint`) is 2.4, as it is on the flat ground (3.5).
 - **Selected row.** The chain frames it (3 pt texels, rings 5 texels tall,
   hanging 9 pt over the row's top and bottom, deferred so it paints above its
-  neighbours). Neon's wash and bar are for schemes that recolor bubbles and
-  do not carve.
+  neighbours). A run's end ring sits in each corner and holds that side's
+  bar by its outer end; a side is one whole bar, or two and a slim ring once
+  it is 16 texels long. `chain::OPTION` picks the shape: `Frame` (the
+  default), `Rails` (top and bottom only, each end ring on a bolt) or
+  `Heavy` (2 pt texels, thicker walls, a brighter glint and a black
+  outline, in the same 14 to 15 pt band). Row padding is unchanged. Neon's
+  wash and bar are for schemes that recolor bubbles and do not carve.
