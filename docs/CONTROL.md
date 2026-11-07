@@ -246,6 +246,11 @@ supports it. Shared Codex app-servers can retain another pane's
 rejected. Existing Codex sessions using a shared app-server need relaunching
 with `--no-daemon`. `ctl` also rejects an environment identity that differs
 from the original pane process, or whose ancestry cannot be verified.
+On macOS, where `ps -E` can't read a SIP-protected pane root's environment
+(`/bin/bash`) and the pane root is the daemon's own child, ctl asks the daemon
+instead: the wire op `pane_for_root_pid`
+(`{"op":"pane_for_root_pid","pid":N}` → `{"pane": slug|null}`) names the
+pane whose PTY child has that pid. Linux keeps reading `/proc/PID/environ`.
 Launch isolation and task validation run in the daemon:
 deploy their updates with `seance upgrade`, not a GUI restart.
 

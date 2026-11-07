@@ -425,6 +425,17 @@ pub enum ControlRequest {
         from: Option<String>,
     },
 
+    /// Which pane's PTY child has this pid? `{pane: slug|null}`. ctl's pane
+    /// identity check asks this on macOS, where `ps -E` can't read the
+    /// environment of a SIP-protected pane root such as /bin/bash.
+    PaneForRootPid {
+        pid: u32,
+        #[serde(default)]
+        scope: Option<String>,
+        #[serde(default)]
+        from: Option<String>,
+    },
+
     /// List policy + grants. `{default_policy, workspace_policy, grants}`.
     Caps {
         #[serde(default)]
@@ -749,6 +760,7 @@ impl ControlRequest {
             | Self::LastCommand { from, .. }
             | Self::Watch { from, .. }
             | Self::Whoami { from, .. }
+            | Self::PaneForRootPid { from, .. }
             | Self::Caps { from, .. }
             | Self::CapsGrant { from, .. }
             | Self::CapsRevoke { from, .. }
@@ -836,6 +848,7 @@ impl ControlRequest {
             | Self::LastCommand { scope, .. }
             | Self::Watch { scope, .. }
             | Self::Whoami { scope, .. }
+            | Self::PaneForRootPid { scope, .. }
             | Self::Caps { scope, .. }
             | Self::Seize { scope, .. }
             | Self::Release { scope, .. }

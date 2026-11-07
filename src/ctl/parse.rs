@@ -371,6 +371,7 @@ pub(crate) fn with_identity(
             from,
         },
         Whoami { .. } => Whoami { scope, from },
+        PaneForRootPid { pid, .. } => PaneForRootPid { pid, scope, from },
         Caps { .. } => Caps { scope, from },
         CapsGrant {
             principal,

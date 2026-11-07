@@ -1053,6 +1053,14 @@ impl Engine {
                 "cursor": events::current_seq(),
                 "note": "daemon streams events after this ack",
             })),
+            PaneForRootPid { pid, .. } => {
+                let pane = self
+                    .panes
+                    .iter()
+                    .find(|p| p.session.as_ref().and_then(|s| s.child_pid()) == Some(pid))
+                    .map(|p| p.slug.clone());
+                ok(json!({ "pane": pane }))
+            }
             Whoami { scope, from } => {
                 let principal = actor(&from);
                 let policy = self.caps.policy_for(scope.as_deref());
