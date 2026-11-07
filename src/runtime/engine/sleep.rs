@@ -69,13 +69,29 @@ pub(crate) fn parse_hosted(text: &str) -> Option<(String, String)> {
 /// What the processes under a pane say about the Claude in it: each claude
 /// process's session id and status (from Claude's own
 /// `~/.claude/sessions/<pid>.json`), and whether a Bash tool command is
-/// running (a `shell-snapshots` shell under it). Empty off Linux.
+/// running (a `shell-snapshots` shell under it). Linux reads /proc; elsewhere
+/// one `ps` snapshot stands in for it.
 #[derive(Default)]
 pub(crate) struct ClaudeProcs {
     pub sessions: Vec<(String, String)>,
     pub tool_running: bool,
 }
 
+/// Claude's own record for one of its processes: session id and status.
+fn read_claude_session(sessions_dir: &std::path::Path, pid: u32) -> Option<(String, String)> {
+    let v = std::fs::read_to_string(sessions_dir.join(format!("{pid}.json")))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())?;
+    Some((
+        v.get("sessionId")?.as_str()?.to_string(),
+        v.get("status")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string(),
+    ))
+}
+
+#[cfg(target_os = "linux")]
 pub(crate) fn claude_procs(root: u32) -> ClaudeProcs {
     let mut out = ClaudeProcs::default();
     let Ok(dir) = std::fs::read_dir("/proc") else {
@@ -118,26 +134,102 @@ pub(crate) fn claude_procs(root: u32) -> ClaudeProcs {
         }
         let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
         if comm.trim() == "claude" {
-            if let Some((id, status)) =
-                std::fs::read_to_string(sessions_dir.join(format!("{pid}.json")))
-                    .ok()
-                    .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-                    .and_then(|v| {
-                        Some((
-                            v.get("sessionId")?.as_str()?.to_string(),
-                            v.get("status")
-                                .and_then(|s| s.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                        ))
-                    })
-            {
+            if let Some((id, status)) = read_claude_session(&sessions_dir, pid) {
                 out.sessions.push((id, status));
             }
         } else if std::fs::read(format!("/proc/{pid}/cmdline"))
             .is_ok_and(|c| String::from_utf8_lossy(&c).contains("shell-snapshots"))
         {
             out.tool_running = true;
+        }
+    }
+    out
+}
+
+/// `ps -axo pid=,ppid=,comm=` output as (pid, ppid, comm) rows. The command
+/// name is the rest of the line, so it may hold spaces. Blank or malformed
+/// lines are skipped.
+#[cfg(any(not(target_os = "linux"), test))]
+fn parse_ps_table(text: &str) -> Vec<(u32, u32, String)> {
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim_start();
+            let (pid, rest) = line.split_once(char::is_whitespace)?;
+            let (ppid, comm) = rest.trim_start().split_once(char::is_whitespace)?;
+            let comm = comm.trim();
+            (!comm.is_empty()).then_some((pid.parse().ok()?, ppid.parse().ok()?, comm.to_string()))
+        })
+        .collect()
+}
+
+/// `ps -axww -o pid=,command=` output as pid → full command line.
+#[cfg(any(not(target_os = "linux"), test))]
+fn parse_ps_commands(text: &str) -> std::collections::HashMap<u32, String> {
+    text.lines()
+        .filter_map(|line| {
+            let (pid, cmd) = line.trim_start().split_once(char::is_whitespace)?;
+            Some((pid.parse().ok()?, cmd.trim().to_string()))
+        })
+        .collect()
+}
+
+/// Whether a `ps` comm is the Claude binary: `claude`, or its full path.
+#[cfg(any(not(target_os = "linux"), test))]
+fn comm_is_claude(comm: &str) -> bool {
+    comm.rsplit('/').next() == Some("claude")
+}
+
+#[cfg(not(target_os = "linux"))]
+fn ps_output(args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new("ps").args(args).output().ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// No /proc here: one `ps` snapshot gives the same table. The Bash-tool check
+/// needs full command lines, so it reads a second snapshot, and only when a
+/// Claude is actually under the pane.
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn claude_procs(root: u32) -> ClaudeProcs {
+    let mut out = ClaudeProcs::default();
+    let Some(table) = ps_output(&["-axo", "pid=,ppid=,comm="]) else {
+        return out;
+    };
+    let rows = parse_ps_table(&table);
+    let parent: std::collections::HashMap<u32, u32> =
+        rows.iter().map(|(pid, ppid, _)| (*pid, *ppid)).collect();
+    let under = |mut pid: u32| {
+        for _ in 0..64 {
+            if pid == root {
+                return true;
+            }
+            match parent.get(&pid) {
+                Some(&p) if p > 1 => pid = p,
+                _ => return false,
+            }
+        }
+        false
+    };
+    let sessions_dir = PathBuf::from(shellexpand::tilde("~/.claude/sessions").into_owned());
+    let mut claude_seen = false;
+    for (pid, _, comm) in rows.iter().filter(|(pid, _, _)| under(*pid)) {
+        if comm_is_claude(comm) {
+            claude_seen = true;
+            if let Some(rec) = read_claude_session(&sessions_dir, *pid) {
+                out.sessions.push(rec);
+            }
+        }
+    }
+    if claude_seen {
+        if let Some(cmds) =
+            ps_output(&["-axww", "-o", "pid=,command="]).map(|t| parse_ps_commands(&t))
+        {
+            out.tool_running = rows.iter().any(|(pid, _, comm)| {
+                !comm_is_claude(comm)
+                    && under(*pid)
+                    && cmds.get(pid).is_some_and(|c| c.contains("shell-snapshots"))
+            });
         }
     }
     out
@@ -841,5 +933,32 @@ mod retheme_tests {
         assert_eq!(retheme_color(0x2d2a2e, fg, &old, &new), 0x111111);
         // A program's own color is left alone.
         assert_eq!(retheme_color(0x123456, fg, &old, &new), 0x123456);
+    }
+}
+
+#[cfg(test)]
+mod ps_tests {
+    use super::{comm_is_claude, parse_ps_commands, parse_ps_table};
+
+    #[test]
+    fn ps_table_parses_pid_ppid_and_spaced_comm() {
+        let text = "  1     0 /sbin/launchd\n\n 4021  1 /Applications/Some App/helper\n99 4021 claude\nbad line\n  7 x claude\n";
+        assert_eq!(
+            parse_ps_table(text),
+            vec![
+                (1, 0, "/sbin/launchd".to_string()),
+                (4021, 1, "/Applications/Some App/helper".to_string()),
+                (99, 4021, "claude".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn ps_commands_keep_whole_line_and_claude_comm_matches_path() {
+        let cmds = parse_ps_commands("  12 /bin/zsh -c source ~/.claude/shell-snapshots/x.sh\n\n");
+        assert!(cmds[&12].contains("shell-snapshots"));
+        assert!(comm_is_claude("claude"));
+        assert!(comm_is_claude("/Users/b/.local/bin/claude"));
+        assert!(!comm_is_claude("claude-helper"));
     }
 }
