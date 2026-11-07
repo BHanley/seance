@@ -1238,12 +1238,11 @@ mod shots {
         eprintln!("wrote {}", out.display());
     }
 
-    /// Neon District's two looks for Chat's boxes beside today's: the whole
-    /// Chat view, a reply bubble with its quote, and the composer, per look.
+    /// Neon District's slick boxes in Chat: the whole view, a reply bubble
+    /// with its quote and the composer, plus today's view to set beside them.
     #[test]
     #[ignore = "writes PNGs via headless Metal; run with --ignored"]
     fn neon_slick_shots() {
-        use seance_core::schemes::Carve;
         let dir = std::env::var("SKIN_SHOTS_DIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| std::path::PathBuf::from("shots"));
@@ -1257,24 +1256,20 @@ mod shots {
             &dir.join("neon-slick-today-chat.png"),
         );
         carve::TODAY.with(|t| t.set(false));
-        for (look, name) in [(Carve::Glass, "glass"), (Carve::Hud, "hud")] {
-            carve::LOOK.with(|l| l.set(Some(look)));
-            let whole = dir.join(format!("neon-slick-{name}-chat.png"));
-            render(Scene::Chat(id), 900., 460., &whole);
-            render(
-                Scene::ChatReply(vec![id], false),
-                330.,
-                460.,
-                &dir.join(format!("neon-slick-{name}-reply.png")),
-            );
-            // The harness renders at 2x: crop the composer.
-            image::open(&whole)
-                .unwrap()
-                .crop_imm(460, 690, 1320, 230)
-                .save(dir.join(format!("neon-slick-{name}-composer.png")))
-                .unwrap();
-        }
-        carve::LOOK.with(|l| l.set(None));
+        let whole = dir.join("neon-slick-combo-chat.png");
+        render(Scene::Chat(id), 900., 460., &whole);
+        render(
+            Scene::ChatReply(vec![id], false),
+            330.,
+            460.,
+            &dir.join("neon-slick-combo-reply.png"),
+        );
+        // The harness renders at 2x: crop the composer.
+        image::open(&whole)
+            .unwrap()
+            .crop_imm(460, 690, 1320, 230)
+            .save(dir.join("neon-slick-combo-composer.png"))
+            .unwrap();
     }
 
     /// Castle's carved look beside today's: the whole Chat view each way, a

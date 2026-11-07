@@ -75,17 +75,10 @@ pub enum Carve {
     /// Square plates with hard pixel bevels cut from the wall, worn by its
     /// stone, and Chat's messages on dim stone (castle).
     Stone,
-    /// Dark fill under a thin neon edge and a soft sheen on the top third,
-    /// small rounded corners.
-    Glass,
-    /// Chamfered top-right and bottom-left corners, a lit hairline edge and a
-    /// tick at the top-left, like a heads-up display. No gradient.
-    Hud,
+    /// Neon District: a dark fill with its top-right and bottom-left corners
+    /// cut, a soft sheen over its top third and a thin neon hairline edge.
+    Slick,
 }
-
-/// Neon District's look for Chat's boxes: flip to `Carve::Hud` to try the
-/// heads-up display panels instead of glass.
-pub const NEON_LOOK: Carve = Carve::Glass;
 
 /// Brian's own chat bubbles, recolored by a scheme: `bg` fills the bubble
 /// and `ink` draws everything in it (text, time, ticks, links, quote).
@@ -278,7 +271,7 @@ pub const NEON_STEEL: Texture = Texture {
     frame: 0x1B1A26,
     lamp: Some(Lamp::Tube),
     strength: 1.0,
-    carved: Some(NEON_LOOK),
+    carved: Some(Carve::Slick),
 };
 
 /// Every scheme, in menu order.
@@ -659,15 +652,10 @@ mod tests {
     }
 
     #[test]
-    fn castle_alone_is_stone_and_neon_alone_is_glass_or_hud() {
+    fn castle_alone_is_stone_and_neon_alone_is_slick() {
         let carve = |id| find(id).unwrap().texture.as_ref().unwrap().carved;
         assert_eq!(carve("castle"), Some(Carve::Stone));
-        assert!(matches!(
-            carve("neon-district"),
-            Some(Carve::Glass | Carve::Hud)
-        ));
-        assert_eq!(carve("neon-district"), Some(NEON_LOOK));
-        assert_eq!(NEON_LOOK, Carve::Glass);
+        assert_eq!(carve("neon-district"), Some(Carve::Slick));
         for s in SCHEMES
             .iter()
             .filter(|s| s.id != "castle" && s.id != "neon-district")

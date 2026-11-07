@@ -2938,7 +2938,7 @@ impl SeanceApp {
             header.child(
                 carve::plate(
                     div().id("chat-todo"),
-                    if carve::hud() && tasks_open {
+                    if carve::slick() && tasks_open {
                         SeancePalette::violet()
                     } else {
                         SeancePalette::surface()
@@ -3269,7 +3269,6 @@ impl SeanceApp {
                     )
                     .child(
                         carve::carve(div(), SeancePalette::bg(), Cut::Slot)
-                            .when(carve::slick(), |d| carve::corners(d, Stock::Md))
                             .flex_1()
                             .min_w_0()
                             .when(carve::on(), |d| carve::bg(d, SeancePalette::bg()).px_1())
@@ -3288,11 +3287,11 @@ impl SeanceApp {
                         .text_sm()
                         .text_color(SeancePalette::bg())
                         .map(|d| carve::bg(d, SeancePalette::flame()))
-                        // Hud's fill is painted, so it dims the whole button.
-                        .when(!carve::hud(), |d| {
+                        // A slick fill is painted, so it dims the whole button.
+                        .when(!carve::slick(), |d| {
                             d.hover(|s| s.bg(SeancePalette::flame_dim()))
                         })
-                        .when(carve::hud(), |d| d.hover(|s| s.opacity(0.8)))
+                        .when(carve::slick(), |d| d.hover(|s| s.opacity(0.8)))
                         .cursor_pointer()
                         .on_click(cx.listener(|this, _, window, cx| this.chat_send(window, cx)))
                         .child("Send"),
@@ -3531,7 +3530,7 @@ impl SeanceApp {
             .text_sm()
             .text_color(words)
             .map(|d| carve::bg(d, fill))
-            .when(spec.is_some() && !carve::hud(), |d| {
+            .when(spec.is_some() && !carve::slick(), |d| {
                 d.border_1().border_color(SeancePalette::violet())
             })
             .child(body)
@@ -3661,8 +3660,8 @@ impl SeanceApp {
                 };
                 let pill = carve::plate(
                     div().id(SharedString::from(format!("choice-{id}-{i}"))),
-                    // Hud paints the pill's own fill; stone bevels from surface.
-                    if carve::hud() {
+                    // Slick paints the pill's own fill; stone bevels from surface.
+                    if carve::slick() {
                         fill
                     } else {
                         SeancePalette::surface()
@@ -3696,10 +3695,10 @@ impl SeanceApp {
                 let spec_change = changes_spec(m, choice);
                 let choice = choice.clone();
                 pill.cursor_pointer()
-                    .when(!carve::hud(), |d| {
+                    .when(!carve::slick(), |d| {
                         d.hover(|s| s.bg(SeancePalette::violet().opacity(0.25)))
                     })
-                    .when(carve::hud(), |d| d.hover(|s| s.opacity(0.8)))
+                    .when(carve::slick(), |d| d.hover(|s| s.opacity(0.8)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if spec_change {
                             this.chat.focus_input = true;

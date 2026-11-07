@@ -302,8 +302,8 @@ Color transforms (`.opacity/.lighten/.darken`) come from `gpui_component`'s
 
 ## Carved stone (`Texture::carved`, castle)
 
-`Texture::carved` is an `Option<Carve>`: `Stone` (castle), `Glass` or `Hud`
-(Neon District, below), `None` everywhere else. A skin with `Some(Stone)`
+`Texture::carved` is an `Option<Carve>`: `Stone` (castle), `Slick` (Neon
+District, below), `None` everywhere else. A skin with `Some(Stone)`
 cuts its widgets from the wall (`src/carve.rs`). Builders call
 `carve::plate`, `corners`, `carve`, `worn_plate` and `carve::bg` for a
 plate's fill; a scheme that does not carve gets the stock rounded widget back
@@ -332,30 +332,29 @@ from the same calls.
   contents are unchanged. Neon's wash and bar are for schemes that recolor
   bubbles and are not stone.
 
-## Neon's Chat boxes (`Carve::Glass`, `Carve::Hud`)
+## Neon's Chat boxes (`Carve::Slick`)
 
 Neon District cuts the same Chat widgets as castle (bubbles, header buttons,
 "Show earlier", chips, choice pills, attach, Send, the composer and the view
-switch) in one of two looks, picked by `NEON_LOOK` in
-`crates/seance-core/src/schemes.rs` (`Glass` today). None of stone's extras
-apply: no worn tile on plates, no stone behind messages, no iron line, and
-the selected row keeps its pink wash and bar. Each box is one canvas, drawn
-only when the element paints.
+switch) in its own look. None of stone's extras apply: no worn tile on
+plates, no stone behind messages, no iron line, and the selected row keeps
+its pink wash and bar. Each box is one canvas, drawn only when the element
+paints.
 
-- **Glass.** The element keeps its own fill, rounded to 3 px whatever its
-  stock rounding. Over it, a sheen quad on the top third (a vertical gradient
-  from white at 10%, 5% on Brian's plate so its white ink holds 4.5:1, to
-  clear; none on the composer and view switch, which are slots) and a 1 px
-  edge quad: cyan at 70%, or pink lit 45% toward white on Brian's plate and
-  Send.
-- **Hud.** Square elements with no `.bg()` (`carve::bg` is a no-op); the
+- **Shape.** Square elements with no `.bg()` (`carve::bg` is a no-op); the
   canvas fills a chamfered path itself, cut at the top-right and bottom-left
   (7 px on message plates, 4 px on controls and slots, at most a third of the
-  short side), strokes a 1 px hairline in the edge color half a pixel inside
-  it, and adds a 2x2 tick at the top-left. No gradient. Borders, shadows and
-  background hovers are off (they would show outside the cut); Send and choice
-  pills dim on hover instead. Every widget's padding keeps its text at least
-  a pixel clear of the cut (`no_text_touches_a_hud_cut`).
+  short side). Every widget's padding keeps its text at least a pixel clear of
+  the cut (`no_text_touches_a_slick_cut`).
+- **Sheen.** A path over the chamfer's top third, filled with a vertical
+  gradient from white at 10% (5% on Brian's plate, so its white ink holds
+  4.5:1) to clear. None on the composer and view switch, which are slots.
+- **Edge.** A 1 px hairline stroked half a pixel inside the chamfer: cyan at
+  70%, or pink lit 45% toward white on Brian's plate and Send.
+- **Tick.** A 2x2 mark at a message plate's top-left, in the edge color (white
+  on Brian's pink). Controls have none; on a chip it crowds the text.
+- Borders, shadows and background hovers are off (they would show outside the
+  cut); Send and choice pills dim on hover instead.
 
-`cargo test --bin seance neon_slick_shots -- --ignored` renders both looks
-and today's beside them into `shots/neon-slick-*.png`.
+`cargo test --bin seance neon_slick_shots -- --ignored` renders the look
+and today's beside it into `shots/neon-slick-*.png`.
