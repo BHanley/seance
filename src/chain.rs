@@ -341,12 +341,9 @@ mod tests {
     /// Every grid the app can give the chain: sidebars 160 to 520 pt wide,
     /// rows 36 to 90 pt tall, in this style's texels.
     fn grids(st: &Style) -> impl Iterator<Item = (usize, usize)> + '_ {
-        (160..=520).step_by(4).flat_map(move |w: usize| {
-            (36usize..=90).map(move |h| {
-                let s = st.scale as usize;
-                (w / s, h.div_ceil(s) + 2 * st.over)
-            })
-        })
+        let s = st.scale as usize;
+        (160 / s..=520 / s)
+            .flat_map(move |w| (36usize..=90).map(move |h| (w, h.div_ceil(s) + 2 * st.over)))
     }
 
     /// The texels as painted, later quads over earlier ones.
