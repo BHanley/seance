@@ -1283,33 +1283,35 @@ mod shots {
         crop(&whole, "castle-carved-row.png", 20, 270, 440, 150);
     }
 
-    /// The chain options around Castle's selected row: the whole Chat view
-    /// and a crop of the row (the harness renders at 2x) for each.
+    /// Castle's iron line around the selected row: the whole Chat view, a
+    /// crop of the row (the harness renders at 2x), the narrowest sidebar and
+    /// the row at the app's heights.
     #[test]
     #[ignore = "writes PNGs via headless Metal; run with --ignored"]
-    fn castle_chain_v3_shots() {
-        use crate::chain::{ChainOption, PICK};
+    fn castle_iron_line_shots() {
         let dir = std::env::var("SKIN_SHOTS_DIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| std::path::PathBuf::from("shots"));
         std::fs::create_dir_all(&dir).unwrap();
-        for (name, pick) in [
-            ("frame", ChainOption::Frame),
-            ("rails", ChainOption::Rails),
-            ("heavy", ChainOption::Heavy),
-        ] {
-            PICK.with(|p| p.set(Some(pick)));
-            let whole = dir.join(format!("castle-chain-v3-{name}-chat.png"));
-            render(Scene::Chat("castle"), 900., 460., &whole);
-            image::open(&whole)
+        let whole = dir.join("castle-iron-line-chat.png");
+        render(Scene::Chat("castle"), 900., 460., &whole);
+        let crop = |from: &std::path::Path, to: &str, w: u32| {
+            image::open(from)
                 .unwrap()
-                .crop_imm(20, 270, 440, 150)
-                .save(dir.join(format!("castle-chain-v3-{name}-row.png")))
+                .crop_imm(20, 270, w, 150)
+                .save(dir.join(to))
                 .unwrap();
-            let rows = dir.join(format!("castle-chain-v3-{name}-heights.png"));
-            render(Scene::ChainRows, 270., 280., &rows);
-        }
-        PICK.with(|p| p.set(None));
+        };
+        crop(&whole, "castle-iron-line-row.png", 440);
+        let narrow = dir.join("castle-iron-line-narrow-chat.png");
+        render(Scene::ChatNarrow("castle"), 560., 460., &narrow);
+        crop(&narrow, "castle-iron-line-narrow-row.png", 320);
+        render(
+            Scene::ChainRows,
+            270.,
+            280.,
+            &dir.join("castle-iron-line-heights.png"),
+        );
     }
 
     /// Neon District's bubble ink options, each as the whole Chat view with

@@ -323,12 +323,8 @@ that does not carve gets the stock rounded widget back from the same call.
   `skin::backdrop` anchored to the window, so it stays fixed while the thread
   scrolls. Over its brightest pixel: text 8.8, dim text 4.8. Faint text (the
   palette's own `text_faint`) is 2.4, as it is on the flat ground (3.5).
-- **Selected row.** The chain frames it (3 pt texels, rings 5 texels tall,
-  hanging 9 pt over the row's top and bottom, deferred so it paints above its
-  neighbours). A run's end ring sits in each corner and holds that side's
-  bar by its outer end; a side is one whole bar, or two and a slim ring once
-  it is 16 texels long. `chain::OPTION` picks the shape: `Frame` (the
-  default), `Rails` (top and bottom only, each end ring on a bolt) or
-  `Heavy` (2 pt texels, thicker walls, a brighter glint and a black
-  outline, in the same 14 to 15 pt band). Row padding is unchanged. Neon's
-  wash and bar are for schemes that recolor bubbles and do not carve.
+- **Selected row.** A thin iron line frames it: one texel (2 pt) of
+  `#75716A`, solid, with a small open ring (5x5 texels, a 3x3 dark hole, one
+  lit texel) on each corner. It sits inside the row, so row height and
+  contents are unchanged. Neon's wash and bar are for schemes that recolor
+  bubbles and do not carve.
