@@ -18,6 +18,7 @@ mod host;
 mod latency_probe;
 mod launch;
 mod looks;
+mod mark;
 mod mdfold;
 mod mdtask;
 mod pane;

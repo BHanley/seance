@@ -891,7 +891,7 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    /// Stage's top row: the ✦ mark, the layout switch beside it and the AFK
+    /// Stage's top row: the gold mark, the layout switch beside it and the AFK
     /// chip at the right. Drawn with one space or many.
     fn render_stage_head(&self, cx: &Context<Self>) -> AnyElement {
         div()
@@ -1130,14 +1130,15 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    /// The ✦ seance mark; a click opens the connected guis and theme menu.
+    /// The gold seance mark; a click opens the connected guis and theme menu.
     pub(super) fn render_seance_mark(&self, key: &str, cx: &Context<Self>) -> AnyElement {
         div()
             .id(SharedString::from(format!("{key}-mark")))
             .flex_none()
             .flex()
             .items_center()
-            .gap(px(7.))
+            // Leaves "seance" where it sat beside the wider ✦ glyph.
+            .gap(px(9.))
             .px_1()
             .rounded_md()
             .text_sm()
@@ -1149,7 +1150,7 @@ impl SeanceApp {
                 this.gui_menu_open = !this.gui_menu_open;
                 cx.notify();
             }))
-            .child(div().text_color(SeancePalette::flame()).child("✦"))
+            .child(crate::mark::element())
             .child(div().text_color(SeancePalette::text()).child("seance"))
             .into_any_element()
     }
@@ -1185,7 +1186,7 @@ impl SeanceApp {
     /// Stage and Wall's space row: a tab per space with the mark its rail
     /// row has (needs you, working, done), the one on show underlined.
     /// Empty spaces get no tab unless on show. Wall leads with an All tab.
-    /// Scrolls sideways when the tabs don't fit. Wall's row leads with the ✦
+    /// Scrolls sideways when the tabs don't fit. Wall's row leads with the
     /// mark and ends with the AFK chip; Stage has them in the row above.
     /// None when there would be fewer than two.
     pub(super) fn render_space_tabs(

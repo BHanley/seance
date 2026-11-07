@@ -363,7 +363,7 @@ pub struct SeanceApp {
     host_menu: Option<menus::HostMenuOpen>,
     /// Monotonic open counter — stale list results check it and drop out.
     host_menu_token: u64,
-    /// `✦` popover: census of the GUI windows attached to this daemon.
+    /// The mark's popover: census of the GUI windows attached to this daemon.
     gui_menu_open: bool,
     /// Render-safe cache of daemon-side files (pad sidecars, phone binds,
     /// prompt library) — refreshed by a ~2s background loop.
@@ -1404,7 +1404,7 @@ impl SeanceApp {
                 }
             }
             GuiEvent::Kicked { by } => {
-                // Closed from another GUI's ✦ popover — leave cleanly, no
+                // Closed from another GUI's mark popover — leave cleanly, no
                 // reconnect (the supervisor would just re-register us).
                 eprintln!("[seance gui] closed remotely by {by}");
                 self.client.disconnect();

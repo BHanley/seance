@@ -17,7 +17,7 @@ const ROW_H: f32 = 28.;
 /// same line as one that has a spinner.
 const GLYPH_W: f32 = 15.;
 /// Pane rows under the selected circle sit a step smaller than circle rows.
-/// The ✦ menu's theme groups. A scheme with a texture is "textured" whether
+/// The theme groups in the mark's menu. A scheme with a texture is "textured" whether
 /// its ground is dark or light, so each scheme is in exactly one group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ThemeGroup {
@@ -53,10 +53,10 @@ const TIME_W: f32 = 34.;
 /// segments of the label (38.5 px at 12 px) plus padding, gaps and border.
 const SWITCH_MIN_W: f32 = 162.;
 /// The rail header's row around the switch: its padding and border, the
-/// ✦, "seance" and the gaps.
+/// mark, "seance" and the gaps.
 const RAIL_MARK_W: f32 = 112.;
 
-/// The view switch fits beside "✦ seance" on a rail this wide; narrower,
+/// The view switch fits beside the mark and name on a rail this wide; narrower,
 /// it takes its own row under the header.
 fn rail_switch_inline(rail_w: f32) -> bool {
     rail_w - RAIL_MARK_W >= SWITCH_MIN_W
@@ -71,7 +71,7 @@ use super::workspaces::{banish_arm_live, RailFilter, WorkspaceAttention};
 use super::{RenameTarget, SashDrag, SeanceApp};
 
 impl SeanceApp {
-    /// `✦` popover: every GUI window attached to this daemon, with a kill
+    /// The mark's popover: every GUI window attached to this daemon, with a kill
     /// affordance for the others (`CloseWindow` — the daemon unregisters the
     /// window and the client quits on `Kicked`). Anchored under the brand
     /// header; a transparent full-window backdrop behind it eats the
@@ -81,8 +81,8 @@ impl SeanceApp {
             return None;
         }
         let self_id = self.window_id.clone();
-        // Stage's top row and Wall's space row (when it shows) hold the ✦;
-        // Chat's ✦ sits at the top of its circle list, Classic's on the rail.
+        // Stage's top row and Wall's space row (when it shows) hold the mark;
+        // Chat's mark sits at the top of its circle list, Classic's on the rail.
         let mark_row = match self.view.mode {
             super::views::ViewMode::Stage => true,
             super::views::ViewMode::Wall => self.space_tabs_shown(),
@@ -1348,7 +1348,7 @@ impl SeanceApp {
         rows
     }
 
-    /// One group of color schemes in the ✦ menu under its own heading, the
+    /// One group of color schemes in the mark's menu under its own heading, the
     /// active one marked. A click asks the daemon, which saves it and
     /// repaints every window; the menu stays open so schemes can be tried one
     /// after another.
@@ -1494,21 +1494,22 @@ impl SeanceApp {
                             .child(
                                 div()
                                     .id("gui-census")
-                                    .px_1()
+                                    // The button the ✦ glyph used to fill, so the
+                                    // row and the click area keep their size.
+                                    .w(px(22.))
+                                    .h(px(29.))
                                     .rounded_md()
-                                    .text_color(SeancePalette::flame_dim())
-                                    .text_lg()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
                                     .cursor_pointer()
-                                    .hover(|s| {
-                                        s.text_color(SeancePalette::flame())
-                                            .bg(SeancePalette::surface())
-                                    })
+                                    .hover(|s| s.bg(SeancePalette::surface()))
                                     .tooltip(tip("connected guis · theme"))
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.gui_menu_open = !this.gui_menu_open;
                                         cx.notify();
                                     }))
-                                    .child("✦"),
+                                    .child(crate::mark::element()),
                             )
                             .child(
                                 div()

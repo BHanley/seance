@@ -17,6 +17,12 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+### Changed
+
+- **The sidebar mark is a gold pixel critter with a flame**, in place of the
+  theme-colored ✦ beside "seance" in Classic, Chat, Stage and Wall. Same click,
+  same menu, gold in every theme.
+
 ### Added
 
 - **`seance-desktop-notifications = false`** in `terminal.conf` turns off every

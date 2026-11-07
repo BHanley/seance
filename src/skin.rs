@@ -406,7 +406,7 @@ mod shots {
                     .gap_2()
                     .border_b_1()
                     .border_color(P::border())
-                    .child(div().text_color(P::flame_dim()).child("✦"))
+                    .child(crate::mark::element())
                     .child(
                         div()
                             .text_sm()
@@ -813,17 +813,13 @@ mod shots {
                     .flex_col()
                     .gap_2()
                     .child(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .child(div().text_color(P::flame_dim()).child("✦"))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(P::text())
-                                    .child("seance"),
-                            ),
+                        div().flex().gap_2().child(crate::mark::element()).child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(P::text())
+                                .child("seance"),
+                        ),
                     )
                     .child(
                         // The view switch, as `render_view_switch` draws it.

@@ -655,7 +655,7 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    /// ✦ mark and AFK chip (unless the space row holds them), Wall · Focus, the layout
+    /// Gold mark and AFK chip (unless the space row holds them), Wall · Focus, the layout
     /// toggle, the summary and the jump box.
     fn render_wall_header(
         &self,
