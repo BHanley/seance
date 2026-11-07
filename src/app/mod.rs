@@ -872,6 +872,7 @@ impl SeanceApp {
                     terminal.read(cx).forget_sent_size();
                 }
             }
+            app.chat_fetch_draft(cx);
             cx.notify();
         })
         .detach();

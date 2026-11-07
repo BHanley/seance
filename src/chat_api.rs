@@ -541,6 +541,17 @@ pub fn search(q: &str) -> Result<Vec<Hit>> {
     Ok(get::<Hits>(&format!("/api/search?q={}", enc(q)), REQUEST_SECS)?.results)
 }
 
+/// Text the sheet page left for the circle's composer, empty when none. Invoke
+/// hands it over once and clears it.
+pub fn draft(ws: &str) -> Result<String> {
+    #[derive(Deserialize)]
+    struct Draft {
+        #[serde(default)]
+        text: String,
+    }
+    Ok(get::<Draft>(&format!("/api/draft?ws={}", enc(ws)), REQUEST_SECS)?.text)
+}
+
 /// The circle's panes, for @-mentions.
 pub fn panes(ws: &str) -> Result<Vec<PaneRow>> {
     #[derive(Deserialize)]

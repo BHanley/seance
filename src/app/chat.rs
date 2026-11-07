@@ -14,7 +14,7 @@ use gpui::{
     div, img, prelude::*, px, relative, AnyElement, Context, Entity, Focusable as _, Hsla,
     ScrollHandle, SharedString, WeakEntity, Window,
 };
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::{Input, InputEvent, InputState, RopeExt as _};
 use gpui_component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui_component::text::{TextView, TextViewStyle};
 use gpui_component::{StyledExt as _, WindowExt as _};
@@ -221,6 +221,16 @@ pub(crate) fn reply_arrow(id: i64) -> gpui::Stateful<gpui::Div> {
         .hover(|s| s.text_color(SeancePalette::flame()))
         .cursor_pointer()
         .child("↩")
+}
+
+/// The composer's text with a draft from the sheet page after it: a space
+/// between them unless the text is empty or already ends in whitespace.
+fn with_draft(typed: &str, draft: &str) -> String {
+    if typed.is_empty() || typed.ends_with(char::is_whitespace) {
+        format!("{typed}{draft}")
+    } else {
+        format!("{typed} {draft}")
+    }
 }
 
 /// Opening a circle drops a reply meant for another one.
@@ -766,6 +776,9 @@ pub(super) struct ChatState {
     restore: Option<String>,
     /// Focus the composer at the next frame (switching into Chat).
     pub(super) focus_input: bool,
+    /// Drafts from the sheet page by circle, added to the composer once that
+    /// circle shows.
+    drafts: HashMap<String, String>,
     /// Image name to its cached file, once fetched.
     images: HashMap<String, (PathBuf, u32, u32)>,
     /// Videos being fetched on a click, or that failed to be.
@@ -1619,7 +1632,38 @@ impl SeanceApp {
             window.focus(&focus, cx);
         }
         self.chat_refresh(cx);
+        self.chat_fetch_draft(cx);
         cx.notify();
+    }
+
+    /// Ask Invoke for a draft the sheet page left for the selected circle,
+    /// while Chat shows. It waits in `drafts` until that circle is on screen.
+    pub(super) fn chat_fetch_draft(&mut self, cx: &mut Context<Self>) {
+        let Some(ws) = self.chat.selected.clone() else {
+            return;
+        };
+        if self.view.mode != ViewMode::Chat || ws == ALERTS_WS {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let asked = ws.clone();
+            let found = cx
+                .background_executor()
+                .spawn(async move { chat_api::draft(&asked) })
+                .await;
+            // Invoke down or nothing waiting: the composer stays as it is.
+            let Ok(text) = found else { return };
+            if text.trim().is_empty() {
+                return;
+            }
+            let Some(this) = this.upgrade() else { return };
+            this.update(cx, |app: &mut SeanceApp, cx| {
+                let held = app.chat.drafts.entry(ws).or_default();
+                *held = with_draft(held, &text);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Read the selected circle's whole thread again, so no old status is stale.
@@ -2283,6 +2327,21 @@ impl SeanceApp {
                     format!("{text}\n{typed}")
                 };
                 input.update(cx, |i, cx| i.set_value(text, window, cx));
+            }
+            let draft = self
+                .chat
+                .selected
+                .as_ref()
+                .and_then(|ws| self.chat.drafts.remove(ws));
+            if let Some(draft) = draft {
+                let text = with_draft(&input.read(cx).value(), &draft);
+                input.update(cx, |i, cx| {
+                    i.set_value(text, window, cx);
+                    // The composer is multi-line, so the caret starts at the top.
+                    let end = i.text().offset_to_position(i.text().len());
+                    i.set_cursor_position(end, window, cx);
+                });
+                self.chat.focus_input = true;
             }
             if std::mem::take(&mut self.chat.focus_input) {
                 let focus = input.read(cx).focus_handle(cx);
@@ -4666,6 +4725,14 @@ mod tests {
             dark.quote_bg,
             seance_core::schemes::mix(0xFFB0E0, 0x04010A, QUOTE_TINT)
         );
+    }
+
+    #[test]
+    fn a_draft_lands_after_whatever_is_typed() {
+        assert_eq!(with_draft("", "pick A"), "pick A");
+        assert_eq!(with_draft("hi", "pick A"), "hi pick A");
+        assert_eq!(with_draft("hi ", "pick A"), "hi pick A");
+        assert_eq!(with_draft("hi\n", "pick A"), "hi\npick A");
     }
 
     #[test]
