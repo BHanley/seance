@@ -34,6 +34,7 @@ mod alerts;
 pub(crate) mod chat;
 mod chrome;
 mod dock;
+mod first_run;
 mod layout;
 mod lead_tasks;
 mod menus;
@@ -353,6 +354,7 @@ pub struct SeanceApp {
     quicklaunch_checked: Option<std::time::Instant>,
     /// Open quicklaunch create/edit modal (None = closed).
     quicklaunch_editor: Option<quicklaunch::QuickLaunchEditor>,
+    first_run: first_run::FirstRun,
     /// Host-provided menus (`menus[]` of ~/.config/seance/host.json) — chips
     /// that run a list command on click instead of being polled.
     host_menus: Vec<crate::host::HostMenuConfig>,
@@ -587,6 +589,7 @@ impl SeanceApp {
             quicklaunch_mtime: None,
             quicklaunch_checked: None,
             quicklaunch_editor: None,
+            first_run: first_run::FirstRun::Off,
             host_menus: Vec::new(),
             host_menus_mtime: None,
             host_menus_checked: None,
@@ -600,6 +603,9 @@ impl SeanceApp {
         };
         app.announce_view();
         app.start_stage_ticker(cx);
+        if !empty {
+            app.start_first_run_check(cx);
+        }
         // Seed the prompt-library user file on the DAEMON machine (write-if-
         // missing) and pre-warm the cache so the palette has user prompts by
         // the first refresh tick. Plain thread: bridge calls block.
@@ -3415,6 +3421,7 @@ impl Render for SeanceApp {
             .children(self.render_host_menu_scrim(window, cx))
             .children(self.render_palette(cx))
             .children(self.render_quicklaunch_editor(cx))
+            .children(self.render_first_run(cx))
             .children(self.render_gui_menu(cx))
             .children(self.render_tasks_popover(window, cx))
             .children(match &self.drawer {
