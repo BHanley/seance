@@ -2019,7 +2019,7 @@ impl SeanceApp {
                 // Not l: macOS takes cmd+shift+l for its "Search With Google"
                 // service before the app ever sees it.
                 "t" => {
-                    self.set_view(self.view.mode.next(), cx);
+                    self.set_view(self.next_view(), cx);
                     cx.stop_propagation();
                 }
                 // Not u: fcitx5 and ibus take ctrl+shift+u for unicode input.

@@ -73,6 +73,9 @@ fn state() -> (Option<PathBuf>, bool, bool) {
 impl SeanceApp {
     /// The chip itself, or None where the script isn't installed.
     pub(super) fn render_afk_chip(&self, key: &str, cx: &Context<Self>) -> Option<AnyElement> {
+        if !crate::term_config::personal() {
+            return None;
+        }
         let (script, on, busy) = state();
         if script.is_none() {
             return None;
