@@ -30,7 +30,8 @@ pub use seance_core::control::{ControlRequest, ControlResponse};
 /// Otherwise prefers `$XDG_RUNTIME_DIR/seance.sock` (the user's runtime dir,
 /// cleaned on logout), falling back to `/tmp/seance-$UID.sock` when
 /// `XDG_RUNTIME_DIR` is unset — the `$UID` suffix keeps it per-user on a
-/// shared `/tmp`.
+/// shared `/tmp`. On macOS the fallback is
+/// `~/Library/Application Support/Seance/seance.sock`.
 pub fn socket_path() -> PathBuf {
     if let Some(sock) = std::env::var_os("SEANCE_SOCKET") {
         if !sock.is_empty() {
@@ -50,6 +51,13 @@ pub fn bind_socket_path() -> PathBuf {
         if !dir.is_empty() {
             return PathBuf::from(dir).join("seance.sock");
         }
+    }
+    // macOS has no runtime dir; a standalone local daemon lives under the
+    // user's Application Support. Remote daemons are reached through
+    // `$SEANCE_SOCKET` (the tunnel), never through this function.
+    #[cfg(target_os = "macos")]
+    if let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty()) {
+        return PathBuf::from(home).join("Library/Application Support/Seance/seance.sock");
     }
     let uid = current_uid();
     PathBuf::from(format!("/tmp/seance-{uid}.sock"))

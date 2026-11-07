@@ -132,7 +132,7 @@ fn preflight(host: &str) -> Result<()> {
 /// Ask the remote side where its daemon socket lives. Mirrors
 /// `control::bind_socket_path` without requiring seance on the remote PATH.
 fn remote_socket_path(host: &str) -> Result<String> {
-    let script = r#"if [ -n "$XDG_RUNTIME_DIR" ]; then echo "$XDG_RUNTIME_DIR/seance.sock"; else echo "/tmp/seance-$(id -u).sock"; fi"#;
+    let script = r#"if [ -n "$XDG_RUNTIME_DIR" ]; then echo "$XDG_RUNTIME_DIR/seance.sock"; elif [ "$(uname)" = Darwin ]; then echo "$HOME/Library/Application Support/Seance/seance.sock"; else echo "/tmp/seance-$(id -u).sock"; fi"#;
     let out = ssh_base(host)
         .args(["--", "sh", "-c", &format!("'{script}'")])
         .stdin(Stdio::null())

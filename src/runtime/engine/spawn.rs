@@ -308,6 +308,10 @@ impl Engine {
             "SEANCE_SCRATCHPAD".into(),
             scratch_path.to_string_lossy().to_string(),
         );
+        // Apple's /bin/bash 3.2 prints a "default shell is now zsh" banner in
+        // every interactive pane otherwise.
+        #[cfg(target_os = "macos")]
+        env.insert("BASH_SILENCE_DEPRECATION_WARNING".into(), "1".into());
         env.insert(
             "SEANCE_SOCKET".into(),
             crate::control::bind_socket_path()
