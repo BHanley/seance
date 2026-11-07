@@ -271,6 +271,20 @@ fn main() {
         Picker(Option<launch::LaunchPref>, Option<String>),
     }
 
+    let boot_local = |pref: Option<launch::LaunchPref>| match daemon::ensure_local_daemon() {
+        Ok(spawned) => {
+            eprintln!(
+                "[seance] {} session daemon",
+                if spawned { "started" } else { "connected to" }
+            );
+            match gui_client::preflight(&control::bind_socket_path()) {
+                Ok(()) => Boot::Local,
+                Err(e) => Boot::Picker(pref, Some(format!("local daemon: {e:#}"))),
+            }
+        }
+        Err(e) => Boot::Picker(pref, Some(format!("local daemon: {e:#}"))),
+    };
+
     let boot = match &pref {
         Some(p) if p.mode == launch::LaunchMode::Remote => {
             let host = p.host.clone().unwrap_or_default();
@@ -293,19 +307,9 @@ fn main() {
                 }
             }
         }
-        Some(_) => match daemon::ensure_daemon() {
-            Ok(spawned) => {
-                eprintln!(
-                    "[seance] {} session daemon",
-                    if spawned { "started" } else { "connected to" }
-                );
-                match gui_client::preflight(&control::bind_socket_path()) {
-                    Ok(()) => Boot::Local,
-                    Err(e) => Boot::Picker(pref.clone(), Some(format!("local daemon: {e:#}"))),
-                }
-            }
-            Err(e) => Boot::Picker(pref.clone(), Some(format!("local daemon: {e:#}"))),
-        },
+        Some(_) => boot_local(pref.clone()),
+        // macOS: no preference means the app runs its own daemon, no picker.
+        None if cfg!(target_os = "macos") => boot_local(None),
         None => {
             // No preference: a running local daemon means business as usual;
             // otherwise ask rather than silently spawning one.
