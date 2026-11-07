@@ -3269,6 +3269,7 @@ impl SeanceApp {
                     )
                     .child(
                         carve::carve(div(), SeancePalette::bg(), Cut::Slot)
+                            .when(carve::slick(), |d| carve::corners(d, Stock::Md))
                             .flex_1()
                             .min_w_0()
                             .when(carve::on(), |d| carve::bg(d, SeancePalette::bg()).px_1())

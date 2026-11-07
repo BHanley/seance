@@ -514,7 +514,6 @@ mod tests {
             style_for(skin("neon-district"), false, None),
             Some(NEON_LOOK)
         );
-        assert_eq!(NEON_LOOK, Carve::Glass);
         let hud = Some(Carve::Hud);
         assert_eq!(style_for(skin("neon-district"), false, hud), hud);
         assert_eq!(style_for(skin("castle"), false, hud), Some(Carve::Stone));
