@@ -5,6 +5,7 @@ mod caps;
 mod carve;
 mod chain;
 mod chat_api;
+mod claude_check;
 mod clipboard;
 mod cmdlog;
 mod control;
