@@ -76,7 +76,11 @@ fn abs_cwd(cwd_raw: &str) -> PathBuf {
 /// `<claude home>/projects/<cwd with / and . flattened to ->/<id>.jsonl`.
 /// Claude's home is `$CLAUDE_CONFIG_DIR`, else `~/.claude`.
 pub(crate) fn claude_transcript(cwd_raw: &str, session: &str) -> PathBuf {
-    let encoded: String = abs_cwd(cwd_raw)
+    // Claude names the folder from the real path (macOS `/tmp` is really
+    // `/private/tmp`), so resolve symlinks first.
+    let cwd = abs_cwd(cwd_raw);
+    let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
+    let encoded: String = cwd
         .to_string_lossy()
         .chars()
         .map(|c| if c == '/' || c == '.' { '-' } else { c })
