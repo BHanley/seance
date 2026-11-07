@@ -17,6 +17,35 @@ const ROW_H: f32 = 28.;
 /// same line as one that has a spinner.
 const GLYPH_W: f32 = 15.;
 /// Pane rows under the selected circle sit a step smaller than circle rows.
+/// The ✦ menu's theme groups. A scheme with a texture is "textured" whether
+/// its ground is dark or light, so each scheme is in exactly one group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ThemeGroup {
+    Dark,
+    Light,
+    Textured,
+}
+
+impl ThemeGroup {
+    fn of(s: &seance_core::schemes::Scheme) -> Self {
+        if s.texture.is_some() {
+            Self::Textured
+        } else if s.light {
+            Self::Light
+        } else {
+            Self::Dark
+        }
+    }
+
+    fn heading(self) -> &'static str {
+        match self {
+            Self::Dark => "dark themes",
+            Self::Light => "light themes",
+            Self::Textured => "textured themes",
+        }
+    }
+}
+
 const PANE_ROW_H: f32 = 22.;
 /// Time / count column, right-aligned.
 const TIME_W: f32 = 34.;
@@ -167,8 +196,9 @@ impl SeanceApp {
                                 })
                         }))
                         .child(div().my_1().h(px(1.)).bg(SeancePalette::border()))
-                        .children(self.render_theme_rows(false, cx))
-                        .children(self.render_theme_rows(true, cx))
+                        .children(self.render_theme_rows(ThemeGroup::Dark, cx))
+                        .children(self.render_theme_rows(ThemeGroup::Light, cx))
+                        .children(self.render_theme_rows(ThemeGroup::Textured, cx))
                         .child(div().my_1().h(px(1.)).bg(SeancePalette::border()))
                         .child(
                             div()
@@ -1318,24 +1348,24 @@ impl SeanceApp {
         rows
     }
 
-    /// The dark or light color schemes in the ✦ menu under their own
-    /// heading, the active one marked. A click asks the daemon, which saves
-    /// it and repaints every window; the menu stays open so schemes can be
-    /// tried one after another.
-    fn render_theme_rows(&self, light: bool, cx: &Context<Self>) -> Vec<gpui::AnyElement> {
+    /// One group of color schemes in the ✦ menu under its own heading, the
+    /// active one marked. A click asks the daemon, which saves it and
+    /// repaints every window; the menu stays open so schemes can be tried one
+    /// after another.
+    fn render_theme_rows(&self, group: ThemeGroup, cx: &Context<Self>) -> Vec<gpui::AnyElement> {
         let active = crate::theme::active().id;
         let heading = div()
             .px_1()
-            .when(light, |d| d.pt_1())
+            .when(group != ThemeGroup::Dark, |d| d.pt_1())
             .text_xs()
             .text_color(SeancePalette::text_faint())
-            .child(if light { "light themes" } else { "dark themes" })
+            .child(group.heading())
             .into_any_element();
         std::iter::once(heading)
             .chain(
                 seance_core::schemes::SCHEMES
                     .iter()
-                    .filter(|s| s.light == light)
+                    .filter(|s| ThemeGroup::of(s) == group)
                     .map(|s| {
                         let id = s.id;
                         let is_active = id == active;
@@ -1671,6 +1701,27 @@ impl SeanceApp {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn textured_schemes_form_their_own_theme_group() {
+        use seance_core::schemes::SCHEMES;
+        let ids = |g: ThemeGroup| -> Vec<_> {
+            SCHEMES
+                .iter()
+                .filter(|s| ThemeGroup::of(s) == g)
+                .map(|s| s.id)
+                .collect()
+        };
+        assert_eq!(ids(ThemeGroup::Textured), ["castle", "neon-district"]);
+        // Every scheme is listed once, and no textured one is also dark or light.
+        let total: usize = [ThemeGroup::Dark, ThemeGroup::Light, ThemeGroup::Textured]
+            .into_iter()
+            .map(|g| ids(g).len())
+            .sum();
+        assert_eq!(total, SCHEMES.len());
+        assert!(!ids(ThemeGroup::Dark).contains(&"castle"));
+        assert!(!ids(ThemeGroup::Light).contains(&"neon-district"));
+    }
+
     use super::*;
 
     #[test]
