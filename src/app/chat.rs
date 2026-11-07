@@ -317,6 +317,17 @@ fn plain_stamp(me: bool, skinned: bool, text: Hsla, dim: Hsla, faint: Hsla) -> H
     }
 }
 
+/// Whether `s` is carved stone (castle), whatever the shots draw.
+fn stone(s: &schemes::Scheme) -> bool {
+    s.texture.as_ref().and_then(|t| t.carved) == Some(schemes::Carve::Stone)
+}
+
+/// The plate whose wash and bar mark the selected circle row: Brian's
+/// recolored one, except on stone, which frames the row with its chain.
+pub(crate) fn row_plate(s: &schemes::Scheme) -> Option<schemes::MeBubble> {
+    s.me_bubble.filter(|_| !stone(s))
+}
+
 /// The selected circle row's fill: the rail's `surface`, or the recolored
 /// bubble's fill washed thin where the scheme has one, so the row stands out
 /// on a textured rail.
@@ -346,7 +357,7 @@ pub(crate) fn selected_row_bar(custom: Option<schemes::MeBubble>) -> Option<gpui
 /// [`me_ink`] for the active scheme: Brian's plate, or the lead's.
 pub(crate) fn active_me_ink(me: bool) -> Option<MeInk> {
     let s = crate::theme::active();
-    if carve::today() && s.texture.as_ref().is_some_and(|t| t.carved) {
+    if carve::today() && stone(s) {
         return None;
     }
     me_ink(true, if me { s.me_bubble } else { s.lead_bubble })
@@ -2569,10 +2580,7 @@ impl SeanceApp {
         let ws = c.ws.clone();
         let (menu_ws, weak) = (c.ws.clone(), cx.weak_entity());
         let pulse = 0.45 + 0.55 * (((now_ms() / 300) % 2) as f32);
-        // Neon's wash and bar; a carved skin frames the row with its chain.
-        let me = crate::theme::active()
-            .me_bubble
-            .filter(|_| !crate::skin::active().is_some_and(|t| t.carved));
+        let me = row_plate(crate::theme::active());
         div()
             .id(SharedString::from(format!("chat-circle-{}", c.ws)))
             .flex_none()
@@ -2806,10 +2814,12 @@ impl SeanceApp {
                         .left(px(0.))
                         .px_2()
                         .py_1()
-                        .border_1()
-                        .border_color(SeancePalette::border())
-                        .bg(SeancePalette::bg_elevated())
-                        .shadow_lg()
+                        .when(!carve::slick(), |d| {
+                            d.border_1()
+                                .border_color(SeancePalette::border())
+                                .shadow_lg()
+                        })
+                        .map(|d| carve::bg(d, SeancePalette::bg_elevated()))
                         .text_xs()
                         .text_color(SeancePalette::text())
                         .whitespace_nowrap()
@@ -2928,7 +2938,11 @@ impl SeanceApp {
             header.child(
                 carve::plate(
                     div().id("chat-todo"),
-                    SeancePalette::surface(),
+                    if carve::hud() && tasks_open {
+                        SeancePalette::violet()
+                    } else {
+                        SeancePalette::surface()
+                    },
                     Stock::Sm,
                     Cut::Control,
                 )
@@ -2936,7 +2950,7 @@ impl SeanceApp {
                 .px_2()
                 .py_0p5()
                 .when(carve::on() && !tasks_open, |d| {
-                    d.bg(SeancePalette::surface())
+                    carve::bg(d, SeancePalette::surface())
                 })
                 .text_xs()
                 .text_color(if tasks_open {
@@ -2944,7 +2958,7 @@ impl SeanceApp {
                 } else {
                     SeancePalette::text_dim()
                 })
-                .when(tasks_open, |d| d.bg(SeancePalette::violet()))
+                .when(tasks_open, |d| carve::bg(d, SeancePalette::violet()))
                 .hover(|s| s.text_color(SeancePalette::flame()))
                 .cursor_pointer()
                 .tooltip(tip("the lead's tasks"))
@@ -2972,7 +2986,7 @@ impl SeanceApp {
                 .py_0p5()
                 .text_xs()
                 .text_color(SeancePalette::text_dim())
-                .bg(SeancePalette::surface())
+                .map(|d| carve::bg(d, SeancePalette::surface()))
                 .hover(|s| s.text_color(SeancePalette::flame()))
                 .cursor_pointer()
                 .tooltip(tip("flip to Classic, on this circle's lead"))
@@ -3015,7 +3029,7 @@ impl SeanceApp {
                 .py_1()
                 .text_xs()
                 .text_color(SeancePalette::text_dim())
-                .bg(SeancePalette::surface())
+                .map(|d| carve::bg(d, SeancePalette::surface()))
                 .hover(|s| s.text_color(SeancePalette::flame()))
                 .cursor_pointer()
                 .on_click(cx.listener(|this, _, _, cx| this.chat_show_earlier(cx)))
@@ -3057,7 +3071,7 @@ impl SeanceApp {
                     .size_full(),
                 )
             })
-            .when(carve::on(), |d| {
+            .when(carve::stone(), |d| {
                 d.relative().children(crate::skin::backdrop(carve::STONE))
             })
             .child(header)
@@ -3143,7 +3157,7 @@ impl SeanceApp {
             )
             .px_2()
             .py_0p5()
-            .when(carve::on(), |d| d.bg(SeancePalette::surface()))
+            .when(carve::on(), |d| carve::bg(d, SeancePalette::surface()))
             .when(!carve::on(), |d| {
                 d.border_1().border_color(SeancePalette::border())
             })
@@ -3246,7 +3260,7 @@ impl SeanceApp {
                         .py_1p5()
                         .text_sm()
                         .text_color(SeancePalette::text_dim())
-                        .bg(SeancePalette::surface())
+                        .map(|d| carve::bg(d, SeancePalette::surface()))
                         .hover(|s| s.text_color(SeancePalette::flame()))
                         .cursor_pointer()
                         .tooltip(tip("send a file or picture"))
@@ -3257,7 +3271,7 @@ impl SeanceApp {
                         carve::carve(div(), SeancePalette::bg(), Cut::Slot)
                             .flex_1()
                             .min_w_0()
-                            .when(carve::on(), |d| d.bg(SeancePalette::bg()).px_1())
+                            .when(carve::on(), |d| carve::bg(d, SeancePalette::bg()).px_1())
                             .child(Input::new(input).appearance(!carve::on())),
                     )
                     .child(
@@ -3272,8 +3286,12 @@ impl SeanceApp {
                         .py_1p5()
                         .text_sm()
                         .text_color(SeancePalette::bg())
-                        .bg(SeancePalette::flame())
-                        .hover(|s| s.bg(SeancePalette::flame_dim()))
+                        .map(|d| carve::bg(d, SeancePalette::flame()))
+                        // Hud's fill is painted, so it dims the whole button.
+                        .when(!carve::hud(), |d| {
+                            d.hover(|s| s.bg(SeancePalette::flame_dim()))
+                        })
+                        .when(carve::hud(), |d| d.hover(|s| s.opacity(0.8)))
                         .cursor_pointer()
                         .on_click(cx.listener(|this, _, window, cx| this.chat_send(window, cx)))
                         .child("Send"),
@@ -3511,8 +3529,8 @@ impl SeanceApp {
             .py_2()
             .text_sm()
             .text_color(words)
-            .bg(fill)
-            .when(spec.is_some(), |d| {
+            .map(|d| carve::bg(d, fill))
+            .when(spec.is_some() && !carve::hud(), |d| {
                 d.border_1().border_color(SeancePalette::violet())
             })
             .child(body)
@@ -3633,20 +3651,33 @@ impl SeanceApp {
             .children(m.choices.iter().enumerate().map(|(i, choice)| {
                 let is_picked = picked.as_deref() == Some(choice.as_str());
                 let lead_pick = i == 0 && picked.is_none();
+                let fill = if is_picked {
+                    SeancePalette::violet()
+                } else if lead_pick {
+                    SeancePalette::violet().opacity(0.14)
+                } else {
+                    SeancePalette::surface()
+                };
                 let pill = carve::plate(
                     div().id(SharedString::from(format!("choice-{id}-{i}"))),
-                    SeancePalette::surface(),
+                    // Hud paints the pill's own fill; stone bevels from surface.
+                    if carve::hud() {
+                        fill
+                    } else {
+                        SeancePalette::surface()
+                    },
                     Stock::Full,
                     Cut::Control,
                 )
                 .px_3()
                 .py_1()
                 .text_sm()
-                .border_1()
-                .border_color(if is_picked || lead_pick {
-                    SeancePalette::violet()
-                } else {
-                    SeancePalette::border()
+                .when(!carve::slick(), |d| {
+                    d.border_1().border_color(if is_picked || lead_pick {
+                        SeancePalette::violet()
+                    } else {
+                        SeancePalette::border()
+                    })
                 })
                 .text_color(if is_picked {
                     SeancePalette::bg()
@@ -3655,8 +3686,7 @@ impl SeanceApp {
                 } else {
                     SeancePalette::text()
                 })
-                .when(is_picked, |d| d.bg(SeancePalette::violet()))
-                .when(lead_pick, |d| d.bg(SeancePalette::violet().opacity(0.14)))
+                .when(is_picked || lead_pick, |d| carve::bg(d, fill))
                 .when(picked.is_some() && !is_picked, |d| d.opacity(0.4))
                 .child(choice.clone());
                 if picked.is_some() {
@@ -3665,7 +3695,10 @@ impl SeanceApp {
                 let spec_change = changes_spec(m, choice);
                 let choice = choice.clone();
                 pill.cursor_pointer()
-                    .hover(|s| s.bg(SeancePalette::violet().opacity(0.25)))
+                    .when(!carve::hud(), |d| {
+                        d.hover(|s| s.bg(SeancePalette::violet().opacity(0.25)))
+                    })
+                    .when(carve::hud(), |d| d.hover(|s| s.opacity(0.8)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if spec_change {
                             this.chat.focus_input = true;
@@ -4644,6 +4677,11 @@ mod tests {
         assert!(selected_row_bar(neon).is_some());
         assert!(selected_row_bar(None).is_none());
         assert_eq!(selected_row_bg(None), SeancePalette::surface());
+        // Neon keeps its wash and bar in every look; stone frames with chain.
+        let find = |id| seance_core::schemes::find(id).unwrap();
+        assert_eq!(row_plate(find("neon-district")), neon);
+        assert_eq!(row_plate(find("castle")), None);
+        assert_eq!(row_plate(find("candlelit")), None);
     }
 
     #[test]

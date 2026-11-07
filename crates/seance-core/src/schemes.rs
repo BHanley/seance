@@ -64,11 +64,28 @@ pub struct Texture {
     /// Scales every surface's backdrop strength (`src/skin.rs`), so each
     /// skin can sit at its own weight; capped at fully opaque.
     pub strength: f32,
-    /// Carved look: controls and bubbles are square plates with hard pixel
-    /// bevels cut from the wall, and Chat's messages sit on dim stone
-    /// (`src/carve.rs`). Other skins keep their stock rounded widgets.
-    pub carved: bool,
+    /// How Chat's controls and bubbles are cut (`src/carve.rs`); `None`
+    /// keeps the stock rounded widgets.
+    pub carved: Option<Carve>,
 }
+
+/// A skin's cut for Chat's boxes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Carve {
+    /// Square plates with hard pixel bevels cut from the wall, worn by its
+    /// stone, and Chat's messages on dim stone (castle).
+    Stone,
+    /// Dark fill under a thin neon edge and a soft sheen on the top third,
+    /// small rounded corners.
+    Glass,
+    /// Chamfered top-right and bottom-left corners, a lit hairline edge and a
+    /// tick at the top-left, like a heads-up display. No gradient.
+    Hud,
+}
+
+/// Neon District's look for Chat's boxes: flip to `Carve::Hud` to try the
+/// heads-up display panels instead of glass.
+pub const NEON_LOOK: Carve = Carve::Glass;
 
 /// Brian's own chat bubbles, recolored by a scheme: `bg` fills the bubble
 /// and `ink` draws everything in it (text, time, ticks, links, quote).
@@ -243,7 +260,7 @@ pub const CASTLE_STONE: Texture = Texture {
     frame: 0x141415,
     lamp: Some(Lamp::Torch),
     strength: 1.0,
-    carved: true,
+    carved: Some(Carve::Stone),
 };
 
 // Neon District: grimy riveted steel in near-black violet, hot neon for the
@@ -261,7 +278,7 @@ pub const NEON_STEEL: Texture = Texture {
     frame: 0x1B1A26,
     lamp: Some(Lamp::Tube),
     strength: 1.0,
-    carved: false,
+    carved: Some(NEON_LOOK),
 };
 
 /// Every scheme, in menu order.
@@ -633,12 +650,34 @@ mod tests {
         assert_eq!(ids(|s| s.me_bubble.is_some()), ["castle", "neon-district"]);
         assert_eq!(ids(|s| s.lead_bubble.is_some()), ["castle"]);
         assert_eq!(
-            ids(|s| s.texture.as_ref().is_some_and(|t| t.carved)),
-            ["castle"]
+            ids(|s| s.texture.as_ref().is_some_and(|t| t.carved.is_some())),
+            ["castle", "neon-district"]
         );
         let b = find("neon-district").unwrap().me_bubble.unwrap();
         assert_eq!((b.bg, b.ink), (0xD6168F, 0xFFFFFF));
         assert!(contrast(b.ink, b.bg) >= 4.5);
+    }
+
+    #[test]
+    fn castle_alone_is_stone_and_neon_alone_is_glass_or_hud() {
+        let carve = |id| find(id).unwrap().texture.as_ref().unwrap().carved;
+        assert_eq!(carve("castle"), Some(Carve::Stone));
+        assert!(matches!(
+            carve("neon-district"),
+            Some(Carve::Glass | Carve::Hud)
+        ));
+        assert_eq!(carve("neon-district"), Some(NEON_LOOK));
+        assert_eq!(NEON_LOOK, Carve::Glass);
+        for s in SCHEMES
+            .iter()
+            .filter(|s| s.id != "castle" && s.id != "neon-district")
+        {
+            assert!(
+                s.texture.as_ref().is_none_or(|t| t.carved.is_none()),
+                "{}",
+                s.id
+            );
+        }
     }
 
     #[test]

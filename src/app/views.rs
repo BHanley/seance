@@ -229,6 +229,7 @@ impl SeanceApp {
             .p(px(if carve::on() { 3. } else { 2. }))
             .gap(px(2.))
             .map(|d| carve::plate(d, SeancePalette::bg(), Stock::Md, Cut::Slot))
+            .when(carve::slick(), |d| carve::bg(d, SeancePalette::bg()))
             .when(!carve::on(), |d| {
                 d.border_1().border_color(SeancePalette::border())
             })
@@ -250,8 +251,7 @@ impl SeanceApp {
                     .overflow_hidden()
                     .cursor_pointer()
                     .when(on, |d| {
-                        d.bg(SeancePalette::surface())
-                            .text_color(SeancePalette::flame())
+                        carve::bg(d, SeancePalette::surface()).text_color(SeancePalette::flame())
                     })
                     .when(!on, |d| {
                         d.text_color(SeancePalette::text_dim())

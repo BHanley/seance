@@ -684,7 +684,7 @@ mod shots {
                 .py_0p5()
                 .text_xs()
                 .text_color(P::text_dim())
-                .when(fill || carve::on(), |d| d.bg(P::surface()))
+                .when(fill || carve::on(), |d| carve::bg(d, P::surface()))
                 .child(text.to_string())
         };
         div()
@@ -792,7 +792,7 @@ mod shots {
                     .py_2()
                     .text_sm()
                     .text_color(words)
-                    .bg(fill)
+                    .map(|d| carve::bg(d, fill))
                     .child(text.to_string()),
             )
         };
@@ -831,6 +831,7 @@ mod shots {
                             .flex()
                             .p(px(if carve::on() { 3. } else { 2. }))
                             .gap(px(2.))
+                            .when(carve::slick(), |d| carve::bg(d, P::bg()))
                             .when(!carve::on(), |d| d.border_1().border_color(P::border()))
                             .children(["Classic", "Stage", "Chat", "Wall"].map(|m| {
                                 let on = m == "Chat";
@@ -844,7 +845,7 @@ mod shots {
                                     .flex()
                                     .justify_center()
                                     .text_xs()
-                                    .when(on, |d| d.bg(P::surface()).text_color(P::flame()))
+                                    .when(on, |d| carve::bg(d, P::surface()).text_color(P::flame()))
                                     .when(!on, |d| d.text_color(P::text_dim()))
                                     .child(m)
                             })),
@@ -905,7 +906,7 @@ mod shots {
                         carve::plate(div(), P::surface(), Stock::Full, Cut::Control)
                             .px_2()
                             .py_0p5()
-                            .when(carve::on(), |d| d.bg(P::surface()))
+                            .when(carve::on(), |d| carve::bg(d, P::surface()))
                             .when(!carve::on(), |d| d.border_1().border_color(P::border()))
                             .text_xs()
                             .text_color(P::text_dim())
@@ -920,7 +921,7 @@ mod shots {
                         carve::plate(div(), P::surface(), Stock::Md, Cut::Control)
                             .px_2()
                             .py_1p5()
-                            .bg(P::surface())
+                            .map(|d| carve::bg(d, P::surface()))
                             .text_sm()
                             .child("📎"),
                     )
@@ -930,7 +931,7 @@ mod shots {
                             .px_2()
                             .py_1p5()
                             .when(!carve::on(), |d| d.border_1().border_color(P::border()))
-                            .bg(P::bg())
+                            .map(|d| carve::bg(d, P::bg()))
                             .text_sm()
                             .text_color(P::text_faint())
                             .child("Message the lead"),
@@ -939,7 +940,7 @@ mod shots {
                         carve::plate(div(), P::flame(), Stock::Md, Cut::Control)
                             .px_3()
                             .py_1p5()
-                            .bg(P::flame())
+                            .map(|d| carve::bg(d, P::flame()))
                             .text_sm()
                             .text_color(P::bg())
                             .child("Send"),
@@ -972,7 +973,7 @@ mod shots {
                             .flex()
                             .flex_col()
                             .gap_2()
-                            .when(carve::on(), |d| {
+                            .when(carve::stone(), |d| {
                                 d.relative().children(backdrop(carve::STONE))
                             })
                             .child(bubble(false, ask))
@@ -1008,7 +1009,7 @@ mod shots {
                         .py_2()
                         .text_sm()
                         .text_color(words)
-                        .bg(fill)
+                        .map(|d| carve::bg(d, fill))
                         .when(quote, |d| d.child(quote_block("lead", ask, ink)))
                         .child(text.to_string())
                         // A recolored bubble also shows its time and ticks,
@@ -1235,6 +1236,45 @@ mod shots {
             image::imageops::resize(&grid, n * 9, n * 9, image::imageops::FilterType::Nearest);
         big.save(out).expect("save png");
         eprintln!("wrote {}", out.display());
+    }
+
+    /// Neon District's two looks for Chat's boxes beside today's: the whole
+    /// Chat view, a reply bubble with its quote, and the composer, per look.
+    #[test]
+    #[ignore = "writes PNGs via headless Metal; run with --ignored"]
+    fn neon_slick_shots() {
+        use seance_core::schemes::Carve;
+        let dir = std::env::var("SKIN_SHOTS_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("shots"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let id = "neon-district";
+        carve::TODAY.with(|t| t.set(true));
+        render(
+            Scene::Chat(id),
+            900.,
+            460.,
+            &dir.join("neon-slick-today-chat.png"),
+        );
+        carve::TODAY.with(|t| t.set(false));
+        for (look, name) in [(Carve::Glass, "glass"), (Carve::Hud, "hud")] {
+            carve::LOOK.with(|l| l.set(Some(look)));
+            let whole = dir.join(format!("neon-slick-{name}-chat.png"));
+            render(Scene::Chat(id), 900., 460., &whole);
+            render(
+                Scene::ChatReply(vec![id], false),
+                330.,
+                460.,
+                &dir.join(format!("neon-slick-{name}-reply.png")),
+            );
+            // The harness renders at 2x: crop the composer.
+            image::open(&whole)
+                .unwrap()
+                .crop_imm(460, 690, 1320, 230)
+                .save(dir.join(format!("neon-slick-{name}-composer.png")))
+                .unwrap();
+        }
+        carve::LOOK.with(|l| l.set(None));
     }
 
     /// Castle's carved look beside today's: the whole Chat view each way, a

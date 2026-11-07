@@ -302,9 +302,12 @@ Color transforms (`.opacity/.lighten/.darken`) come from `gpui_component`'s
 
 ## Carved stone (`Texture::carved`, castle)
 
-A skin with `carved: true` cuts its widgets from the wall (`src/carve.rs`).
-Builders call `carve::plate`, `corners`, `carve` or `worn_plate`; a scheme
-that does not carve gets the stock rounded widget back from the same call.
+`Texture::carved` is an `Option<Carve>`: `Stone` (castle), `Glass` or `Hud`
+(Neon District, below), `None` everywhere else. A skin with `Some(Stone)`
+cuts its widgets from the wall (`src/carve.rs`). Builders call
+`carve::plate`, `corners`, `carve`, `worn_plate` and `carve::bg` for a
+plate's fill; a scheme that does not carve gets the stock rounded widget back
+from the same calls.
 
 - **Corners and bevels.** Square. A bevel is one canvas of whole-pixel strips:
   a 1 px dark outline, then a lit top and left and a shadowed bottom and
@@ -327,4 +330,32 @@ that does not carve gets the stock rounded widget back from the same call.
   `#75716A`, solid, with a small open ring (5x5 texels, a 3x3 dark hole, one
   lit texel) on each corner. It sits inside the row, so row height and
   contents are unchanged. Neon's wash and bar are for schemes that recolor
-  bubbles and do not carve.
+  bubbles and are not stone.
+
+## Neon's Chat boxes (`Carve::Glass`, `Carve::Hud`)
+
+Neon District cuts the same Chat widgets as castle (bubbles, header buttons,
+"Show earlier", chips, choice pills, attach, Send, the composer and the view
+switch) in one of two looks, picked by `NEON_LOOK` in
+`crates/seance-core/src/schemes.rs` (`Glass` today). None of stone's extras
+apply: no worn tile on plates, no stone behind messages, no iron line, and
+the selected row keeps its pink wash and bar. Each box is one canvas, drawn
+only when the element paints.
+
+- **Glass.** The element keeps its own fill, rounded to 3 px whatever its
+  stock rounding. Over it, a sheen quad on the top third (a vertical gradient
+  from white at 10%, 5% on Brian's plate so its white ink holds 4.5:1, to
+  clear; none on the composer and view switch, which are slots) and a 1 px
+  edge quad: cyan at 70%, or pink lit 45% toward white on Brian's plate and
+  Send.
+- **Hud.** Square elements with no `.bg()` (`carve::bg` is a no-op); the
+  canvas fills a chamfered path itself, cut at the top-right and bottom-left
+  (7 px on message plates, 4 px on controls and slots, at most a third of the
+  short side), strokes a 1 px hairline in the edge color half a pixel inside
+  it, and adds a 2x2 tick at the top-left. No gradient. Borders, shadows and
+  background hovers are off (they would show outside the cut); Send and choice
+  pills dim on hover instead. Every widget's padding keeps its text at least
+  a pixel clear of the cut (`no_text_touches_a_hud_cut`).
+
+`cargo test --bin seance neon_slick_shots -- --ignored` renders both looks
+and today's beside them into `shots/neon-slick-*.png`.

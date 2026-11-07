@@ -1,20 +1,32 @@
-//! The carved look (`Texture::carved`, castle): square plates with hard
-//! pixel bevels, as if cut from the wall. Widgets pass through these helpers
-//! and get back their stock rounded look on every other scheme, so the
-//! builders carry no `if castle`.
+//! Cut looks for Chat's boxes (`Texture::carved`). Widgets pass through these
+//! helpers and get back their stock rounded look on every other scheme, so
+//! the builders carry no `if castle`.
 //!
-//! A bevel is one canvas of a few `paint_quad` strips in whole pixels: an
-//! outline, a lit top and left, a shadowed bottom and right. No blur, no
+//! Stone (castle): square plates with hard pixel bevels, as if cut from the
+//! wall. A bevel is one canvas of a few `paint_quad` strips in whole pixels:
+//! an outline, a lit top and left, a shadowed bottom and right. No blur, no
 //! gradient, no transparency. A plate's wear is the skin's tile at its own
 //! corner (`skin::worn`), the same cached sprite the rail uses.
+//!
+//! Glass and Hud (Neon District, `NEON_LOOK`): one canvas per box. Glass is
+//! two quads over the element's own rounded fill, a sheen and a 1 px edge.
+//! Hud paints the fill itself as a chamfered path (so the element sets no
+//! `.bg()`, see [`bg`]), then its hairline edge as a stroked path and a tick.
 
-use gpui::{canvas, point, px, size, Bounds, Hsla, ParentElement, Pixels, Styled, Window};
+use gpui::{
+    canvas, linear_color_stop, linear_gradient, point, px, size, BorderStyle, Bounds, Hsla,
+    ParentElement, PathBuilder, Pixels, Styled, Window,
+};
+pub use seance_core::schemes::Carve;
+use seance_core::schemes::Texture;
 
 #[cfg(test)]
 thread_local! {
     /// Shot tests: draw the scheme as it was before carving (no carving, no
     /// recolored plates, no chain), to set beside the carved render.
     pub static TODAY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Shot tests: draw Neon's boxes in this look instead of `NEON_LOOK`.
+    pub static LOOK: std::cell::Cell<Option<Carve>> = const { std::cell::Cell::new(None) };
 }
 
 /// Whether shots are drawing the pre-carving look.
@@ -27,9 +39,58 @@ pub fn today() -> bool {
     false
 }
 
-/// Whether the active scheme carves its widgets.
+/// The active scheme's cut, if it has one.
+pub fn style() -> Option<Carve> {
+    #[cfg(test)]
+    let over = LOOK.with(|l| l.get());
+    #[cfg(not(test))]
+    let over = None;
+    style_for(crate::skin::active(), today(), over)
+}
+
+/// A skin's cut: none while shots draw today's look, and `over` in place of
+/// Neon's looks (never stone's).
+fn style_for(skin: Option<&Texture>, today: bool, over: Option<Carve>) -> Option<Carve> {
+    let look = skin?.carved.filter(|_| !today)?;
+    Some(match (look, over) {
+        (Carve::Glass | Carve::Hud, Some(o)) => o,
+        _ => look,
+    })
+}
+
+/// Whether the active scheme cuts its widgets at all.
 pub fn on() -> bool {
-    !today() && crate::skin::active().is_some_and(|t| t.carved)
+    style().is_some()
+}
+
+/// Whether the active scheme is carved stone (castle).
+pub fn stone() -> bool {
+    style() == Some(Carve::Stone)
+}
+
+/// Whether the active scheme paints its plates' fills itself (Hud).
+pub fn hud() -> bool {
+    style() == Some(Carve::Hud)
+}
+
+/// Whether the active scheme is one of Neon's looks (Glass or Hud), whose
+/// edge replaces a widget's own border and shadow.
+pub fn slick() -> bool {
+    matches!(style(), Some(Carve::Glass | Carve::Hud))
+}
+
+/// Fill a plated widget: `.bg(color)`, except under Hud, whose canvas paints
+/// the fill inside the chamfer.
+pub fn bg<E: Styled>(el: E, color: Hsla) -> E {
+    bg_for(el, color, style())
+}
+
+fn bg_for<E: Styled>(el: E, color: Hsla, look: Option<Carve>) -> E {
+    if look == Some(Carve::Hud) {
+        el
+    } else {
+        el.bg(color)
+    }
 }
 
 /// The rounding a widget has on schemes that don't carve.
@@ -66,14 +127,20 @@ pub const WORN: f32 = 0.45;
 /// Dim stone behind Chat's messages, as the tile's opacity over the ground.
 pub const STONE: f32 = 0.55;
 
-/// A widget's corners: square when carved, else the stock rounding.
+/// Glass's corner radius, whatever the stock rounding.
+pub const GLASS_RADIUS: f32 = 3.;
+
+/// A widget's corners: square for Stone and Hud, Glass's small radius, else
+/// the stock rounding.
 pub fn corners<E: Styled>(el: E, stock: Stock) -> E {
-    corners_for(el, stock, on())
+    corners_for(el, stock, style())
 }
 
-fn corners_for<E: Styled>(el: E, stock: Stock, carved: bool) -> E {
-    if carved {
-        return el;
+fn corners_for<E: Styled>(el: E, stock: Stock, look: Option<Carve>) -> E {
+    match look {
+        Some(Carve::Stone | Carve::Hud) => return el,
+        Some(Carve::Glass) => return el.rounded(px(GLASS_RADIUS)),
+        None => {}
     }
     match stock {
         Stock::Sm => el.rounded_sm(),
@@ -144,16 +211,26 @@ pub fn strips(w: f32, h: f32, cut: Cut) -> Vec<Strip> {
 }
 
 /// Cut `el` as `cut` over `fill` when the scheme carves; unchanged else. Call
-/// it before adding children so the bevel paints under them.
+/// it before adding children so the cut paints under them.
 pub fn carve<E: ParentElement + Styled>(el: E, fill: Hsla, cut: Cut) -> E {
-    if !on() {
+    let Some(look) = style() else {
         return el;
-    }
-    let (lit, shadow, outline) = tones(fill);
+    };
+    let edge = edge(fill);
+    let sheen = sheen(fill);
+    let tones = tones(fill);
     el.relative().child(
         canvas(
             |_, _, _| {},
-            move |bounds, _, window, _| paint(bounds, cut, [lit, shadow, outline], window),
+            move |bounds, _, window, _| match look {
+                Carve::Stone => paint(bounds, cut, [tones.0, tones.1, tones.2], window),
+                // A slot is cut into the wall, so it catches no sheen.
+                Carve::Glass => {
+                    let sheen = if cut == Cut::Slot { 0. } else { sheen };
+                    paint_glass(bounds, edge, sheen, window)
+                }
+                Carve::Hud => paint_hud(bounds, fill, edge, cut, window),
+            },
         )
         .absolute()
         .top_0()
@@ -167,17 +244,162 @@ pub fn plate<E: ParentElement + Styled>(el: E, fill: Hsla, stock: Stock, cut: Cu
     carve(corners(el, stock), fill, cut)
 }
 
-/// [`plate`] worn by the wall's stone: message bubbles.
+/// [`plate`] for message bubbles, worn by the wall's stone when that is the
+/// look.
 pub fn worn_plate<E: ParentElement + Styled>(el: E, fill: Hsla, stock: Stock) -> E {
     let el = corners(el, stock);
-    if !on() {
-        return el;
+    match style() {
+        None => el,
+        Some(Carve::Stone) => carve(
+            el.relative().children(crate::skin::worn(WORN)),
+            fill,
+            Cut::Plate,
+        ),
+        Some(_) => carve(el, fill, Cut::Plate),
     }
-    carve(
-        el.relative().children(crate::skin::worn(WORN)),
-        fill,
-        Cut::Plate,
-    )
+}
+
+fn same(a: Hsla, b: Hsla) -> bool {
+    let (a, b) = (a.to_rgb(), b.to_rgb());
+    [(a.r, b.r), (a.g, b.g), (a.b, b.b)]
+        .iter()
+        .all(|(x, y)| (x - y).abs() < 1. / 255.)
+}
+
+/// Whether `fill` is Brian's recolored plate on the active scheme.
+fn is_me_plate(fill: Hsla) -> bool {
+    crate::theme::active()
+        .me_bubble
+        .is_some_and(|b| same(fill, gpui::rgb(b.bg).into()))
+}
+
+/// Neon's edge: pink lit toward white on Brian's plate and on `flame` (Send),
+/// so it shows on the pink; cyan on everything else.
+fn edge(fill: Hsla) -> Hsla {
+    use crate::theme::SeancePalette;
+    let pink = SeancePalette::flame();
+    if is_me_plate(fill) || same(fill, pink) {
+        Hsla {
+            l: pink.l + (1. - pink.l) * 0.45,
+            ..pink
+        }
+    } else {
+        SeancePalette::violet().opacity(EDGE)
+    }
+}
+
+/// Cyan edge's opacity.
+pub const EDGE: f32 = 0.7;
+/// Glass's sheen at its top, as white's opacity over the fill.
+pub const SHEEN: f32 = 0.1;
+/// The sheen on a plate with light ink, low enough that the ink holds 4.5:1.
+pub const SHEEN_ON_INK: f32 = 0.05;
+
+fn sheen(fill: Hsla) -> f32 {
+    if is_me_plate(fill) {
+        SHEEN_ON_INK
+    } else {
+        SHEEN
+    }
+}
+
+fn paint_glass(bounds: Bounds<Pixels>, edge: Hsla, sheen: f32, window: &mut Window) {
+    let r = px(GLASS_RADIUS);
+    let top = Bounds::new(
+        bounds.origin,
+        size(bounds.size.width, (bounds.size.height / 3.).round()),
+    );
+    let white = Hsla::white();
+    if sheen > 0. {
+        window.paint_quad(
+            gpui::fill(
+                top,
+                linear_gradient(
+                    180.,
+                    linear_color_stop(white.opacity(sheen), 0.),
+                    linear_color_stop(white.opacity(0.), 1.),
+                ),
+            )
+            .corner_radii(gpui::Corners {
+                top_left: r,
+                top_right: r,
+                bottom_right: px(0.),
+                bottom_left: px(0.),
+            }),
+        );
+    }
+    window.paint_quad(gpui::quad(
+        bounds,
+        r,
+        gpui::transparent_black(),
+        px(1.),
+        edge,
+        BorderStyle::Solid,
+    ));
+}
+
+impl Cut {
+    /// Hud's corner cut in logical pixels.
+    pub fn chamfer(self) -> f32 {
+        match self {
+            Cut::Plate => 7.,
+            Cut::Control | Cut::Slot => 4.,
+        }
+    }
+}
+
+/// Hud's tick at the top-left: its inset and side in logical pixels.
+pub const TICK: (f32, f32) = (2., 2.);
+
+/// A `w` by `h` box with its top-right and bottom-left corners cut by `cut`,
+/// clockwise from the top-left, in pixels from the box's top-left. The cut
+/// shrinks to a third of the short side so a small box keeps its sides.
+/// `inset` moves every side in, keeping the cuts at 45 degrees, so a stroke of
+/// twice that width stays inside the box.
+pub fn chamfer(w: f32, h: f32, cut: f32, inset: f32) -> [(f32, f32); 6] {
+    let (w, h, d) = (w.floor(), h.floor(), inset);
+    let c = cut.min((w.min(h) / 3.).floor()).max(0.);
+    // How far a cut's ends slide along their sides when it moves in by `d`.
+    let k = d * (std::f32::consts::SQRT_2 - 1.);
+    [
+        (d, d),
+        (w - c - k, d),
+        (w - d, c + k),
+        (w - d, h - d),
+        (c + k, h - d),
+        (d, h - c - k),
+    ]
+}
+
+fn paint_hud(bounds: Bounds<Pixels>, fill: Hsla, edge: Hsla, cut: Cut, window: &mut Window) {
+    // Whole pixels at both ends, as the stone bevel does.
+    let (x0, y0) = (
+        f32::from(bounds.origin.x).round(),
+        f32::from(bounds.origin.y).round(),
+    );
+    let x1 = f32::from(bounds.origin.x + bounds.size.width).round();
+    let y1 = f32::from(bounds.origin.y + bounds.size.height).round();
+    let path = |mut b: PathBuilder, inset: f32| {
+        let pts = chamfer(x1 - x0, y1 - y0, cut.chamfer(), inset);
+        let at = |(x, y): (f32, f32)| point(px(x0 + x), px(y0 + y));
+        b.move_to(at(pts[0]));
+        for p in &pts[1..] {
+            b.line_to(at(*p));
+        }
+        b.close();
+        b.build()
+    };
+    if let Ok(p) = path(PathBuilder::fill(), 0.) {
+        window.paint_path(p, fill);
+    }
+    if let Ok(p) = path(PathBuilder::stroke(px(1.)), 0.5) {
+        window.paint_path(p, edge);
+    }
+    let (at, side) = TICK;
+    window.paint_quad(gpui::fill(
+        Bounds::new(point(px(x0 + at), px(y0 + at)), size(px(side), px(side))),
+        edge.opacity(1.),
+    ));
 }
 
 fn paint(bounds: Bounds<Pixels>, cut: Cut, tones: [Hsla; 3], window: &mut Window) {
@@ -260,14 +482,125 @@ mod tests {
     fn a_scheme_that_does_not_carve_keeps_its_stock_corners() {
         use gpui::{div, Styled as _};
         for stock in [Stock::Sm, Stock::Md, Stock::Lg, Stock::Full] {
-            let mut plain = corners_for(div(), stock, false);
-            let mut carved = corners_for(div(), stock, true);
+            let mut plain = corners_for(div(), stock, None);
+            let mut stone = corners_for(div(), stock, Some(Carve::Stone));
+            let mut hud = corners_for(div(), stock, Some(Carve::Hud));
+            let mut glass = corners_for(div(), stock, Some(Carve::Glass));
             assert!(plain.style().corner_radii.top_left.is_some(), "{stock:?}");
-            assert!(carved.style().corner_radii.top_left.is_none(), "{stock:?}");
+            assert!(stone.style().corner_radii.top_left.is_none(), "{stock:?}");
+            assert!(hud.style().corner_radii.top_left.is_none(), "{stock:?}");
+            assert_eq!(
+                glass.style().corner_radii.top_left,
+                Some(px(GLASS_RADIUS).into()),
+                "{stock:?}"
+            );
         }
         for s in &seance_core::schemes::SCHEMES {
-            let carved = s.texture.as_ref().is_some_and(|t| t.carved);
-            assert_eq!(carved, s.id == "castle", "{}", s.id);
+            let look = s.texture.as_ref().and_then(|t| t.carved);
+            let want = match s.id {
+                "castle" => Some(Carve::Stone),
+                "neon-district" => Some(seance_core::schemes::NEON_LOOK),
+                _ => None,
+            };
+            assert_eq!(look, want, "{}", s.id);
+        }
+    }
+
+    #[test]
+    fn neon_is_glass_unless_a_shot_asks_for_hud_and_castle_stays_stone() {
+        use seance_core::schemes::{find, NEON_LOOK};
+        let skin = |id| find(id).unwrap().texture.as_ref();
+        assert_eq!(
+            style_for(skin("neon-district"), false, None),
+            Some(NEON_LOOK)
+        );
+        assert_eq!(NEON_LOOK, Carve::Glass);
+        let hud = Some(Carve::Hud);
+        assert_eq!(style_for(skin("neon-district"), false, hud), hud);
+        assert_eq!(style_for(skin("castle"), false, hud), Some(Carve::Stone));
+        assert_eq!(style_for(skin("neon-district"), true, hud), None);
+        assert_eq!(style_for(skin("castle"), true, None), None);
+        assert_eq!(style_for(skin("candlelit"), false, hud), None);
+    }
+
+    #[test]
+    fn only_hud_leaves_a_plates_fill_to_its_canvas() {
+        use gpui::{div, red, Styled as _};
+        for look in [
+            None,
+            Some(Carve::Stone),
+            Some(Carve::Glass),
+            Some(Carve::Hud),
+        ] {
+            let mut d = bg_for(div(), red(), look);
+            let filled = d.style().background.is_some();
+            assert_eq!(filled, look != Some(Carve::Hud), "{look:?}");
+        }
+    }
+
+    #[test]
+    fn a_chamfer_cuts_only_the_top_right_and_bottom_left_in_whole_pixels() {
+        for (w, h, cut) in [
+            (40., 20., 4.),
+            (221.6, 37.2, 7.),
+            (12., 9., 7.),
+            (400., 120., 7.),
+        ] {
+            let pts = chamfer(w, h, cut, 0.);
+            let (fw, fh) = (f32::floor(w), f32::floor(h));
+            for (x, y) in pts {
+                assert!(x.fract() == 0. && y.fract() == 0., "{w}x{h} ({x}, {y})");
+                assert!((0. ..=fw).contains(&x) && (0. ..=fh).contains(&y));
+            }
+            // Square at the top-left and bottom-right, cut at the other two.
+            assert!(pts.contains(&(0., 0.)) && pts.contains(&(fw, fh)));
+            assert!(!pts.contains(&(fw, 0.)) && !pts.contains(&(0., fh)));
+            let c = fw - pts[1].0;
+            assert!(c > 0. && c <= cut && c <= fh / 3., "{w}x{h}");
+            assert_eq!(pts[2], (fw, c));
+            assert_eq!(pts[4], (c, fh));
+            assert_eq!(pts[5], (0., fh - c));
+        }
+        // The stroke's path, half its width in, keeps the whole stroke inside.
+        for (x, y) in chamfer(40., 20., 4., 0.5) {
+            assert!((0.5..=39.5).contains(&x) && (0.5..=19.5).contains(&y));
+        }
+    }
+
+    #[test]
+    fn no_text_touches_a_hud_cut() {
+        // Each cut widget's padding (x, y) as chat.rs, views.rs and the shots
+        // build it. The composer slot adds the input's own (12, 8).
+        let pads = [
+            (Cut::Plate, "bubble", 12., 8.),
+            (Cut::Control, "header buttons and chips", 8., 2.),
+            (Cut::Control, "show earlier", 12., 4.),
+            (Cut::Control, "attach", 8., 6.),
+            (Cut::Control, "send", 12., 6.),
+            (Cut::Control, "choice pill", 12., 4.),
+            (Cut::Control, "crew line", 8., 4.),
+            (Cut::Control, "view tab", 6., 0.),
+            (Cut::Slot, "view switch", 3., 3.),
+            (Cut::Slot, "composer", 4. + 12., 8.),
+        ];
+        // A corner cut by `c` misses the text box at (x, y) by (x + y - c) / sqrt 2;
+        // keep at least a pixel.
+        for (cut, what, x, y) in pads {
+            let gap = (x + y - cut.chamfer()) / std::f32::consts::SQRT_2;
+            assert!(gap >= 1., "{what}: {gap}");
+        }
+    }
+
+    #[test]
+    fn glass_sheen_keeps_every_plates_text_at_4_5_to_1() {
+        use crate::app::chat::me_ink;
+        use seance_core::schemes::{contrast, find, mix};
+        let neon = find("neon-district").unwrap();
+        let i = me_ink(true, neon.me_bubble).unwrap();
+        assert!(contrast(i.ink, mix(i.bg, 0xFFFFFF, SHEEN_ON_INK)) >= 4.5);
+        let c = &neon.chrome;
+        for fill in [c.surface, c.bg, c.bg_elevated] {
+            assert!(contrast(c.text, mix(fill, 0xFFFFFF, SHEEN)) >= 4.5);
         }
     }
 
