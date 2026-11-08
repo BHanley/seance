@@ -28,6 +28,7 @@
 //! | `seance-lead-sprite.<circle-slug>` | a seed that swaps that circle's lead creature (GUI) |
 //! | `seance-new-circle-command` | the first pane of a circle made with Stage's "+ circle" (GUI; runs on the daemon's machine) |
 //! | `seance-desktop-notifications` (`true`/`false`, also `off`/`0`) | `false` posts no macOS/Linux banners at all; sounds and clearing stale banners are unaffected (read at launch) |
+//! | `seance-personal` (`true`/`false`, also `on`/`1`) | Brian's own setup, default off: the Chat view (needs Invoke), Invoke's task list on the lead-tasks card and the AFK chip. Each machine reads its own file |
 //! | `seance-origin-gutter` (`true`/`false`, also `off`/`0`) | the 2px input-origin stripe at a terminal's left edge (GUI) |
 //!
 //! The two Stage paths are read through the daemon's fs bridge, so they name
@@ -109,6 +110,10 @@ pub struct TermConfig {
     pub seance_desktop_notifications: bool,
     /// `seance-origin-gutter = false` hides the input-origin stripe.
     pub seance_origin_gutter: bool,
+    /// `seance-personal = true` turns on the features tied to Brian's own
+    /// machines (Invoke chat, AFK). Off by default, so a standalone install
+    /// never shows or calls them.
+    pub seance_personal: bool,
     /// `seance-lead-sprite.<circle-slug> = SEED`: re-seeds that circle's creature.
     pub lead_sprites: std::collections::HashMap<String, String>,
 }
@@ -139,9 +144,15 @@ impl Default for TermConfig {
             seance_new_circle_command: None,
             seance_desktop_notifications: true,
             seance_origin_gutter: true,
+            seance_personal: false,
             lead_sprites: Default::default(),
         }
     }
+}
+
+/// Whether this machine opted into Brian's personal features.
+pub fn personal() -> bool {
+    get().seance_personal
 }
 
 pub fn get() -> &'static TermConfig {
@@ -287,6 +298,7 @@ fn apply(cfg: &mut TermConfig, key: &str, value: &str) {
         "seance-origin-gutter" => {
             cfg.seance_origin_gutter = !matches!(value, "false" | "off" | "0")
         }
+        "seance-personal" => cfg.seance_personal = matches!(value, "true" | "on" | "1"),
         "seance-done-sound" => cfg.seance_done_sound = non_empty(value).map(PathBuf::from),
         // `off` (or 0) turns auto-sleep off.
         "seance-auto-sleep-idle" => {
@@ -529,6 +541,21 @@ mod tests {
         let p = write(&dir, "terminal.conf", "seance-origin-gutter = off\n");
         assert!(!load(&p).seance_origin_gutter);
         assert!(TermConfig::default().seance_origin_gutter);
+    }
+
+    #[test]
+    fn personal_features_are_off_unless_asked_for() {
+        let dir = test_dir("personal");
+        assert!(!TermConfig::default().seance_personal);
+        assert!(!load(&write(&dir, "a.conf", "font-size = 12\n")).seance_personal);
+        assert!(!load(&write(&dir, "b.conf", "seance-personal = maybe\n")).seance_personal);
+        assert!(load(&write(&dir, "c.conf", "seance-personal = true\n")).seance_personal);
+        let off = write(
+            &dir,
+            "d.conf",
+            "seance-personal = true\nseance-personal = false\n",
+        );
+        assert!(!load(&off).seance_personal);
     }
 
     #[test]

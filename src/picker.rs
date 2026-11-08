@@ -107,7 +107,7 @@ impl LaunchPicker {
             cx.notify();
             let task = cx
                 .background_executor()
-                .spawn(async move { crate::daemon::ensure_daemon() });
+                .spawn(async move { crate::daemon::ensure_local_daemon() });
             cx.spawn_in(window, async move |this: gpui::WeakEntity<Self>, cx| {
                 let result = task.await;
                 let _ = cx.update(|window, cx| {

@@ -24,6 +24,13 @@ use crate::runtime::{daemon_pid_path, SessionEvent, SharedEngine};
 
 /// Entry: `seance daemon` or `seance daemon --takeover PATH`.
 pub fn run_daemon(args: Vec<String>) -> ! {
+    // main() restores SIG_DFL for CLI pipes; the daemon must survive a write to a closed pipe
+    // (pane wake pipe, handoff socket) and handle EPIPE instead.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+    }
+    #[cfg(target_os = "macos")]
+    extend_macos_path();
     let code = match run_daemon_inner(args) {
         Ok(()) => 0,
         Err(e) => {
@@ -907,9 +914,17 @@ fn resolve_upgrade_bin() -> Result<PathBuf> {
 /// same shape as the GUI's stderr log. `None` if the state dir or the file
 /// can't be opened; the caller falls back to `/dev/null`.
 fn daemon_log_file() -> Option<std::fs::File> {
-    let dir = crate::state::state_dir().ok()?;
-    let _ = std::fs::create_dir_all(&dir);
-    let mut file = open_log(&dir.join("daemon.log")).ok()?;
+    let path = daemon_log_path(
+        std::env::var_os("SEANCE_STATE_DIR").is_some_and(|d| !d.is_empty()),
+        std::env::var_os("HOME")
+            .as_deref()
+            .map(std::path::Path::new),
+    )
+    .or_else(|| Some(crate::state::state_dir().ok()?.join("daemon.log")))?;
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let mut file = open_log(&path).ok()?;
     // Who started this daemon, and which build — the two questions asked
     // first when a session's panes turn out to belong to someone else's
     // daemon.
@@ -920,6 +935,51 @@ fn daemon_log_file() -> Option<std::fs::File> {
         env!("CARGO_PKG_VERSION"),
     );
     Some(file)
+}
+
+/// macOS convention for the app-spawned daemon's log: `~/Library/Logs/Seance`.
+/// `None` means "use the state dir" (Linux, or an explicit `SEANCE_STATE_DIR`,
+/// which tests and isolated runs set to keep everything in one place).
+fn daemon_log_path(state_dir_overridden: bool, home: Option<&std::path::Path>) -> Option<PathBuf> {
+    if !cfg!(target_os = "macos") || state_dir_overridden {
+        return None;
+    }
+    Some(home?.join("Library/Logs/Seance/daemon.log"))
+}
+
+/// Finder/Dock launches hand the app launchd's PATH (`/usr/bin:/bin:...`), so
+/// a daemon the app starts can't find `claude` (`~/.local/bin`) or Homebrew
+/// tools. Append what's missing, keeping the inherited order first.
+fn augmented_path(current: &str, home: &str) -> String {
+    let mut parts: Vec<String> = current
+        .split(':')
+        .filter(|p| !p.is_empty())
+        .map(String::from)
+        .collect();
+    for dir in [
+        format!("{home}/.local/bin"),
+        "/opt/homebrew/bin".to_string(),
+        "/usr/local/bin".to_string(),
+    ] {
+        if !parts.contains(&dir) {
+            parts.push(dir);
+        }
+    }
+    parts.join(":")
+}
+
+/// Runs first thing in `seance daemon`, before any thread exists, so panes and
+/// the agent-binary lookup both inherit the widened PATH.
+#[cfg(target_os = "macos")]
+fn extend_macos_path() {
+    let Some(home) = std::env::var_os("HOME").and_then(|h| h.into_string().ok()) else {
+        return;
+    };
+    let current = std::env::var("PATH").unwrap_or_default();
+    // SAFETY: single-threaded at daemon entry.
+    unsafe {
+        std::env::set_var("PATH", augmented_path(&current, &home));
+    }
 }
 
 /// Open a daemon log for appending (O_APPEND, so every writer lands at the
@@ -939,7 +999,16 @@ fn open_log(path: &std::path::Path) -> std::io::Result<std::fs::File> {
 
 /// Ensure a daemon is running; spawn one if needed. Returns true if we spawned.
 pub fn ensure_daemon() -> Result<bool> {
-    let path = control::socket_path();
+    ensure_daemon_at(control::socket_path())
+}
+
+/// The GUI's local mode: always the socket a daemon on *this* machine binds,
+/// never a `$SEANCE_SOCKET` that may point at a tunnel to another machine.
+pub fn ensure_local_daemon() -> Result<bool> {
+    ensure_daemon_at(control::bind_socket_path())
+}
+
+fn ensure_daemon_at(path: PathBuf) -> Result<bool> {
     if path.exists() {
         if UnixStream::connect(&path).is_ok() {
             return Ok(false);
@@ -971,6 +1040,16 @@ pub fn ensure_daemon() -> Result<bool> {
             cmd.stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null());
         }
+    }
+    // Own session + process group on macOS, so closing the app (or its
+    // terminal) can't signal the daemon: sessions outlive the window.
+    #[cfg(target_os = "macos")]
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
     }
     cmd.spawn().context("spawn seance daemon")?;
     // Wait for socket.
@@ -1070,8 +1149,32 @@ pub fn request_upgrade() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::open_log;
+    use super::{augmented_path, daemon_log_path, open_log};
     use std::io::Write;
+    use std::path::PathBuf;
+
+    #[test]
+    fn augmented_path_appends_missing_dirs_once() {
+        let p = augmented_path("/usr/bin:/bin", "/Users/a");
+        assert_eq!(
+            p,
+            "/usr/bin:/bin:/Users/a/.local/bin:/opt/homebrew/bin:/usr/local/bin"
+        );
+        assert_eq!(augmented_path(&p, "/Users/a"), p);
+        let q = augmented_path("/opt/homebrew/bin:/usr/bin", "/Users/a");
+        assert!(q.starts_with("/opt/homebrew/bin:/usr/bin:"));
+        assert_eq!(q.matches("/opt/homebrew/bin").count(), 1);
+    }
+
+    #[test]
+    fn daemon_log_path_follows_state_dir_override() {
+        let home = std::path::Path::new("/Users/a");
+        assert_eq!(daemon_log_path(true, Some(home)), None);
+        assert_eq!(daemon_log_path(false, None), None);
+        let want = cfg!(target_os = "macos")
+            .then(|| PathBuf::from("/Users/a/Library/Logs/Seance/daemon.log"));
+        assert_eq!(daemon_log_path(false, Some(home)), want);
+    }
 
     /// Two writers on one log (an old daemon and the one replacing it) both
     /// land at the end: no truncation, no gap of NULs.

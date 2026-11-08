@@ -1412,7 +1412,11 @@ impl SeanceApp {
             let (on, ws, after) = this.update(cx, |app: &mut SeanceApp, _| {
                 let ws = app.chat.selected.clone();
                 let after = ws.as_deref().and_then(|w| app.chat.refresh_after(w));
-                (app.view.mode == ViewMode::Chat, ws, after)
+                (
+                    app.view.mode == ViewMode::Chat && crate::term_config::personal(),
+                    ws,
+                    after,
+                )
             });
             if !on {
                 cx.background_executor().timer(IDLE).await;

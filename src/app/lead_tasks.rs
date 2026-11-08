@@ -279,9 +279,10 @@ impl SeanceApp {
                 }
                 let ws = app.selected_workspace.clone()?;
                 let lead = app.stage_lead(&ws)?;
-                let skip_invoke = app
-                    .invoke_tasks_off
-                    .is_some_and(|at| at.elapsed() < INVOKE_RETRY);
+                let skip_invoke = !crate::term_config::personal()
+                    || app
+                        .invoke_tasks_off
+                        .is_some_and(|at| at.elapsed() < INVOKE_RETRY);
                 let skip_daemon = app
                     .lead_tasks_off
                     .is_some_and(|at| at.elapsed() < RETRY_OFF);

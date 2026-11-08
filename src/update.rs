@@ -163,14 +163,15 @@ pub fn restart_sessions(old_build: &str) -> Result<usize> {
         }
     }
     stop_daemon(&crate::runtime::daemon_pid_path())?;
-    crate::daemon::ensure_daemon()?;
+    crate::daemon::ensure_local_daemon()?;
     for ws in &slept {
         let req = ControlRequest::Wake {
             workspace: Some(ws.clone()),
             scope: None,
             from: Some("updater".into()),
         };
-        let _ = crate::ctl::send_request(&req);
+        // This build's own hello, on the local socket (never $SEANCE_SOCKET).
+        let _ = ask_as(env!("CARGO_PKG_VERSION"), &req);
     }
     Ok(slept.len())
 }

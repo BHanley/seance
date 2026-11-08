@@ -5,6 +5,7 @@ mod caps;
 mod carve;
 mod chain;
 mod chat_api;
+mod claude_check;
 mod clipboard;
 mod cmdlog;
 mod control;
@@ -313,22 +314,14 @@ fn main() {
                 }
             }
         }
-        Some(_) => match daemon::ensure_daemon() {
-            Ok(spawned) => {
-                eprintln!(
-                    "[seance] {} session daemon",
-                    if spawned { "started" } else { "connected to" }
-                );
-                boot_local(&pref)
-            }
-            Err(e) => Boot::Picker(pref.clone(), Some(format!("local daemon: {e:#}"))),
-        },
+        Some(_) => boot_local(pref.clone()),
+        // macOS: no preference means the app runs its own daemon, no picker.
+        None if cfg!(target_os = "macos") => boot_local(None),
         None => {
             // No preference: a running local daemon means business as usual;
             // otherwise ask rather than silently spawning one.
             if std::os::unix::net::UnixStream::connect(control::bind_socket_path()).is_ok() {
-                eprintln!("[seance] connected to session daemon");
-                boot_local(&pref)
+                boot_local(None)
             } else {
                 Boot::Picker(None, None)
             }
@@ -385,18 +378,23 @@ enum Boot {
     Picker(Option<launch::LaunchPref>, Option<String>),
 }
 
-/// Local daemon is up: confirm it will talk to this build. When it is an
-/// older build (the app was just replaced by dragging in a new one) on macOS,
-/// offer to restart sessions onto this build, and only restart on a click.
-fn boot_local(pref: &Option<launch::LaunchPref>) -> Boot {
+/// Start (or reach) this machine's own daemon and confirm it will talk to
+/// this build. When it is an older build (the app was just replaced by
+/// dragging in a new one) on macOS, offer to restart sessions onto this
+/// build, and only restart on a click.
+fn boot_local(pref: Option<launch::LaunchPref>) -> Boot {
+    match daemon::ensure_local_daemon() {
+        Ok(spawned) => eprintln!(
+            "[seance] {} session daemon",
+            if spawned { "started" } else { "connected to" }
+        ),
+        Err(e) => return Boot::Picker(pref, Some(format!("local daemon: {e:#}"))),
+    }
     let sock = control::bind_socket_path();
     let mut checked = gui_client::preflight(&sock);
     if let Err(e) = &checked {
-        let remote = pref
-            .as_ref()
-            .is_some_and(|p| p.mode == launch::LaunchMode::Remote);
         if let Some(old) =
-            update::stale_local_daemon(cfg!(target_os = "macos"), remote, &format!("{e:#}"))
+            update::stale_local_daemon(cfg!(target_os = "macos"), false, &format!("{e:#}"))
         {
             if update::confirm_restart() {
                 checked = update::restart_sessions(&old).and_then(|_| gui_client::preflight(&sock));
@@ -405,7 +403,7 @@ fn boot_local(pref: &Option<launch::LaunchPref>) -> Boot {
     }
     match checked {
         Ok(()) => Boot::Local,
-        Err(e) => Boot::Picker(pref.clone(), Some(format!("local daemon: {e:#}"))),
+        Err(e) => Boot::Picker(pref, Some(format!("local daemon: {e:#}"))),
     }
 }
 
