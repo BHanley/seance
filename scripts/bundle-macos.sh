@@ -8,6 +8,8 @@
 #   ./scripts/bundle-macos.sh --dest DIR   # install somewhere else entirely
 #   ./scripts/bundle-macos.sh --cli-dir DIR # CLI link (default ~/.local/bin)
 #   ./scripts/bundle-macos.sh --with-skills # install ChatGPT/Codex + Claude skill
+#   ./scripts/bundle-macos.sh --app-only DIR # only write DIR/Seance.app: no install,
+#                                            # no links, no LaunchServices (release-macos.sh)
 #
 # This is the mac build command: the bundle holds a *copy* of the binary, so a
 # bare `cargo build --release` leaves the app stale. Re-run this instead — with
@@ -36,6 +38,7 @@ DO_BUILD=1
 DEST="/Applications"
 CLI_DIR="$HOME/.local/bin"
 INSTALL_SKILLS=0
+APP_ONLY=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-build) DO_BUILD=0; shift ;;
@@ -43,7 +46,8 @@ while [[ $# -gt 0 ]]; do
     --dest)     DEST="${2:?--dest needs a directory}"; shift 2 ;;
     --cli-dir)  CLI_DIR="${2:?--cli-dir needs a directory}"; shift 2 ;;
     --with-skills) INSTALL_SKILLS=1; shift ;;
-    -h|--help)  sed -n '2,17p' "$0"; exit 0 ;;
+    --app-only) APP_ONLY="${2:?--app-only needs a directory}"; shift 2 ;;
+    -h|--help)  sed -n '2,19p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 1 ;;
   esac
 done
@@ -122,6 +126,14 @@ PLIST
 # to launch a freshly-copied app.
 echo "signing (ad-hoc)…"
 codesign --force --sign - --timestamp=none "$APP" 2>&1 | sed 's/^/  /' || true
+
+if [[ -n "$APP_ONLY" ]]; then
+  mkdir -p "$APP_ONLY"
+  rm -rf "$APP_ONLY/$APP_NAME.app"
+  cp -R "$APP" "$APP_ONLY/$APP_NAME.app"
+  echo "wrote $APP_ONLY/$APP_NAME.app ($VERSION)"
+  exit 0
+fi
 
 mkdir -p "$DEST"
 TARGET="$DEST/$APP_NAME.app"

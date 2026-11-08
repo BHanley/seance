@@ -42,6 +42,7 @@ mod theme;
 mod torch;
 mod tube;
 mod tunnel;
+mod update;
 mod webbridge;
 
 use gpui::*;
@@ -100,6 +101,34 @@ fn main() {
             Err(e) => {
                 eprintln!("[seance] ensure-daemon failed: {e:#}");
                 std::process::exit(1);
+            }
+        }
+    }
+
+    // `seance _restart-sessions` — headless twin of the app's "Seance was
+    // updated" prompt: no dialog, same sleep / stop / start / wake. For dry
+    // runs against an isolated daemon; exits 3 when the daemon isn't stale.
+    if args.get(1).map(String::as_str) == Some("_restart-sessions") {
+        let refusal = match gui_client::preflight(&control::bind_socket_path()) {
+            Ok(()) => String::new(),
+            Err(e) => format!("{e:#}"),
+        };
+        match update::stale_local_daemon(cfg!(target_os = "macos"), false, &refusal) {
+            Some(old) => match update::restart_sessions(&old) {
+                Ok(n) => {
+                    eprintln!(
+                        "[seance] restarted daemon from {old}, {n} circle(s) slept and woken"
+                    );
+                    return;
+                }
+                Err(e) => {
+                    eprintln!("[seance] restart failed: {e:#}");
+                    std::process::exit(1);
+                }
+            },
+            None => {
+                eprintln!("[seance] local daemon is not an older build, nothing to do");
+                std::process::exit(3);
             }
         }
     }
@@ -262,15 +291,6 @@ fn main() {
     }
     let pref = cli_pref.or_else(launch::load);
 
-    enum Boot {
-        /// Local daemon confirmed up.
-        Local,
-        /// Tunnel established; connect through it.
-        Remote(tunnel::Tunnel),
-        /// Ask the human (prefill + optional error from a failed silent path).
-        Picker(Option<launch::LaunchPref>, Option<String>),
-    }
-
     let boot = match &pref {
         Some(p) if p.mode == launch::LaunchMode::Remote => {
             let host = p.host.clone().unwrap_or_default();
@@ -299,10 +319,7 @@ fn main() {
                     "[seance] {} session daemon",
                     if spawned { "started" } else { "connected to" }
                 );
-                match gui_client::preflight(&control::bind_socket_path()) {
-                    Ok(()) => Boot::Local,
-                    Err(e) => Boot::Picker(pref.clone(), Some(format!("local daemon: {e:#}"))),
-                }
+                boot_local(&pref)
             }
             Err(e) => Boot::Picker(pref.clone(), Some(format!("local daemon: {e:#}"))),
         },
@@ -310,13 +327,8 @@ fn main() {
             // No preference: a running local daemon means business as usual;
             // otherwise ask rather than silently spawning one.
             if std::os::unix::net::UnixStream::connect(control::bind_socket_path()).is_ok() {
-                match gui_client::preflight(&control::bind_socket_path()) {
-                    Ok(()) => {
-                        eprintln!("[seance] connected to session daemon");
-                        Boot::Local
-                    }
-                    Err(e) => Boot::Picker(None, Some(format!("local daemon: {e:#}"))),
-                }
+                eprintln!("[seance] connected to session daemon");
+                boot_local(&pref)
             } else {
                 Boot::Picker(None, None)
             }
@@ -362,6 +374,39 @@ fn main() {
         }
         cx.activate(true);
     });
+}
+
+enum Boot {
+    /// Local daemon confirmed up.
+    Local,
+    /// Tunnel established; connect through it.
+    Remote(tunnel::Tunnel),
+    /// Ask the human (prefill + optional error from a failed silent path).
+    Picker(Option<launch::LaunchPref>, Option<String>),
+}
+
+/// Local daemon is up: confirm it will talk to this build. When it is an
+/// older build (the app was just replaced by dragging in a new one) on macOS,
+/// offer to restart sessions onto this build, and only restart on a click.
+fn boot_local(pref: &Option<launch::LaunchPref>) -> Boot {
+    let sock = control::bind_socket_path();
+    let mut checked = gui_client::preflight(&sock);
+    if let Err(e) = &checked {
+        let remote = pref
+            .as_ref()
+            .is_some_and(|p| p.mode == launch::LaunchMode::Remote);
+        if let Some(old) =
+            update::stale_local_daemon(cfg!(target_os = "macos"), remote, &format!("{e:#}"))
+        {
+            if update::confirm_restart() {
+                checked = update::restart_sessions(&old).and_then(|_| gui_client::preflight(&sock));
+            }
+        }
+    }
+    match checked {
+        Ok(()) => Boot::Local,
+        Err(e) => Boot::Picker(pref.clone(), Some(format!("local daemon: {e:#}"))),
+    }
 }
 
 /// The application menu, and the handlers for the actions it dispatches.
