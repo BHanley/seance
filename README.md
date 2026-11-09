@@ -102,7 +102,7 @@ daemon; the window is disposable.
 
 ![seance](docs/screenshot.png)
 
-**License:** MIT · **Platform:** Linux (Wayland / X11) + macOS thin client · **Status:** 0.27.3
+**License:** MIT · **Platform:** Linux (Wayland / X11) + macOS thin client · **Status:** 0.27.4
 
 Release notes: [`CHANGELOG.md`](CHANGELOG.md).
 
