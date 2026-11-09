@@ -17,6 +17,16 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.27.6] — 2026-11-09
+
+### Fixed
+
+- The "Restart sessions" prompt now shows on the first launch of a freshly
+  dragged-in app. The start-up check sent its question after the old daemon had
+  already refused the version and hung up, got a broken pipe, and read that as
+  "not an update", so the window opened onto the red refusal banner. It now
+  reads the refusal that is already waiting, and the boot logs what it found.
+
 ## [0.27.5] — 2026-11-09
 
 - Test build for the update path (no code changes).

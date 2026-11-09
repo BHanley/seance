@@ -395,10 +395,13 @@ fn boot_local(pref: Option<launch::LaunchPref>) -> Boot {
     let sock = control::bind_socket_path();
     let mut checked = gui_client::preflight(&sock);
     if let Err(e) = &checked {
+        eprintln!("[seance] daemon preflight: {e:#}");
         if let Some(old) =
             update::stale_local_daemon(cfg!(target_os = "macos"), false, &format!("{e:#}"))
         {
-            if update::confirm_restart() {
+            let go = update::confirm_restart();
+            eprintln!("[seance] daemon is {old}, this is newer; restart sessions: {go}");
+            if go {
                 checked = update::restart_sessions(&old).and_then(|_| gui_client::preflight(&sock));
             }
         }

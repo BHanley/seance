@@ -920,36 +920,55 @@ fn connection_supervisor(
 /// connection that asks one question and leaves is routine, where a `gui` hello
 /// registers a window for broadcasts we'd immediately abandon.
 pub fn preflight(path: &Path) -> Result<()> {
+    preflight_as(path, env!("CARGO_PKG_VERSION"))
+}
+
+/// [`preflight`] introducing ourselves as `build` (tests play an older or
+/// newer client against a daemon).
+fn preflight_as(path: &Path, build: &str) -> Result<()> {
+    preflight_with(path, build, || {})
+}
+
+/// `before_request` runs after the hello is sent and before the request is.
+/// A real daemon answers a version refusal off the hello alone and hangs up
+/// without reading the rest, so a client that is slow to send its request
+/// (a freshly dragged-in app on its first launch) finds the socket closed.
+fn preflight_with(path: &Path, build: &str, before_request: impl FnOnce()) -> Result<()> {
     let stream = UnixStream::connect(path)
         .with_context(|| format!("connect to daemon at {}", path.display()))?;
     let _ = stream.set_read_timeout(Some(PREFLIGHT_TIMEOUT));
     let _ = stream.set_write_timeout(Some(PREFLIGHT_TIMEOUT));
     let mut writer = stream.try_clone().context("clone preflight stream")?;
-    writer.write_all(crate::runtime::protocol::hello_line("ctl").as_bytes())?;
+    writer.write_all(seance_core::protocol::hello_line_with("ctl", build).as_bytes())?;
+    before_request();
     // Cheapest request that always answers. We don't care what it says when
-    // it works — only that something comes back, and what it says when it
+    // it works, only that something comes back, and what it says when it
     // doesn't.
     let mut req = serde_json::to_string(&ControlRequest::Whoami {
         scope: None,
         from: None,
     })?;
     req.push('\n');
-    writer.write_all(req.as_bytes())?;
-    writer.flush()?;
+    // A failed send is not the answer: the refusal the daemon already wrote
+    // is waiting in our receive buffer, so read it before judging.
+    let sent = writer
+        .write_all(req.as_bytes())
+        .and_then(|_| writer.flush());
 
     let mut line = String::new();
     match BufReader::new(stream).read_line(&mut line) {
-        // Closed without a word. Not the version gate — that answers first —
-        // so don't invent a diagnosis for it; let the GUI try.
-        Ok(0) => Ok(()),
-        Ok(_) => match serde_json::from_str::<ControlResponse>(line.trim()) {
+        Ok(n) if n > 0 => match serde_json::from_str::<ControlResponse>(line.trim()) {
             Ok(resp) if !resp.ok => Err(anyhow!(resp
                 .error
                 .unwrap_or_else(|| "daemon refused the connection".into()))),
             _ => Ok(()),
         },
-        // A slow daemon is not a broken one. Only a refusal is a refusal.
-        Err(_) => Ok(()),
+        // Nothing came back. If we also couldn't send, the daemon hung up on
+        // us: say so rather than guess it is healthy.
+        _ if sent.is_err() => Err(anyhow!("daemon closed the connection before it answered")),
+        // Closed without a word, or slow: not the version gate (that answers
+        // first), so let the GUI try.
+        _ => Ok(()),
     }
 }
 
@@ -1006,6 +1025,57 @@ mod tests {
             }
         });
         (path, handle)
+    }
+
+    /// The real daemon: reads the hello, writes the refusal, hangs up without
+    /// reading the request. `up` fires once it has hung up.
+    fn refusing_daemon(
+        up: std::sync::mpsc::Sender<()>,
+    ) -> (std::path::PathBuf, thread::JoinHandle<()>) {
+        let path = std::env::temp_dir().join(format!(
+            "seance-preflight-hangup-{}-{:?}.sock",
+            std::process::id(),
+            thread::current().id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).unwrap();
+        let h = thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut hello = String::new();
+            BufReader::new(s.try_clone().unwrap())
+                .read_line(&mut hello)
+                .unwrap();
+            writeln!(
+                s,
+                r#"{{"ok":false,"error":"version mismatch: daemon is seance 0.27.4, client is 0.27.5"}}"#
+            )
+            .unwrap();
+            drop(s);
+            let _ = up.send(());
+        });
+        (path, h)
+    }
+
+    /// Regression (0.27.6): the update dialog never showed on the first launch
+    /// of a freshly dragged-in app. Its request landed after the daemon had
+    /// refused and hung up, the write failed with a broken pipe, and that text
+    /// (no "version mismatch") made the boot skip the offer.
+    #[test]
+    fn a_refusal_is_read_even_when_the_daemon_hangs_up_before_our_request() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (path, h) = refusing_daemon(tx);
+        let err = preflight_with(&path, "0.27.5", || {
+            rx.recv().unwrap();
+        })
+        .expect_err("a refusal must not read as success");
+        h.join().unwrap();
+        let _ = std::fs::remove_file(&path);
+        let text = format!("{err:#}");
+        assert!(text.contains("version mismatch"), "{text}");
+        assert_eq!(
+            crate::update::stale_local_daemon(true, false, &text).as_deref(),
+            Some("0.27.4")
+        );
     }
 
     #[test]
