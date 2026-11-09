@@ -446,6 +446,12 @@ pub enum FsOp {
         #[serde(default)]
         session: String,
     },
+    /// Which pane Chat talks to in a circle with no explicit lead: the Claude
+    /// running in it (the most recently used when several; one typed into a
+    /// plain pane counts). → `{pane}` (null when the circle has no Claude).
+    LocalLead {
+        workspace: String,
+    },
     /// Run a shell command daemon-side (`sh -lc`). Same trust domain as the
     /// control plane (which already spawns arbitrary commands). Output is
     /// truncated to 64KiB per stream. → `{status, stdout, stderr}`.

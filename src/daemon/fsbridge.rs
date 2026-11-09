@@ -171,6 +171,10 @@ fn run_inner(op: FsOp, engine: &SharedEngine) -> Result<Value, String> {
                 look, offset, &session,
             ))
         }
+        FsOp::LocalLead { workspace } => {
+            let eng = engine.lock().map_err(|_| "engine busy".to_string())?;
+            Ok(json!({ "pane": eng.local_lead(&workspace) }))
+        }
         FsOp::HostSelect { widget, item } => {
             // Fresh load: select is rare and config may have changed on disk.
             let mut host = HostState::load();

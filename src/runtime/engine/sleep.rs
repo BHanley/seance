@@ -54,7 +54,7 @@ pub(super) fn hosted_path(pane_id: &str) -> Option<PathBuf> {
 }
 
 /// That record, when the file holds one.
-fn hosted_record(pane_id: &str) -> Option<(String, String)> {
+pub(super) fn hosted_record(pane_id: &str) -> Option<(String, String)> {
     let text = std::fs::read_to_string(hosted_path(pane_id)?).ok()?;
     parse_hosted(&text)
 }
@@ -66,6 +66,58 @@ pub(crate) fn parse_hosted(text: &str) -> Option<(String, String)> {
     (!session.is_empty() && !cwd.is_empty()).then_some((session, cwd))
 }
 
+/// How long a probe of the processes under a pane is trusted when the state
+/// push asks whether the pane could sleep.
+const PROBE_TTL_MS: u64 = 5_000;
+/// A probe that found nothing is trusted far less: Claude writes its record a
+/// moment after it starts, and a miss must not hide it for seconds.
+const PROBE_MISS_TTL_MS: u64 = 500;
+
+/// pane id to (when probed, what it found).
+type ProbeCache = std::collections::HashMap<String, (u64, Option<(String, String)>)>;
+static HOSTED_PROBES: std::sync::Mutex<Option<ProbeCache>> = std::sync::Mutex::new(None);
+
+/// The conversation hosted in a pane, with no hook: what Claude's own
+/// `sessions/<pid>.json` says about the Claude process under the pane. A fresh
+/// account has no `SessionStart` hook, so this is all there is. `fresh` skips
+/// the short cache (sleeping wants the truth; the state push doesn't).
+pub(super) fn probe_hosted(p: &super::EnginePane, fresh: bool) -> Option<(String, String)> {
+    if p.asleep {
+        return None;
+    }
+    let pid = p.session.as_ref()?.child_pid()?;
+    let now = now_ms();
+    if !fresh {
+        let guard = HOSTED_PROBES.lock().ok()?;
+        if let Some((at, found)) = guard.as_ref().and_then(|m| m.get(&p.pane_id)) {
+            let ttl = if found.is_some() {
+                PROBE_TTL_MS
+            } else {
+                PROBE_MISS_TTL_MS
+            };
+            if now.saturating_sub(*at) < ttl {
+                return found.clone();
+            }
+        }
+    }
+    let found = claude_procs(pid).hosted();
+    if let Ok(mut guard) = HOSTED_PROBES.lock() {
+        guard
+            .get_or_insert_with(Default::default)
+            .insert(p.pane_id.clone(), (now, found.clone()));
+    }
+    found
+}
+
+/// The hook's record when there is one (that path is unchanged), else the
+/// live probe.
+pub(crate) fn resolve_hosted(
+    hook: Option<(String, String)>,
+    probe: impl FnOnce() -> Option<(String, String)>,
+) -> Option<(String, String)> {
+    hook.or_else(probe)
+}
+
 /// What the processes under a pane say about the Claude in it: each claude
 /// process's session id and status (from Claude's own
 /// `~/.claude/sessions/<pid>.json`), and whether a Bash tool command is
@@ -74,11 +126,26 @@ pub(crate) fn parse_hosted(text: &str) -> Option<(String, String)> {
 #[derive(Default)]
 pub(crate) struct ClaudeProcs {
     pub sessions: Vec<(String, String)>,
+    /// Session id to the directory Claude says it is working in.
+    pub cwds: std::collections::HashMap<String, String>,
     pub tool_running: bool,
 }
 
-/// Claude's own record for one of its processes: session id and status.
-fn read_claude_session(sessions_dir: &std::path::Path, pid: u32) -> Option<(String, String)> {
+/// Where Claude keeps its per-process records: `<config dir>/sessions`, the
+/// config dir being `$CLAUDE_CONFIG_DIR` or `~/.claude`.
+fn claude_sessions_dir() -> PathBuf {
+    match std::env::var_os("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()) {
+        Some(dir) => PathBuf::from(dir).join("sessions"),
+        None => PathBuf::from(shellexpand::tilde("~/.claude/sessions").into_owned()),
+    }
+}
+
+/// Claude's own record for one of its processes: session id, status and the
+/// directory it runs in.
+fn read_claude_session(
+    sessions_dir: &std::path::Path,
+    pid: u32,
+) -> Option<(String, String, Option<String>)> {
     let v = std::fs::read_to_string(sessions_dir.join(format!("{pid}.json")))
         .ok()
         .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())?;
@@ -88,7 +155,30 @@ fn read_claude_session(sessions_dir: &std::path::Path, pid: u32) -> Option<(Stri
             .and_then(|s| s.as_str())
             .unwrap_or("")
             .to_string(),
+        v.get("cwd")
+            .and_then(|c| c.as_str())
+            .filter(|c| !c.is_empty())
+            .map(str::to_string),
     ))
+}
+
+impl ClaudeProcs {
+    fn add(&mut self, rec: (String, String, Option<String>)) {
+        let (id, status, cwd) = rec;
+        if let Some(cwd) = cwd {
+            self.cwds.insert(id.clone(), cwd);
+        }
+        self.sessions.push((id, status));
+    }
+
+    /// The conversation running under the pane, when Claude's own records
+    /// name one: the first live process with a directory. A hook-less Claude
+    /// typed into a plain pane is known by this alone.
+    pub(crate) fn hosted(&self) -> Option<(String, String)> {
+        self.sessions
+            .iter()
+            .find_map(|(id, _)| Some((id.clone(), self.cwds.get(id)?.clone())))
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -127,15 +217,15 @@ pub(crate) fn claude_procs(root: u32) -> ClaudeProcs {
         }
         false
     };
-    let sessions_dir = PathBuf::from(shellexpand::tilde("~/.claude/sessions").into_owned());
+    let sessions_dir = claude_sessions_dir();
     for &pid in parent.keys() {
         if !under(pid) {
             continue;
         }
         let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
         if comm.trim() == "claude" {
-            if let Some((id, status)) = read_claude_session(&sessions_dir, pid) {
-                out.sessions.push((id, status));
+            if let Some(rec) = read_claude_session(&sessions_dir, pid) {
+                out.add(rec);
             }
         } else if std::fs::read(format!("/proc/{pid}/cmdline"))
             .is_ok_and(|c| String::from_utf8_lossy(&c).contains("shell-snapshots"))
@@ -211,13 +301,13 @@ pub(crate) fn claude_procs(root: u32) -> ClaudeProcs {
         }
         false
     };
-    let sessions_dir = PathBuf::from(shellexpand::tilde("~/.claude/sessions").into_owned());
+    let sessions_dir = claude_sessions_dir();
     let mut claude_seen = false;
     for (pid, _, comm) in rows.iter().filter(|(pid, _, _)| under(*pid)) {
         if comm_is_claude(comm) {
             claude_seen = true;
             if let Some(rec) = read_claude_session(&sessions_dir, *pid) {
-                out.sessions.push(rec);
+                out.add(rec);
             }
         }
     }
@@ -423,7 +513,7 @@ impl Engine {
             }
             let title = p.session.as_ref().and_then(|s| s.title());
             return title_is_claude(title.as_deref())
-                && hosted_record(&p.pane_id)
+                && resolve_hosted(hosted_record(&p.pane_id), || probe_hosted(p, false))
                     .is_some_and(|(id, cwd)| transcript_exists(Agent::Claude, &cwd, &id));
         };
         p.agent_session
@@ -469,6 +559,11 @@ impl Engine {
             bail!("pane '{slug}' can't be restored, so it won't be slept");
         }
 
+        // A hook-less hosted Claude is known only while it runs: keep what
+        // Claude's own record says as the pane's record, so waking (and a
+        // daemon restart while asleep) resumes this very conversation.
+        self.keep_hosted_record(idx);
+
         // Freeze BEFORE the process dies — after shutdown the grid is gone.
         if let Some(snap) = self.snapshot_pane(slug) {
             self.freeze_grid(slug, snap);
@@ -488,6 +583,26 @@ impl Engine {
         });
         events::log("daemon", None, Some(slug), "pane_slept", "slept".into());
         Ok(true)
+    }
+
+    /// Save the live Claude's session and directory as this pane's hosted
+    /// record, when no record exists (the hook's wins). Best effort.
+    fn keep_hosted_record(&self, idx: usize) {
+        let p = &self.panes[idx];
+        if Agent::of(&p.command).is_some()
+            || p.kind == "file"
+            || hosted_record(&p.pane_id).is_some()
+        {
+            return;
+        }
+        let (Some((id, cwd)), Some(path)) = (probe_hosted(p, true), hosted_path(&p.pane_id)) else {
+            return;
+        };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let body = serde_json::json!({ "session": id, "cwd": cwd }).to_string();
+        let _ = atomic_write_bytes(&path, body.as_bytes());
     }
 
     /// Relaunch a sleeping pane onto the conversation it owns.
@@ -693,7 +808,8 @@ impl Engine {
             return true;
         }
         let Some((id, _)) = hosted_record(&p.pane_id) else {
-            return false;
+            // No hook record: Claude's own record of the live process.
+            return probe_hosted(p, true).is_some();
         };
         p.session
             .as_ref()
@@ -960,5 +1076,72 @@ mod ps_tests {
         assert!(comm_is_claude("claude"));
         assert!(comm_is_claude("/Users/b/.local/bin/claude"));
         assert!(!comm_is_claude("claude-helper"));
+    }
+}
+
+#[cfg(test)]
+mod hosted_tests {
+    use super::*;
+
+    fn procs(rows: &[(&str, &str, Option<&str>)]) -> ClaudeProcs {
+        let mut out = ClaudeProcs::default();
+        for (id, status, cwd) in rows {
+            out.add((id.to_string(), status.to_string(), cwd.map(str::to_string)));
+        }
+        out
+    }
+
+    #[test]
+    fn a_hook_less_claude_is_known_by_its_own_process_record() {
+        // Claude's sessions/<pid>.json names the session and its directory.
+        let dir = std::env::temp_dir().join(format!("seance-sessions-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("4242.json"),
+            r#"{"pid":4242,"sessionId":"abc-123","cwd":"/work/proj","status":"idle"}"#,
+        )
+        .unwrap();
+        let rec = read_claude_session(&dir, 4242).unwrap();
+        assert_eq!(rec.0, "abc-123");
+        assert_eq!(rec.2.as_deref(), Some("/work/proj"));
+        let mut p = ClaudeProcs::default();
+        p.add(rec);
+        assert_eq!(
+            p.hosted(),
+            Some(("abc-123".to_string(), "/work/proj".to_string()))
+        );
+        let _ = std::fs::remove_file(dir.join("4242.json"));
+        let _ = std::fs::remove_dir(&dir);
+        // A record with no directory can't be resumed from the right place.
+        assert_eq!(procs(&[("x", "idle", None)]).hosted(), None);
+        assert_eq!(procs(&[]).hosted(), None);
+    }
+
+    #[test]
+    fn the_hooks_record_wins_and_the_probe_only_fills_the_gap() {
+        let hook = Some(("hook-id".to_string(), "/h".to_string()));
+        let probed = || Some(("live-id".to_string(), "/l".to_string()));
+        // Brian's path, unchanged: a hook record is used and the probe never runs.
+        assert_eq!(
+            resolve_hosted(hook, || panic!("probed despite a hook record")),
+            Some(("hook-id".to_string(), "/h".to_string()))
+        );
+        // No hook (a fresh account): Claude's own record.
+        assert_eq!(
+            resolve_hosted(None, probed),
+            Some(("live-id".to_string(), "/l".to_string()))
+        );
+        assert_eq!(resolve_hosted(None, || None), None);
+    }
+
+    #[test]
+    fn a_hook_less_pane_wakes_onto_its_conversation() {
+        // What waking runs for the record the pane kept when it slept.
+        let cmd = hosted_launch("abc-123", "/work/proj");
+        assert!(cmd.contains("claude --resume \"$1\""), "{cmd}");
+        assert!(
+            cmd.contains("'/work/proj'") && cmd.contains("'abc-123'"),
+            "{cmd}"
+        );
     }
 }

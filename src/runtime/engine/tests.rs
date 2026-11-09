@@ -1457,3 +1457,66 @@ fn a_shell_in_the_circle_does_not_stop_its_claude_pane_sleeping() {
             .is_some_and(|p| !p.asleep));
     });
 }
+
+#[test]
+fn chat_finds_the_circles_claude_when_no_lead_is_set() {
+    with_test_state_dir("local-lead", || {
+        let scratch = temp_scratch("local-lead");
+        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
+        let shell = eng.push_stub_pane("shell", "lab");
+        // No Claude in the circle yet: nobody to talk to.
+        assert_eq!(eng.local_lead("lab"), None);
+
+        // A Claude agent pane next to the shell.
+        let a = eng.push_stub_pane("claude-a", "lab");
+        {
+            let p = eng.panes.iter_mut().find(|p| p.slug == a).unwrap();
+            p.command = "claude".into();
+            p.agent_session = Some("9f3c1a2b-0000-4000-a000-00000000000a".into());
+        }
+        assert_eq!(eng.local_lead("lab").as_deref(), Some(a.as_str()));
+
+        // A second one, used more recently: it wins.
+        let b = eng.push_stub_pane("claude-b", "lab");
+        {
+            let p = eng.panes.iter_mut().find(|p| p.slug == b).unwrap();
+            p.command = "claude".into();
+            p.agent_session = Some("9f3c1a2b-0000-4000-a000-00000000000b".into());
+        }
+        eng.pane_busy_at.insert(a.clone(), 1_000);
+        eng.pane_busy_at.insert(b.clone(), 2_000);
+        assert_eq!(eng.local_lead("lab").as_deref(), Some(b.as_str()));
+
+        // Another circle's Claude is not this circle's.
+        assert_eq!(eng.local_lead("other"), None);
+
+        // A lead that was set wins over any of them.
+        eng.comms.leads.insert("lab".into(), shell.clone());
+        assert_eq!(eng.local_lead("lab").as_deref(), Some(shell.as_str()));
+    });
+}
+
+#[test]
+fn a_claude_typed_into_a_plain_pane_counts_as_the_circles_claude() {
+    with_test_state_dir("local-lead-hosted", || {
+        let scratch = temp_scratch("local-lead-hosted");
+        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
+        let plain = eng.push_stub_pane("plain", "lab");
+        assert_eq!(eng.local_lead("lab"), None);
+        // Its Claude was recorded (a hook's record, or the one kept when it
+        // went to sleep), and the pane is a plain shell by command.
+        let pane_id = {
+            let p = eng.panes.iter_mut().find(|p| p.slug == plain).unwrap();
+            p.asleep = true;
+            p.pane_id.clone()
+        };
+        let path = crate::runtime::engine::sleep::hosted_path(&pane_id).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"session":"9f3c1a2b-0000-4000-a000-00000000000c","cwd":"/tmp/x"}"#,
+        )
+        .unwrap();
+        assert_eq!(eng.local_lead("lab").as_deref(), Some(plain.as_str()));
+    });
+}

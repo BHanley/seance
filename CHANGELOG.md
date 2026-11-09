@@ -17,6 +17,24 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.27.7] — 2026-11-09
+
+### Added
+
+- Chat finds the circle's Claude on its own. With no lead set (a fresh Mac has
+  none, since only `ctl lead` sets one), Chat talks to the Claude running in
+  that circle, the most recently used one when there are several. A Claude
+  typed into a plain pane counts. A circle with none says "Start Claude in a
+  pane in this circle to chat." A lead that was set behaves as before.
+
+### Fixed
+
+- A Claude typed into a plain pane now comes back after an update on a Mac with
+  no `SessionStart` hook. The pane's session and directory are read from
+  Claude's own `sessions/<pid>.json` for the live process, so the pane can
+  sleep and wake onto the same conversation. A hook's record, when there is
+  one, is used as before.
+
 ## [0.27.6] — 2026-11-09
 
 ### Fixed

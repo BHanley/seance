@@ -1453,9 +1453,13 @@ impl SeanceApp {
                 .workspaces()
                 .into_iter()
                 .map(|w| {
-                    let lead = self.stage_lead(&w);
-                    let working = lead.as_ref().is_some_and(|l| self.busy_panes.contains(l));
-                    (w.clone(), self.workspace_label(&w), lead, working)
+                    // The daemon names who Chat talks to: the lead that was
+                    // set, else the circle's own Claude. (The lead the rest
+                    // of the app knows falls back to the earliest pane.)
+                    let working = chat_local::lead_of(&w)
+                        .or_else(|| self.stage_lead(&w))
+                        .is_some_and(|l| self.busy_panes.contains(&l));
+                    (w.clone(), self.workspace_label(&w), None, working)
                 })
                 .collect(),
             ws,
@@ -1777,7 +1781,7 @@ impl SeanceApp {
     /// Stop the open circle's lead mid-turn.
     fn chat_stop(&mut self, ws: String, cx: &mut Context<Self>) {
         if chat_local::is_local() {
-            let Some(lead) = self.stage_lead(&ws) else {
+            let Some(lead) = chat_local::lead_of(&ws) else {
                 return;
             };
             let client = Arc::clone(&self.client);
@@ -2281,7 +2285,7 @@ impl SeanceApp {
         let job = self.round_job(Some(ws.clone()), after);
         // A tap in local mode presses that option's digit in the lead's pane.
         let local = chat_local::is_local()
-            .then(|| self.stage_lead(&ws).map(|l| (Arc::clone(&self.client), l)))
+            .then(|| chat_local::lead_of(&ws).map(|l| (Arc::clone(&self.client), l)))
             .flatten();
         cx.spawn(async move |this, cx| {
             let (to, text) = (ws.clone(), choice);
@@ -3032,7 +3036,11 @@ impl SeanceApp {
             .filter(|p| p.busy)
             .and_then(|p| p.doing.clone())
             .unwrap_or_default();
-        let lead = self.stage_lead(&ws);
+        let lead = if chat_local::is_local() {
+            chat_local::lead_of(&ws).or_else(|| self.stage_lead(&ws))
+        } else {
+            self.stage_lead(&ws)
+        };
         // The lead's wall torch, when the skin has torches.
         let torch = lead
             .as_deref()

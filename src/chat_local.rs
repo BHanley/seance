@@ -19,7 +19,7 @@ use crate::chat_api::{CircleRow, Circles, Msg, Thread};
 use crate::gui_client::GuiClient;
 
 /// Shown when a circle has no Claude lead to read.
-pub const NO_LEAD_MESSAGE: &str = "This circle has no Claude lead yet.";
+pub const NO_LEAD_MESSAGE: &str = "Start Claude in a pane in this circle to chat.";
 /// How often the local source looks again.
 pub const POLL_MS: u64 = 1000;
 /// Bubbles kept per circle; older ones drop off the top.
@@ -235,7 +235,8 @@ impl SendQueue {
 /// and the open one.
 pub struct LocalAsk {
     pub client: Arc<GuiClient>,
-    /// (circle slug, label, lead pane, lead is mid-turn)
+    /// (circle slug, label, the lead that was set (none: the circle's own
+    /// Claude is used), a Claude there is mid-turn)
     pub circles: Vec<(String, String, Option<String>, bool)>,
     pub ws: Option<String>,
 }
@@ -256,6 +257,9 @@ struct WsState {
     sig: u64,
     /// The circle has no lead, or its lead is not a Claude.
     no_claude: bool,
+    /// The pane the last round talked to (the set lead, else the circle's
+    /// own Claude).
+    lead: Option<String>,
 }
 
 static STATE: Mutex<Option<HashMap<String, WsState>>> = Mutex::new(None);
@@ -310,16 +314,23 @@ pub fn round(ask: LocalAsk) -> Result<LocalRound> {
             quiet: !circles_moved,
         });
     };
-    let lead = ask
+    // A lead that was set wins; otherwise the daemon names the circle's own
+    // Claude (hosted ones too). Asked before taking the state lock.
+    let lead = match ask
         .circles
         .iter()
         .find(|c| c.0 == ws)
-        .and_then(|c| c.2.clone());
+        .and_then(|c| c.2.clone())
+    {
+        Some(l) => Some(l),
+        None => ask.client.local_lead(&ws)?,
+    };
     let mut guard = STATE.lock().unwrap();
     let st = guard
         .get_or_insert_with(HashMap::new)
         .entry(ws.clone())
         .or_default();
+    st.lead = lead.clone();
     let Some(lead) = lead else {
         return Ok(empty_round(circles, ws, st, circles_moved, "no-lead"));
     };
@@ -453,6 +464,17 @@ pub fn send(ws: &str, text: &str) -> Result<()> {
     }
     st.queue.push(text.to_string());
     Ok(())
+}
+
+/// The pane the circle's last round talked to: what a tap on an option or
+/// Stop goes to.
+pub fn lead_of(ws: &str) -> Option<String> {
+    STATE
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(ws))
+        .and_then(|st| st.lead.clone())
 }
 
 /// The circle's lead is a Claude (true until a round finds otherwise).
@@ -605,6 +627,43 @@ mod tests {
         assert_eq!(q.tick("busy", 0, 5), None);
         assert_eq!(q.pending(), ["b"]);
         assert_eq!(q.tick("idle", 1, 9).as_deref(), Some("b"));
+    }
+
+    /// With no lead set, against a scratch daemon: the circle's Claude is
+    /// found (here typed into a plain pane, no hook), a circle with none is
+    /// told so. Needs `SEANCE_SOCKET`, `SEANCE_E2E_WS` (a circle holding the
+    /// Claude), `SEANCE_E2E_EXPECT` (its pane), `SEANCE_E2E_EMPTY` (a circle
+    /// with only a shell) and `SEANCE_E2E_SESSION` (the Claude's session id).
+    #[test]
+    #[ignore]
+    fn e2e_finds_the_circles_claude_with_no_lead() {
+        let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("{k}"));
+        let (client, _events) = GuiClient::connect_empty().expect("connect");
+        let (ws, empty) = (env("SEANCE_E2E_WS"), env("SEANCE_E2E_EMPTY"));
+        let ask = |w: &str| LocalAsk {
+            client: Arc::clone(&client),
+            circles: vec![(w.to_string(), w.to_string(), None, false)],
+            ws: Some(w.to_string()),
+        };
+        let found = client.local_lead(&ws).unwrap();
+        eprintln!("local_lead({ws}) = {found:?}");
+        assert_eq!(found.as_deref(), Some(env("SEANCE_E2E_EXPECT").as_str()));
+        let look = client.local_chat(&found.unwrap(), 0, "").unwrap();
+        eprintln!("claude={} session={}", look["claude"], look["session"]);
+        assert_eq!(look["claude"], true);
+        assert!(look["session"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("{}.jsonl", env("SEANCE_E2E_SESSION"))));
+        round(ask(&ws)).unwrap();
+        assert_eq!(lead_of(&ws), client.local_lead(&ws).unwrap());
+        assert!(has_claude(&ws));
+        // The circle with only a shell has no one to chat with.
+        assert_eq!(client.local_lead(&empty).unwrap(), None);
+        round(ask(&empty)).unwrap();
+        assert!(!has_claude(&empty));
+        assert_eq!(lead_of(&empty), None);
+        eprintln!("empty circle says: {NO_LEAD_MESSAGE}");
     }
 
     /// End to end against a scratch daemon whose lead pane runs a fixture

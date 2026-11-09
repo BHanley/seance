@@ -10,6 +10,7 @@ use base64::Engine as _;
 use serde_json::json;
 
 use super::agent_session::{claude_transcript, Agent};
+use super::sleep::{hosted_record, probe_hosted, resolve_hosted, title_is_claude};
 use super::Engine;
 
 /// A first read of a long conversation starts this far from the end.
@@ -26,7 +27,44 @@ pub(crate) struct LocalChatLook {
     pub prompt: Option<seance_core::agent_state::NumberedPrompt>,
 }
 
+/// Who Chat talks to in a circle: a lead that was set wins (Brian's own
+/// setup, as before); otherwise the Claude in the circle used most recently,
+/// the earliest-listed one on a tie. `claudes` is (pane, last used ms) for
+/// every pane that is a Claude, agent or hosted.
+pub(crate) fn pick_local_lead(set: Option<&str>, claudes: &[(String, u64)]) -> Option<String> {
+    if let Some(l) = set {
+        return Some(l.to_string());
+    }
+    claudes
+        .iter()
+        .enumerate()
+        .max_by_key(|(i, (_, used))| (*used, std::cmp::Reverse(*i)))
+        .map(|(_, (slug, _))| slug.clone())
+}
+
 impl Engine {
+    /// The pane Chat uses for `circle` (see [`pick_local_lead`]).
+    pub(crate) fn local_lead(&self, circle: &str) -> Option<String> {
+        let set = self.comms.leads.get(circle).filter(|l| {
+            self.panes
+                .iter()
+                .any(|p| &p.slug == *l && p.workspace == circle)
+        });
+        let claudes: Vec<(String, u64)> = self
+            .panes
+            .iter()
+            .filter(|p| p.workspace == circle && p.kind != "file")
+            .filter(|p| self.local_chat_look(&p.slug).claude)
+            .map(|p| {
+                (
+                    p.slug.clone(),
+                    self.pane_busy_at.get(&p.slug).copied().unwrap_or(0),
+                )
+            })
+            .collect();
+        pick_local_lead(set.map(String::as_str), &claudes)
+    }
+
     pub(crate) fn local_chat_look(&self, pane: &str) -> LocalChatLook {
         let none = LocalChatLook {
             claude: false,
@@ -38,13 +76,29 @@ impl Engine {
         let Some(p) = self.panes.iter().find(|p| p.slug == pane) else {
             return none;
         };
-        if p.kind == "file" || Agent::of(&p.command) != Some(Agent::Claude) {
+        if p.kind == "file" {
             return none;
         }
-        let Some(session) = p.agent_session.as_deref() else {
-            return none;
+        // A Claude agent pane has its conversation id; one typed into a plain
+        // pane is found from its hook record or Claude's own process record.
+        let path = match (Agent::of(&p.command), p.agent_session.as_deref()) {
+            (Some(Agent::Claude), Some(session)) => Some(claude_transcript(&p.cwd, session)),
+            // Awake, it must still look like Claude (a stale record of one
+            // that exited doesn't count); asleep, the record is all there is.
+            (None, _)
+                if p.asleep
+                    || p.session
+                        .as_ref()
+                        .is_some_and(|s| title_is_claude(s.title().as_deref())) =>
+            {
+                resolve_hosted(hosted_record(&p.pane_id), || probe_hosted(p, false))
+                    .map(|(id, cwd)| claude_transcript(&cwd, &id))
+            }
+            _ => None,
         };
-        let path = Some(claude_transcript(&p.cwd, session));
+        if path.is_none() {
+            return none;
+        }
         let Some(s) = p.session.as_ref().filter(|_| !p.asleep) else {
             return LocalChatLook {
                 claude: true,
@@ -153,6 +207,35 @@ fn read_whole_lines(
 mod tests {
     use super::*;
     use std::io::Write;
+
+    fn claudes(rows: &[(&str, u64)]) -> Vec<(String, u64)> {
+        rows.iter().map(|(s, t)| (s.to_string(), *t)).collect()
+    }
+
+    #[test]
+    fn with_no_lead_chat_uses_the_circles_own_claude() {
+        // No Claude in the circle: nobody to talk to.
+        assert_eq!(pick_local_lead(None, &[]), None);
+        // One Claude: that one.
+        assert_eq!(
+            pick_local_lead(None, &claudes(&[("cl", 0)])).as_deref(),
+            Some("cl")
+        );
+        // Several: the most recently used; the first listed on a tie.
+        let several = claudes(&[("a", 10), ("b", 30), ("c", 20)]);
+        assert_eq!(pick_local_lead(None, &several).as_deref(), Some("b"));
+        let tied = claudes(&[("a", 5), ("b", 5)]);
+        assert_eq!(pick_local_lead(None, &tied).as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn a_lead_that_was_set_wins() {
+        let several = claudes(&[("a", 10), ("b", 30)]);
+        assert_eq!(pick_local_lead(Some("a"), &several).as_deref(), Some("a"));
+        // Even a lead that is not a Claude, exactly as before: the round then
+        // says there is no Claude to read.
+        assert_eq!(pick_local_lead(Some("sh"), &[]).as_deref(), Some("sh"));
+    }
 
     fn look(path: PathBuf) -> LocalChatLook {
         LocalChatLook {

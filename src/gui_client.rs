@@ -608,6 +608,17 @@ impl GuiClient {
         )
     }
 
+    /// The pane Chat talks to in `workspace` when no lead was set: its Claude.
+    pub fn local_lead(&self, workspace: &str) -> Result<Option<String>> {
+        let v = self.fs_call(
+            crate::runtime::protocol::FsOp::LocalLead {
+                workspace: workspace.to_string(),
+            },
+            FS_TIMEOUT,
+        )?;
+        Ok(v["pane"].as_str().map(str::to_string))
+    }
+
     /// Run a host widget select command daemon-side; returns its stdout.
     pub fn host_select(&self, widget: &str, item: &str) -> Result<String> {
         let v = self.fs_call(
