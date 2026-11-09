@@ -1324,12 +1324,29 @@ impl Engine {
             }
             Sleep {
                 workspace,
+                pane,
                 scope,
                 from,
             } => {
                 let Some(ws) = workspace.or(scope) else {
                     return err("sleep: expected WORKSPACE".into());
                 };
+                // One pane on its own: a circle with a plain shell in it can't
+                // sleep as a whole, but its Claude panes can.
+                if let Some(pane) = pane {
+                    let (slug, pane_ws) = match find(self, &pane, &Some(ws.clone())) {
+                        Ok(i) => (self.panes[i].slug.clone(), self.panes[i].workspace.clone()),
+                        Err(e) => return err(e),
+                    };
+                    return match self.sleep_pane(&slug) {
+                        Ok(did) => {
+                            self.persist();
+                            self.push_state_to_all();
+                            ok(json!({"workspace": pane_ws, "pane": slug, "slept": did as usize}))
+                        }
+                        Err(e) => err(e.to_string()),
+                    };
+                }
                 match self.sleep_workspace(&ws) {
                     Ok(n) => {
                         self.persist();
@@ -1348,12 +1365,27 @@ impl Engine {
             }
             Wake {
                 workspace,
+                pane,
                 scope,
                 from,
             } => {
                 let Some(ws) = workspace.or(scope) else {
                     return err("wake: expected WORKSPACE".into());
                 };
+                if let Some(pane) = pane {
+                    let (slug, pane_ws) = match find(self, &pane, &Some(ws.clone())) {
+                        Ok(i) => (self.panes[i].slug.clone(), self.panes[i].workspace.clone()),
+                        Err(e) => return err(e),
+                    };
+                    return match self.wake_pane(&slug) {
+                        Ok(did) => {
+                            self.persist();
+                            self.push_state_to_all();
+                            ok(json!({"workspace": pane_ws, "pane": slug, "woke": did as usize}))
+                        }
+                        Err(e) => err(e.to_string()),
+                    };
+                }
                 match self.wake_workspace(&ws) {
                     Ok(n) => {
                         self.persist();

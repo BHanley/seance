@@ -17,6 +17,17 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.27.3] — 2026-11-09
+
+### Fixed
+
+- **Dragging a new Seance over the old one just works on a Mac.** The
+  background helper (the session daemon) used to run from inside
+  `Seance.app`, so Finder refused to replace the app with "in use". It now
+  runs from its own copy in `~/Library/Application Support/Seance/bin`
+  (current and previous version kept). The first launch of the new version
+  still asks "Restart sessions to finish", and sessions come back.
+
 ## [0.27.2] — 2026-11-09
 
 ### Fixed

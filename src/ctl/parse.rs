@@ -161,8 +161,11 @@ pub(crate) fn with_identity(
         },
         Theme { id, .. } => Theme { id, scope, from },
         Layout { name, .. } => Layout { name, scope, from },
-        Sleep { workspace, .. } => Sleep {
+        Sleep {
+            workspace, pane, ..
+        } => Sleep {
             workspace,
+            pane,
             scope,
             from,
         },
@@ -178,8 +181,11 @@ pub(crate) fn with_identity(
             scope,
             from,
         },
-        Wake { workspace, .. } => Wake {
+        Wake {
+            workspace, pane, ..
+        } => Wake {
             workspace,
+            pane,
             scope,
             from,
         },
@@ -1138,14 +1144,17 @@ pub(crate) fn parse_move_pane(args: Vec<String>) -> Result<ControlRequest, Strin
     })
 }
 
-/// `sleep [WORKSPACE]` · `wake [WORKSPACE]` — omit the name inside a pane and
+/// `sleep [WORKSPACE] [--pane PANE]` · `wake [WORKSPACE] [--pane PANE]` — omit the name inside a pane and
 /// the caller's own circle is used (ctl stamps `scope`).
 pub(crate) fn parse_sleep(args: Vec<String>, wake: bool) -> Result<ControlRequest, String> {
     let mut it = args.into_iter();
     let mut workspace = None;
+    let mut pane = None;
     while let Some(a) = it.next() {
         match a.as_str() {
             "--workspace" | "--ws" => workspace = Some(take_value(&mut it, "--workspace")?),
+            // Just this pane, not its whole circle.
+            "--pane" => pane = Some(take_value(&mut it, "--pane")?),
             other if workspace.is_none() => workspace = Some(other.to_string()),
             other => {
                 return Err(format!(
@@ -1158,12 +1167,14 @@ pub(crate) fn parse_sleep(args: Vec<String>, wake: bool) -> Result<ControlReques
     Ok(if wake {
         ControlRequest::Wake {
             workspace,
+            pane,
             scope: None,
             from: None,
         }
     } else {
         ControlRequest::Sleep {
             workspace,
+            pane,
             scope: None,
             from: None,
         }

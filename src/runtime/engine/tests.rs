@@ -1393,3 +1393,67 @@ fn move_pane_lands_in_target_circle_and_keeps_selection() {
         assert!(!eng.handle_control(mv(&b, "lab", Some(&b), None)).ok);
     });
 }
+
+#[test]
+fn a_shell_in_the_circle_does_not_stop_its_claude_pane_sleeping() {
+    with_test_state_dir("sleep-one-pane", || {
+        let scratch = temp_scratch("sleep-one-pane");
+        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
+        let shell = eng.push_stub_pane("shell", "lab");
+        let claude = eng.push_stub_pane("claude", "lab");
+        let id = "9f3c1a2b-0000-4000-a000-000000000001";
+        let cwd = scratch.join("proj");
+        std::fs::create_dir_all(&cwd).unwrap();
+        {
+            let p = eng.panes.iter_mut().find(|p| p.slug == claude).unwrap();
+            p.command = "claude".into();
+            p.cwd = cwd.to_string_lossy().into();
+            p.agent_session = Some(id.into());
+        }
+        // Its conversation is on disk, so it can be put back.
+        let transcript =
+            crate::runtime::engine::agent_session::claude_transcript(&cwd.to_string_lossy(), id);
+        std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        std::fs::write(&transcript, "{}\n").unwrap();
+
+        let sleep = |pane: &str| ControlRequest::Sleep {
+            workspace: Some("lab".into()),
+            pane: Some(pane.into()),
+            scope: None,
+            from: None,
+        };
+        // The circle as a whole still can't sleep: the shell blocks it.
+        assert!(!eng.workspace_restorable("lab"));
+        assert!(eng.sleep_workspace("lab").is_err());
+        // The shell refuses on its own, and nothing else is touched.
+        let r = eng.handle_control(sleep(&shell));
+        assert!(!r.ok);
+        assert!(eng.panes.iter().all(|p| !p.asleep));
+        // The Claude pane sleeps alone.
+        let r = eng.handle_control(sleep(&claude));
+        assert!(r.ok, "{:?}", r.error);
+        assert_eq!(r.data.unwrap()["pane"], claude.as_str());
+        let asleep: Vec<&str> = eng
+            .panes
+            .iter()
+            .filter(|p| p.asleep)
+            .map(|p| p.slug.as_str())
+            .collect();
+        assert_eq!(asleep, [claude.as_str()]);
+        // And wakes alone: the shell is untouched either way.
+        let wake = ControlRequest::Wake {
+            workspace: Some("lab".into()),
+            pane: Some(claude.clone()),
+            scope: None,
+            from: None,
+        };
+        // The stub has no process to relaunch, so only the request's reach is
+        // checked here: it names the pane and nothing else.
+        let _ = eng.handle_control(wake);
+        assert!(eng
+            .panes
+            .iter()
+            .find(|p| p.slug == shell)
+            .is_some_and(|p| !p.asleep));
+    });
+}

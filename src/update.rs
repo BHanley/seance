@@ -27,7 +27,7 @@ use anyhow::{anyhow, bail, Context as _, Result};
 use crate::control::{bind_socket_path, ControlRequest, ControlResponse};
 
 /// `0.27.0` or `v0.27.0` as numbers; a `-rc1` or `+build` tail is dropped.
-fn parse_version(v: &str) -> Option<Vec<u64>> {
+pub(crate) fn parse_version(v: &str) -> Option<Vec<u64>> {
     let core = v.trim().trim_start_matches('v');
     let core = core.split(['-', '+']).next()?;
     let parts: Option<Vec<u64>> = core.split('.').map(|p| p.parse().ok()).collect();
@@ -83,19 +83,66 @@ fn ask_as(build: &str, req: &ControlRequest) -> Result<ControlResponse> {
     serde_json::from_str(resp.trim()).context("old daemon sent an unreadable reply")
 }
 
-/// Circles with at least one awake pane, in the order the daemon lists them.
-fn awake_circles(list: &serde_json::Value) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for p in list["panes"].as_array().into_iter().flatten() {
-        let (Some(ws), false) = (
-            p["workspace"].as_str(),
-            p["asleep"].as_bool().unwrap_or(false),
-        ) else {
-            continue;
-        };
-        if !out.iter().any(|w| w == ws) {
-            out.push(ws.to_string());
+/// Every awake pane in the daemon's list, as (pane, circle), in list order.
+/// Which of them can sleep is the daemon's call: a plain shell refuses and
+/// ends with the old daemon, as it always did.
+fn awake_panes(list: &serde_json::Value) -> Vec<(String, String)> {
+    list["panes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|p| !p["asleep"].as_bool().unwrap_or(false))
+        .filter_map(|p| {
+            Some((
+                p["slug"].as_str()?.to_string(),
+                p["workspace"].as_str()?.to_string(),
+            ))
+        })
+        .collect()
+}
+
+/// What a sleep request left asleep, so the same thing wakes afterwards.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Slept {
+    /// This pane alone (a daemon that can sleep one pane).
+    Pane { pane: String, circle: String },
+    /// The whole circle (an older daemon ignores `pane` and sleeps the circle,
+    /// or refuses it when a plain shell is in it).
+    Circle(String),
+}
+
+/// How a successful sleep answer reads: the daemon names the pane when it
+/// slept just that one; an older one answers for the circle.
+fn slept_from(data: &serde_json::Value, pane: &str, circle: &str) -> Slept {
+    if data["pane"].as_str() == Some(pane) {
+        Slept::Pane {
+            pane: pane.to_string(),
+            circle: circle.to_string(),
         }
+    } else {
+        Slept::Circle(circle.to_string())
+    }
+}
+
+/// The requests that put `slept` back, one per pane and one per circle.
+fn wake_requests(slept: &[Slept]) -> Vec<ControlRequest> {
+    let mut seen: Vec<&Slept> = Vec::new();
+    let mut out = Vec::new();
+    for s in slept {
+        if seen.contains(&s) {
+            continue;
+        }
+        seen.push(s);
+        let (workspace, pane) = match s {
+            Slept::Pane { pane, circle } => (circle.clone(), Some(pane.clone())),
+            Slept::Circle(circle) => (circle.clone(), None),
+        };
+        out.push(ControlRequest::Wake {
+            workspace: Some(workspace),
+            pane,
+            scope: None,
+            from: Some("updater".into()),
+        });
     }
     out
 }
@@ -134,6 +181,11 @@ fn stop_daemon(pid_file: &Path) -> Result<()> {
     Err(anyhow!("the old daemon did not stop within 10s"))
 }
 
+/// Panes and circles woken, as the count reported to the user.
+fn wake_count(slept: &[Slept]) -> usize {
+    wake_requests(slept).len()
+}
+
 /// Sleep what can sleep, replace the old daemon with this build's, wake the
 /// circles that were slept. Returns how many circles were put back.
 pub fn restart_sessions(old_build: &str) -> Result<usize> {
@@ -150,30 +202,30 @@ pub fn restart_sessions(old_build: &str) -> Result<usize> {
             list.error.unwrap_or_default()
         );
     }
-    let mut slept = Vec::new();
-    for ws in awake_circles(&list.data.unwrap_or_default()) {
+    let mut slept: Vec<Slept> = Vec::new();
+    for (pane, circle) in awake_panes(&list.data.unwrap_or_default()) {
         let req = ControlRequest::Sleep {
-            workspace: Some(ws.clone()),
+            workspace: Some(circle.clone()),
+            pane: Some(pane.clone()),
             scope: None,
             from: Some("updater".into()),
         };
-        // A circle holding a shell refuses; it simply ends with the daemon.
-        if matches!(ask_as(old_build, &req), Ok(r) if r.ok) {
-            slept.push(ws);
+        // Each Claude pane sleeps on its own, so a plain shell in the same
+        // circle no longer keeps it awake. A shell refuses and ends with the
+        // daemon; it comes back fresh.
+        if let Ok(r) = ask_as(old_build, &req) {
+            if r.ok {
+                slept.push(slept_from(&r.data.unwrap_or_default(), &pane, &circle));
+            }
         }
     }
     stop_daemon(&crate::runtime::daemon_pid_path())?;
     crate::daemon::ensure_local_daemon()?;
-    for ws in &slept {
-        let req = ControlRequest::Wake {
-            workspace: Some(ws.clone()),
-            scope: None,
-            from: Some("updater".into()),
-        };
+    for req in wake_requests(&slept) {
         // This build's own hello, on the local socket (never $SEANCE_SOCKET).
         let _ = ask_as(env!("CARGO_PKG_VERSION"), &req);
     }
-    Ok(slept.len())
+    Ok(wake_count(&slept))
 }
 
 /// Ask the human, with a native dialog (the main window does not exist yet).
@@ -232,14 +284,49 @@ mod tests {
     }
 
     #[test]
-    fn only_circles_with_an_awake_pane_get_slept() {
+    fn every_awake_pane_is_asked_to_sleep_on_its_own() {
         let list = serde_json::json!({"panes": [
-            {"workspace": "a", "asleep": false},
-            {"workspace": "a", "asleep": true},
-            {"workspace": "b", "asleep": true},
-            {"workspace": "c"},
+            {"slug": "sh", "workspace": "a", "asleep": false},
+            {"slug": "cl", "workspace": "a", "asleep": false},
+            {"slug": "old", "workspace": "a", "asleep": true},
+            {"slug": "x", "workspace": "b"},
+            {"workspace": "b"},
         ]});
-        assert_eq!(awake_circles(&list), vec!["a", "c"]);
-        assert!(awake_circles(&serde_json::json!({})).is_empty());
+        // A shell and a Claude pane in one circle are both asked, singly.
+        assert_eq!(
+            awake_panes(&list),
+            vec![
+                ("sh".to_string(), "a".to_string()),
+                ("cl".to_string(), "a".to_string()),
+                ("x".to_string(), "b".to_string()),
+            ]
+        );
+        assert!(awake_panes(&serde_json::json!({})).is_empty());
+    }
+
+    #[test]
+    fn what_woke_matches_what_slept() {
+        let one = serde_json::json!({"workspace": "a", "pane": "cl", "slept": 1});
+        let old = serde_json::json!({"workspace": "b", "slept": 2});
+        let slept = vec![
+            slept_from(&one, "cl", "a"),
+            slept_from(&old, "p1", "b"),
+            slept_from(&old, "p2", "b"),
+        ];
+        assert_eq!(
+            slept[0],
+            Slept::Pane {
+                pane: "cl".into(),
+                circle: "a".into()
+            }
+        );
+        assert_eq!(slept[1], Slept::Circle("b".into()));
+        // The old daemon's circle wakes once, not once per pane.
+        let reqs = wake_requests(&slept);
+        assert_eq!(reqs.len(), 2);
+        assert!(matches!(&reqs[0], ControlRequest::Wake { pane: Some(p), .. } if p == "cl"));
+        assert!(
+            matches!(&reqs[1], ControlRequest::Wake { pane: None, workspace: Some(w), .. } if w == "b")
+        );
     }
 }

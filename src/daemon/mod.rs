@@ -13,6 +13,7 @@ use anyhow::{bail, Context as _, Result};
 
 pub mod agentsessions;
 pub mod fsbridge;
+pub mod local_copy;
 pub mod modewatch;
 pub mod sleepsweep;
 
@@ -1015,7 +1016,9 @@ fn ensure_daemon_at(path: PathBuf) -> Result<bool> {
         }
         let _ = std::fs::remove_file(&path);
     }
-    let bin = std::env::current_exe()?;
+    // On a Mac app bundle: a copy of the binary, so the daemon never keeps
+    // Seance.app open and a new app can be dragged over it.
+    let bin = local_copy::local_exe()?;
     let mut cmd = std::process::Command::new(bin);
     cmd.arg("daemon").stdin(std::process::Stdio::null());
     // The daemon spawned this way is usually the one nobody can see: started

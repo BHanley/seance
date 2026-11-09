@@ -575,10 +575,13 @@ pub enum ControlRequest {
 
     /// Put a circle to sleep: every pane's process exits, its last frame is
     /// frozen, identity + claude conversation are kept. Refused unless every
-    /// pane in the circle is restorable.
+    /// pane in the circle is restorable. With `pane`, only that pane sleeps (it
+    /// must be restorable; the others in its circle are left as they are).
     Sleep {
         #[serde(default)]
         workspace: Option<String>,
+        #[serde(default)]
+        pane: Option<String>,
         #[serde(default)]
         scope: Option<String>,
         #[serde(default)]
@@ -586,9 +589,12 @@ pub enum ControlRequest {
     },
 
     /// Wake a sleeping circle — relaunches each pane on its own conversation.
+    /// With `pane`, only that pane.
     Wake {
         #[serde(default)]
         workspace: Option<String>,
+        #[serde(default)]
+        pane: Option<String>,
         #[serde(default)]
         scope: Option<String>,
         #[serde(default)]
