@@ -666,6 +666,19 @@ mod tests {
         eprintln!("empty circle says: {NO_LEAD_MESSAGE}");
     }
 
+    /// "New circles start with Claude", against a scratch daemon: make the
+    /// circle `SEANCE_E2E_WS`, start its first pane, and print what the daemon
+    /// answered and who Chat would talk to.
+    #[test]
+    #[ignore]
+    fn e2e_new_circle_starts_claude() {
+        let (client, _events) = GuiClient::connect_empty().expect("connect");
+        let ws = std::env::var("SEANCE_E2E_WS").unwrap();
+        client.create_workspace(&ws).unwrap();
+        eprintln!("start: {:?}", client.start_claude(&ws).unwrap());
+        eprintln!("chat lead: {:?}", client.local_lead(&ws).unwrap());
+    }
+
     /// End to end against a scratch daemon whose lead pane runs a fixture
     /// Claude (see the finish note). Ignored by default: it needs the daemon,
     /// `SEANCE_SOCKET`, and `SEANCE_E2E_LEAD`.

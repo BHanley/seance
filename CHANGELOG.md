@@ -17,6 +17,23 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.27.9] — 2026-11-09
+
+### Added
+
+- New circles start with Claude as their lead (the standalone Mac build only;
+  `seance-personal` keeps plain circles, and so does a
+  `seance-new-circle-command` you set). Making a circle opens its first pane
+  running Claude in the home folder and records it as the circle's lead, the
+  same record `ctl lead` writes, so Chat works on it right away. Seance starts
+  it as a Claude agent pane (it mints the session id), so it comes back after
+  an update. With no Claude installed the pane is a plain shell and the
+  first-run card does the rest.
+- A brand-new install opens its first circle ("main") with Claude the same
+  way, once, only while no pane exists. Closing every pane on purpose sticks.
+- A circle with no Claude shows a "Start Claude here" button in Chat, which
+  does the same as a new circle.
+
 ## [0.27.8] — 2026-11-09
 
 - Test build for the update path (no code changes; carries the 0.27.7 formatting).

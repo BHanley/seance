@@ -2327,10 +2327,11 @@ impl SeanceApp {
         let Some((target, _)) = self.renaming.take() else {
             return true;
         };
-        // Stage's "+ circle", named: its first pane.
+        // Stage's "+ circle", named: its first pane. (Where new circles start
+        // with Claude, that pane was opened when the circle was made.)
         let new_circle = self.stage.new_circle.take();
         if let RenameTarget::Workspace(slug) = &target {
-            if new_circle.as_ref() == Some(slug) {
+            if new_circle.as_ref() == Some(slug) && !crate::claude_check::starts_claude_here() {
                 let n = self.session_counter + 1;
                 let command = crate::term_config::get().seance_new_circle_command.clone();
                 self.spawn_internal(

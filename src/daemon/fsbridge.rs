@@ -175,6 +175,15 @@ fn run_inner(op: FsOp, engine: &SharedEngine) -> Result<Value, String> {
             let eng = engine.lock().map_err(|_| "engine busy".to_string())?;
             Ok(json!({ "pane": eng.local_lead(&workspace) }))
         }
+        FsOp::StartClaude { workspace } => {
+            // Looking for Claude runs a login shell: not under the engine lock.
+            let claude = crate::claude_check::find_claude();
+            let mut eng = engine.lock().map_err(|_| "engine busy".to_string())?;
+            let (pane, claude) = eng
+                .start_first_pane(&workspace, claude.as_deref())
+                .map_err(|e| format!("{e:#}"))?;
+            Ok(json!({ "pane": pane, "claude": claude }))
+        }
         FsOp::HostSelect { widget, item } => {
             // Fresh load: select is rare and config may have changed on disk.
             let mut host = HostState::load();

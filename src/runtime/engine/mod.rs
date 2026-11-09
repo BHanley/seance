@@ -3,6 +3,7 @@
 pub(crate) mod agent_session;
 mod comms;
 mod control;
+mod first_claude;
 mod gui;
 pub(crate) mod helpers;
 mod lifetime;
@@ -374,6 +375,15 @@ impl Engine {
         eng.load_frozen_grids();
         eng.drop_paneless_tasks();
 
+        // A brand-new install's first pane. On the standalone Mac build it is
+        // Claude, as the lead of "main" (Chat needs someone to talk to); with
+        // no Claude installed, or anywhere else, it is a plain shell.
+        let claude = (!cfg!(test) && crate::claude_check::starts_claude_here())
+            .then(crate::claude_check::find_claude)
+            .flatten();
+        if eng.panes.is_empty() && claude.is_some() {
+            let _ = eng.start_first_pane("", claude.as_deref());
+        }
         if eng.panes.is_empty() {
             let _ = eng.spawn(SpawnSpec {
                 name: "familiar".into(),

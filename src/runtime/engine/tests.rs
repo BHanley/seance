@@ -1520,3 +1520,45 @@ fn a_claude_typed_into_a_plain_pane_counts_as_the_circles_claude() {
         assert_eq!(eng.local_lead("lab").as_deref(), Some(plain.as_str()));
     });
 }
+
+#[test]
+fn a_new_circles_first_pane_is_claude_and_its_lead() {
+    with_test_state_dir("first-claude", || {
+        let scratch = temp_scratch("first-claude");
+        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
+        // A `claude` that just waits, found where the installer puts it.
+        let bin = scratch.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let claude = bin.join("claude");
+        std::fs::write(&claude, "#!/bin/sh\nsleep 30\n").unwrap();
+        std::process::Command::new("chmod")
+            .args(["755", &claude.to_string_lossy()])
+            .status()
+            .unwrap();
+
+        let (pane, is_claude) = eng.start_first_pane("circle-2", Some(&claude)).unwrap();
+        assert!(is_claude);
+        let p = eng.panes.iter().find(|p| p.slug == pane).unwrap();
+        // Seance started it as a Claude agent pane with a minted session id,
+        // in the home folder, in the new circle.
+        assert_eq!(p.workspace, "circle-2");
+        assert_eq!(p.cwd, "~");
+        assert!(p.agent_session.is_some());
+        assert!(p.command.ends_with("/claude"), "{}", p.command);
+        // And it is the circle's lead, the record `ctl lead` writes.
+        assert_eq!(
+            eng.comms.leads.get("circle-2").map(String::as_str),
+            Some(pane.as_str())
+        );
+        assert_eq!(eng.local_lead("circle-2").as_deref(), Some(pane.as_str()));
+
+        // Claude not installed: a plain shell, and no lead recorded.
+        let (shell, is_claude) = eng.start_first_pane("circle-3", None).unwrap();
+        assert!(!is_claude);
+        assert!(eng
+            .panes
+            .iter()
+            .any(|p| p.slug == shell && p.agent_session.is_none()));
+        assert!(!eng.comms.leads.contains_key("circle-3"));
+    });
+}

@@ -608,6 +608,21 @@ impl GuiClient {
         )
     }
 
+    /// Open `workspace`'s first pane on the daemon: Claude as its lead, or a
+    /// plain shell when Claude isn't installed. Returns (pane, is Claude).
+    pub fn start_claude(&self, workspace: &str) -> Result<(String, bool)> {
+        let v = self.fs_call(
+            crate::runtime::protocol::FsOp::StartClaude {
+                workspace: workspace.to_string(),
+            },
+            Duration::from_secs(30),
+        )?;
+        Ok((
+            v["pane"].as_str().unwrap_or_default().to_string(),
+            v["claude"] == true,
+        ))
+    }
+
     /// The pane Chat talks to in `workspace` when no lead was set: its Claude.
     pub fn local_lead(&self, workspace: &str) -> Result<Option<String>> {
         let v = self.fs_call(

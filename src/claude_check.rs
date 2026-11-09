@@ -10,6 +10,30 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+/// Do new circles open with Claude as their lead? Only the standalone Mac
+/// build: macOS, local (not a thin client to a hub), not Brian's own setup
+/// (`seance-personal`), and no `seance-new-circle-command` of the user's own.
+pub fn new_circles_start_claude(
+    macos: bool,
+    remote: bool,
+    personal: bool,
+    custom_command: bool,
+) -> bool {
+    macos && !remote && !personal && !custom_command
+}
+
+/// [`new_circles_start_claude`] for this process.
+pub fn starts_claude_here() -> bool {
+    new_circles_start_claude(
+        cfg!(target_os = "macos"),
+        crate::ACTIVE_TUNNEL.get().is_some(),
+        crate::term_config::personal(),
+        crate::term_config::get()
+            .seance_new_circle_command
+            .is_some(),
+    )
+}
+
 /// Anthropic's official native installer.
 pub const INSTALL_COMMAND: &str = "curl -fsSL https://claude.ai/install.sh | bash";
 
@@ -63,7 +87,7 @@ pub fn check() -> Verdict {
 
 /// A login shell sees what Terminal sees (PATH from `.zprofile`, brew, mise);
 /// the native installer's default home is the fallback.
-fn find_claude() -> Option<PathBuf> {
+pub(crate) fn find_claude() -> Option<PathBuf> {
     let out = Command::new("bash")
         .args(["-lc", "command -v claude"])
         .stdin(Stdio::null())
@@ -160,6 +184,19 @@ mod tests {
 
     fn at(p: &str) -> Option<PathBuf> {
         Some(PathBuf::from(p))
+    }
+
+    #[test]
+    fn only_the_standalone_mac_build_starts_circles_with_claude() {
+        // (macos, remote, personal, custom command)
+        assert!(new_circles_start_claude(true, false, false, false));
+        // Brian's own Seance keeps making plain circles.
+        assert!(!new_circles_start_claude(true, false, true, false));
+        // A thin client's panes run on the hub; Linux is not the Mac build.
+        assert!(!new_circles_start_claude(true, true, false, false));
+        assert!(!new_circles_start_claude(false, false, false, false));
+        // A command the user chose for new circles is theirs to keep.
+        assert!(!new_circles_start_claude(true, false, false, true));
     }
 
     #[test]

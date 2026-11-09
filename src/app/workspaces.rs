@@ -1052,6 +1052,15 @@ impl SeanceApp {
             self.extra_workspaces.push(name.clone());
         }
         self.ensure_workspace_at_bottom(&name);
+        // Standalone Mac: the circle opens with Claude as its lead (the
+        // request follows the create on the same connection).
+        if crate::claude_check::starts_claude_here() {
+            let client = std::sync::Arc::clone(&self.client);
+            let ws = name.clone();
+            std::thread::spawn(move || {
+                let _ = client.start_claude(&ws);
+            });
+        }
         self.selected_workspace = Some(name.clone());
         // Empty circle: don't keep a foreign active_slug — that would route
         // focus to a pane in another workspace after rename finishes.

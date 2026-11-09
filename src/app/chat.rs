@@ -1778,6 +1778,18 @@ impl SeanceApp {
         .detach();
     }
 
+    /// "Start Claude here": a new Claude pane in this circle, made its lead
+    /// (a plain shell when Claude isn't installed). The same call a new
+    /// circle makes.
+    fn chat_start_claude(&mut self, ws: String, cx: &mut Context<Self>) {
+        let client = Arc::clone(&self.client);
+        self.chat_call(
+            move || client.start_claude(&ws).map(|_| ()),
+            Self::chat_refresh,
+            cx,
+        );
+    }
+
     /// Stop the open circle's lead mid-turn.
     fn chat_stop(&mut self, ws: String, cx: &mut Context<Self>) {
         if chat_local::is_local() {
@@ -3214,16 +3226,28 @@ impl SeanceApp {
             thread = thread.child(self.chat_bubble(m, read, cx));
         }
         if messages.is_some_and(<[Msg]>::is_empty) {
-            thread = thread.child(
+            let no_claude = chat_local::is_local() && !chat_local::has_claude(&ws);
+            let mut empty = div().flex().flex_col().gap(px(8.)).child(
                 div()
                     .text_sm()
                     .text_color(SeancePalette::text_faint())
-                    .child(if chat_local::is_local() && !chat_local::has_claude(&ws) {
+                    .child(if no_claude {
                         chat_local::NO_LEAD_MESSAGE
                     } else {
                         "No messages yet. Say something to the lead."
                     }),
             );
+            if no_claude {
+                let at = ws.clone();
+                empty = empty.child(
+                    super::stage::chip_button("Start Claude here", true)
+                        .id("chat-start-claude")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.chat_start_claude(at.clone(), cx)
+                        })),
+                );
+            }
+            thread = thread.child(empty);
         }
 
         let mut col = div()

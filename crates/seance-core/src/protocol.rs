@@ -452,6 +452,12 @@ pub enum FsOp {
     LocalLead {
         workspace: String,
     },
+    /// Open a circle's first pane: Claude as its lead when Claude is
+    /// installed, else a plain shell. `workspace` empty means the circle on
+    /// show. → `{pane, claude}`.
+    StartClaude {
+        workspace: String,
+    },
     /// Run a shell command daemon-side (`sh -lc`). Same trust domain as the
     /// control plane (which already spawns arbitrary commands). Output is
     /// truncated to 64KiB per stream. → `{status, stdout, stderr}`.
