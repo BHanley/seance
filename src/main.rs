@@ -338,6 +338,7 @@ fn main() {
 
     gpui_platform::application().run(move |cx| {
         gpui_component::init(cx);
+        term_font::init(cx);
         // gpui-component's Root context binds plain tab/shift-tab to widget
         // focus traversal, which steals Tab from every terminal pane (no shell
         // tab completion). Unbind them — Tab belongs to the PTY here.

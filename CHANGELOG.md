@@ -17,6 +17,16 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.27.1] — 2026-11-09
+
+### Fixed
+
+- **Terminal text is no longer squished and widely spaced on a Mac without the
+  Nerd Font.** The app now carries JetBrains Mono NL Nerd Font Mono (OFL) and
+  falls back to it whenever the configured terminal font can't load.
+- **The "default shell is now zsh" banner is gone from bash panes.** It still
+  appeared when a 0.27.0 build from before the fix was the app that ran.
+
 ### Changed
 
 - **The sidebar mark is a gold pixel critter with a flame**, in place of the

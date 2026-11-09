@@ -324,6 +324,7 @@ pub fn init(cx: &mut App) {
         }
         if let Some(f) = pick(&[
             "JetBrainsMono Nerd Font",
+            crate::term_font::BUNDLED_FONT_FAMILY,
             "JetBrains Mono",
             "Liberation Mono",
             "DejaVu Sans Mono",
