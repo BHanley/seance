@@ -197,6 +197,34 @@ impl Spaces {
             != Some(id)
     }
 
+    /// Re-apply placements this window chose by hand (a new circle, a drop)
+    /// after a foreign arrangement replaced ours. Another window can place a
+    /// circle in the gap before our write lands, and its blob wins wholesale.
+    /// `claims` is slug → (space, when). A claim the blob already agrees with,
+    /// that names a vanished space, or that is older than `ttl_ms` is dropped,
+    /// so a later move made elsewhere is never undone. Returns whether `of`
+    /// changed.
+    pub fn reassert(
+        &mut self,
+        claims: &mut BTreeMap<String, (String, u64)>,
+        now_ms: u64,
+        ttl_ms: u64,
+    ) -> bool {
+        let mut changed = false;
+        claims.retain(|circle, (space, at)| {
+            if now_ms.saturating_sub(*at) > ttl_ms || !self.has(space) {
+                return false;
+            }
+            if self.of.get(circle) == Some(space) {
+                return false;
+            }
+            self.of.insert(circle.clone(), space.clone());
+            changed = true;
+            true
+        });
+        changed
+    }
+
     /// Move space `id` to sit before `before` (end when `None`).
     pub fn reorder(&mut self, id: &str, before: Option<&str>) -> bool {
         let Some(from) = self.list.iter().position(|s| s.id == id) else {
@@ -235,6 +263,48 @@ mod tests {
     }
     fn ids(sp: &Spaces) -> Vec<&str> {
         sp.list.iter().map(|s| s.id.as_str()).collect()
+    }
+
+    #[test]
+    fn a_claim_beats_a_foreign_blob_that_placed_the_circle_first() {
+        let mut mine = Spaces::default();
+        mine.reconcile(&c(&["old"]), None);
+        let work = mine.create("work");
+        assert!(mine.move_circle("new", &work));
+        let mut claims = BTreeMap::from([("new".to_string(), (work.clone(), 1_000))]);
+
+        // Another window saw the circle before our write landed and put it
+        // in its own landing space; its blob replaces ours.
+        let mut theirs = mine.clone();
+        theirs.of.insert("new".into(), "general".into());
+        assert!(theirs.reassert(&mut claims, 2_000, 10_000));
+        assert_eq!(theirs.space_of("new"), work);
+        assert!(!claims.is_empty(), "kept until a blob agrees");
+
+        // A blob that already agrees retires the claim, and it stops acting.
+        assert!(!theirs.reassert(&mut claims, 3_000, 10_000));
+        assert!(claims.is_empty());
+        theirs.of.insert("new".into(), "general".into());
+        assert!(!theirs.reassert(&mut claims, 4_000, 10_000));
+        assert_eq!(theirs.space_of("new"), "general");
+    }
+
+    #[test]
+    fn a_stale_or_dangling_claim_does_nothing() {
+        let mut sp = Spaces::default();
+        sp.reconcile(&c(&["a", "b"]), None);
+        let mut claims = BTreeMap::from([
+            ("a".to_string(), ("gone".to_string(), 1_000)),
+            ("b".to_string(), ("general".to_string(), 1_000)),
+        ]);
+        sp.create("work");
+        sp.of.insert("b".into(), "work".into());
+        assert!(
+            !sp.reassert(&mut claims, 50_000, 10_000),
+            "b's claim expired"
+        );
+        assert_eq!(sp.space_of("b"), "work");
+        assert!(claims.is_empty());
     }
 
     #[test]

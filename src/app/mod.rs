@@ -285,6 +285,9 @@ pub struct SeanceApp {
     rail_loaded: bool,
     /// Space whose circles the rail lists (None → the selected circle's).
     rail_space: Option<String>,
+    /// Space placements chosen in this window (slug → (space, when)), re-applied
+    /// if a foreign arrangement lands over them. See `Spaces::reassert`.
+    space_claims: std::collections::BTreeMap<String, (String, u64)>,
     rail_filter: workspaces::RailFilter,
     /// Last activity timestamp (ms) per workspace — input/inject/status, not click.
     workspace_touch: std::collections::HashMap<String, u64>,
@@ -562,6 +565,7 @@ impl SeanceApp {
             subs_seeded,
             rail_loaded: false,
             rail_space: None,
+            space_claims: std::collections::BTreeMap::new(),
             rail_filter: workspaces::RailFilter::All,
             workspace_touch: std::collections::HashMap::new(),
             workspace_activity: std::collections::HashMap::new(),
@@ -1438,7 +1442,17 @@ impl SeanceApp {
                 if let Some(pref) = crate::subscriptions_pref::parse(&json) {
                     if pref != self.subs_pref {
                         self.subs_pref = pref;
-                        crate::subscriptions_pref::save(&self.subs_pref);
+                        // Our own fresh placement may be what this blob lacks.
+                        let now = now_ms();
+                        if self.subs_pref.spaces.reassert(
+                            &mut self.space_claims,
+                            now,
+                            workspaces::SPACE_CLAIM_TTL_MS,
+                        ) {
+                            self.save_arrangement();
+                        } else {
+                            crate::subscriptions_pref::save(&self.subs_pref);
+                        }
                         cx.notify();
                     }
                 }

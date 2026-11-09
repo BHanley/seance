@@ -19,6 +19,8 @@ use seance_core::util::{rail_prefs_is_foreign, settle_absent};
 pub(super) const BANISH_ARM: Duration = Duration::from_millis(2000);
 /// Longer than a row's ×: the confirm pill appears after a menu closes, so
 /// the hand has further to travel.
+/// How long a hand placement is re-applied over a foreign arrangement.
+pub(super) const SPACE_CLAIM_TTL_MS: u64 = 15_000;
 pub(super) const SPACE_BANISH_ARM: Duration = Duration::from_millis(5000);
 
 /// Arm key for a space's banish-all; shares `banish_armed` with row ×s so
@@ -504,13 +506,24 @@ impl SeanceApp {
     /// circle inherits the old space (usually the default).
     pub(super) fn claim_new_circle_for_current_space(&mut self, ws: &str) {
         let space = self.current_space();
-        if self.subs_pref.spaces.move_circle(ws, &space) {
+        self.claim_space(ws, &space);
+    }
+
+    /// Place a circle by hand and remember it: another window can place the
+    /// same circle in the gap before our write lands and its blob wins, so the
+    /// claim is re-applied when a foreign arrangement arrives.
+    fn claim_space(&mut self, ws: &str, space: &str) -> bool {
+        self.space_claims
+            .insert(ws.to_string(), (space.to_string(), now_ms()));
+        let moved = self.subs_pref.spaces.move_circle(ws, space);
+        if moved {
             self.save_arrangement();
         }
+        moved
     }
 
     pub(super) fn move_circle_to_space(&mut self, ws: &str, space: &str) {
-        if self.subs_pref.spaces.move_circle(ws, space) {
+        if self.claim_space(ws, space) {
             self.client.log_event(
                 "human",
                 Some(ws),
@@ -518,7 +531,6 @@ impl SeanceApp {
                 "workspace_moved_space",
                 format!("moved '{ws}' to space '{space}'"),
             );
-            self.save_arrangement();
         }
     }
 
