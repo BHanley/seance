@@ -315,6 +315,11 @@ fn invoke_url_path() -> PathBuf {
     PathBuf::from(shellexpand::tilde("~/.config/seance/invoke-url").as_ref())
 }
 
+/// The configured Invoke URL; empty when there is none.
+pub fn url() -> String {
+    base()
+}
+
 fn base() -> String {
     let env = std::env::var("SEANCE_INVOKE_URL").ok();
     let file = std::fs::read_to_string(invoke_url_path()).ok();

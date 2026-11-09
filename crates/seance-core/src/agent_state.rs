@@ -91,6 +91,62 @@ pub struct AgentState {
     pub queued_input: bool,
 }
 
+/// A question on screen with numbered answers (Claude's permission and
+/// choice menus): the line that asks, and each option's digit and label.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct NumberedPrompt {
+    pub question: String,
+    pub options: Vec<(u8, String)>,
+}
+
+/// The numbered options at the bottom of `screen`, when they run 1, 2, 3...
+/// as one block. A dialog without digits (the trust dialog) gives none, so a
+/// tap can never press a key that does nothing.
+pub fn numbered_options(screen: &str) -> Option<NumberedPrompt> {
+    let lines: Vec<&str> = screen.lines().collect();
+    let start = lines.len().saturating_sub(TAIL_WINDOW + STATUS_WINDOW + 8);
+    let parse = |l: &str| -> Option<(u8, String)> {
+        let t = l.trim_start_matches(|c: char| c.is_whitespace() || c == '❯' || c == '>');
+        let (d, rest) = t.split_once(". ")?;
+        let n: u8 = d.parse().ok().filter(|n| (1..=9).contains(n))?;
+        let label = rest.trim();
+        (!label.is_empty()).then(|| (n, label.to_string()))
+    };
+    // The last block whose digits start at 1 and count up by one.
+    let mut best: Option<(usize, Vec<(u8, String)>)> = None;
+    let mut i = start;
+    while i < lines.len() {
+        if let Some((1, label)) = parse(lines[i]) {
+            let mut opts = vec![(1u8, label)];
+            let mut j = i + 1;
+            while j < lines.len() {
+                match parse(lines[j]) {
+                    Some((n, l)) if n as usize == opts.len() + 1 => opts.push((n, l)),
+                    _ if lines[j].trim().is_empty() || !lines[j].starts_with(' ') => break,
+                    // A wrapped label line belongs to the option above it.
+                    _ => {}
+                }
+                j += 1;
+            }
+            if opts.len() >= 2 {
+                best = Some((i, opts));
+            }
+            i = j.max(i + 1);
+        } else {
+            i += 1;
+        }
+    }
+    let (at, options) = best?;
+    let question = lines[start..at]
+        .iter()
+        .rev()
+        .map(|l| l.trim())
+        .find(|l| l.chars().any(|c| c.is_alphanumeric()))
+        .unwrap_or("")
+        .to_string();
+    Some(NumberedPrompt { question, options })
+}
+
 /// Lines above the input box that count as "live status" territory.
 const STATUS_WINDOW: usize = 8;
 /// Claude prints tips (sometimes many lines) *under* its spinner, so the
@@ -775,5 +831,25 @@ mod tests {
             None,
         );
         assert_eq!(judge(&before, &running, text), Judgement::Delivered("busy"));
+    }
+
+    #[test]
+    fn numbered_options_read_a_permission_menu() {
+        let s = " Bash command\n   ls -la\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. Yes, and don't ask again for ls commands\n   3. No, and tell Claude what to do differently (esc)\n";
+        let p = numbered_options(s).unwrap();
+        assert_eq!(p.question, "Do you want to proceed?");
+        assert_eq!(p.options.len(), 3);
+        assert_eq!(p.options[0], (1, "Yes".to_string()));
+        assert_eq!(p.options[2].0, 3);
+    }
+
+    #[test]
+    fn numbered_options_skip_menus_without_digits_and_stray_lists() {
+        let trust = " Is this a project you trust?\n ❯ No, exit\n   Yes, I trust this folder\n";
+        assert_eq!(numbered_options(trust), None);
+        // One numbered line is a list item, not a menu.
+        assert_eq!(numbered_options("steps:\n 1. do it\n❯ "), None);
+        // Counting that skips a number is not a menu.
+        assert_eq!(numbered_options("q?\n ❯ 1. a\n   3. b\n"), None);
     }
 }

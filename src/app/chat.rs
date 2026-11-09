@@ -8,6 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
@@ -26,6 +27,7 @@ use crate::chat_api::{
     self, Attachment, CircleRow, Circles, Hit, Msg, PaneRow, Progress, ReplyRef, Thread, Usage,
     UsageWindow,
 };
+use crate::chat_local;
 use crate::events;
 use crate::theme::SeancePalette;
 
@@ -891,6 +893,8 @@ struct Round {
     thread: Option<(String, Thread, bool)>,
     progress: Option<(String, Progress)>,
     error: Option<String>,
+    /// The local source found nothing new, so the view need not repaint.
+    quiet: bool,
 }
 
 fn fetch_round(ws: Option<String>, after: Option<i64>) -> Round {
@@ -899,6 +903,7 @@ fn fetch_round(ws: Option<String>, after: Option<i64>) -> Round {
         thread: None,
         progress: None,
         error: None,
+        quiet: false,
     };
     match chat_api::circles() {
         Ok(c) => round.circles = Some(c),
@@ -909,6 +914,27 @@ fn fetch_round(ws: Option<String>, after: Option<i64>) -> Round {
             .ok()
             .map(|t| (ws.clone(), t, after.is_some()));
         round.progress = chat_api::progress(&ws).ok().map(|p| (ws, p));
+    }
+    round
+}
+
+/// One round of the no-server source: the circles, and the open one's
+/// conversation as a whole thread (it replaces what was shown).
+fn fetch_local(ask: chat_local::LocalAsk) -> Round {
+    let mut round = Round {
+        circles: None,
+        thread: None,
+        progress: None,
+        error: None,
+        quiet: false,
+    };
+    match chat_local::round(ask) {
+        Ok(r) => {
+            round.circles = Some(r.circles);
+            round.thread = r.thread.map(|(ws, t)| (ws, t, false));
+            round.quiet = r.quiet;
+        }
+        Err(e) => round.error = Some(e.to_string()),
     }
     round
 }
@@ -1327,7 +1353,9 @@ fn bubble_menu(
     m: &Msg,
 ) -> PopupMenu {
     let mut menu = menu;
-    if let Some(draft) = reply_draft(ws, m) {
+    // Reply, forward, remind and unread all live in Invoke.
+    let local = chat_local::is_local();
+    if let Some(draft) = reply_draft(ws, m).filter(|_| !local) {
         let weak = app.clone();
         menu = menu.item(PopupMenuItem::new("Reply").on_click(move |_, _, cx| {
             let draft = draft.clone();
@@ -1338,6 +1366,9 @@ fn bubble_menu(
     menu = menu.item(PopupMenuItem::new("Copy text").on_click(move |_, _, cx| {
         let _ = crate::clipboard::copy_text_to_clipboard(&text, cx);
     }));
+    if local {
+        return menu;
+    }
     if m.id > 0 {
         let id = m.id;
         let (from, weak) = (ws.to_string(), app.clone());
@@ -1406,26 +1437,46 @@ fn bubble_menu(
 }
 
 impl SeanceApp {
+    /// The read of one round, ready to run off the UI thread: Invoke's, or
+    /// this Mac's own (every circle with its lead, and the open one's chat).
+    fn round_job(
+        &self,
+        ws: Option<String>,
+        after: Option<i64>,
+    ) -> Box<dyn FnOnce() -> Round + Send> {
+        if !chat_local::is_local() {
+            return Box::new(move || fetch_round(ws, after));
+        }
+        let ask = chat_local::LocalAsk {
+            client: Arc::clone(&self.client),
+            circles: self
+                .workspaces()
+                .into_iter()
+                .map(|w| {
+                    let lead = self.stage_lead(&w);
+                    let working = lead.as_ref().is_some_and(|l| self.busy_panes.contains(l));
+                    (w.clone(), self.workspace_label(&w), lead, working)
+                })
+                .collect(),
+            ws,
+        };
+        Box::new(move || fetch_local(ask))
+    }
+
     pub(super) fn start_chat_poll(cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| loop {
             let Some(this) = this.upgrade() else { break };
-            let (on, ws, after) = this.update(cx, |app: &mut SeanceApp, _| {
+            let (on, job) = this.update(cx, |app: &mut SeanceApp, _| {
                 let ws = app.chat.selected.clone();
                 let after = ws.as_deref().and_then(|w| app.chat.refresh_after(w));
-                (
-                    app.view.mode == ViewMode::Chat && crate::term_config::personal(),
-                    ws,
-                    after,
-                )
+                let on = app.view.mode == ViewMode::Chat;
+                (on, on.then(|| app.round_job(ws, after)))
             });
-            if !on {
+            let Some(job) = job.filter(|_| on) else {
                 cx.background_executor().timer(IDLE).await;
                 continue;
-            }
-            let round = cx
-                .background_executor()
-                .spawn(async move { fetch_round(ws, after) })
-                .await;
+            };
+            let round = cx.background_executor().spawn(async move { job() }).await;
             let failed = round.error.is_some();
             let v = this.update(cx, |app: &mut SeanceApp, cx| {
                 app.apply_round(round, cx);
@@ -1436,10 +1487,18 @@ impl SeanceApp {
                 continue;
             }
             // Returns on a change, or when the wait runs out; either way the
-            // next round reads Invoke again.
+            // next round reads Invoke again. With no server there is nothing
+            // to wait on, so the next round simply comes a second later.
             let polled = cx
                 .background_executor()
-                .spawn(async move { chat_api::poll(v, POLL_SECS) })
+                .spawn(async move {
+                    if chat_local::is_local() {
+                        std::thread::sleep(std::time::Duration::from_millis(chat_local::POLL_MS));
+                        Ok(v)
+                    } else {
+                        chat_api::poll(v, POLL_SECS)
+                    }
+                })
                 .await;
             if polled.is_err() {
                 cx.background_executor().timer(RETRY).await;
@@ -1449,6 +1508,10 @@ impl SeanceApp {
     }
 
     fn apply_round(&mut self, round: Round, cx: &mut Context<Self>) {
+        // Nothing moved: no state change and no repaint.
+        if round.quiet && round.error.is_none() && self.chat.error.is_none() {
+            return;
+        }
         let chat = &mut self.chat;
         chat.error = round.error;
         if let Some(c) = round.circles {
@@ -1553,6 +1616,10 @@ impl SeanceApp {
     /// Reading the open thread tells Invoke, so the phone's badge clears: only
     /// while this window is the active one and Chat is showing that thread.
     fn maybe_mark_read(&mut self, cx: &mut Context<Self>) {
+        // Nothing to tell: there is no phone badge without Invoke.
+        if chat_local::is_local() {
+            return;
+        }
         let chat = &mut self.chat;
         let Some(ws) = chat.selected.clone() else {
             return;
@@ -1646,7 +1713,7 @@ impl SeanceApp {
         let Some(ws) = self.chat.selected.clone() else {
             return;
         };
-        if self.view.mode != ViewMode::Chat || ws == ALERTS_WS {
+        if self.view.mode != ViewMode::Chat || ws == ALERTS_WS || chat_local::is_local() {
             return;
         }
         cx.spawn(async move |this, cx| {
@@ -1672,12 +1739,9 @@ impl SeanceApp {
 
     /// Read the selected circle's whole thread again, so no old status is stale.
     fn chat_refresh(&mut self, cx: &mut Context<Self>) {
-        let ws = self.chat.selected.clone();
+        let job = self.round_job(self.chat.selected.clone(), None);
         cx.spawn(async move |this, cx| {
-            let round = cx
-                .background_executor()
-                .spawn(async move { fetch_round(ws, None) })
-                .await;
+            let round = cx.background_executor().spawn(async move { job() }).await;
             let Some(this) = this.upgrade() else { return };
             this.update(cx, |app: &mut SeanceApp, cx| app.apply_round(round, cx));
         })
@@ -1712,12 +1776,27 @@ impl SeanceApp {
 
     /// Stop the open circle's lead mid-turn.
     fn chat_stop(&mut self, ws: String, cx: &mut Context<Self>) {
+        if chat_local::is_local() {
+            let Some(lead) = self.stage_lead(&ws) else {
+                return;
+            };
+            let client = Arc::clone(&self.client);
+            self.chat_call(
+                move || chat_local::stop(&client, &lead),
+                Self::chat_refresh,
+                cx,
+            );
+            return;
+        }
         self.chat_call(move || chat_api::stop(&ws), Self::chat_refresh, cx);
     }
 
     /// Mark a circle unread. An open thread would read itself again at once,
     /// so it is held back until the circle is selected again.
     fn chat_unread(&mut self, ws: String, cx: &mut Context<Self>) {
+        if chat_local::is_local() {
+            return;
+        }
         let at = ws.clone();
         // Held before the call goes out, so no read can slip in behind it; a
         // refusal lifts the hold again (see `chat_call`).
@@ -1919,7 +1998,7 @@ impl SeanceApp {
 
     /// Search every thread; the results replace the circle list.
     fn chat_search(&mut self, cx: &mut Context<Self>) {
-        let Some(input) = self.chat.search.clone() else {
+        let Some(input) = self.chat.search.clone().filter(|_| !chat_local::is_local()) else {
             return;
         };
         let q = match search_query(&input.read(cx).value()) {
@@ -1972,6 +2051,7 @@ impl SeanceApp {
             return;
         };
         if input.read(cx).value().starts_with('@')
+            && !chat_local::is_local()
             && !self
                 .chat
                 .panes_at
@@ -2132,22 +2212,24 @@ impl SeanceApp {
         self.chat.arrive();
         let thread_ws = ws.clone();
         let reply_id = reply.map(|r| r.id);
+        // Typed into the lead's terminal on this Mac, or sent through Invoke.
+        let job = self.round_job(Some(ws.clone()), after);
         cx.spawn(async move |this, cx| {
             let to = ws.clone();
             let body = text.clone();
             let sent = cx
                 .background_executor()
                 .spawn(async move {
+                    if chat_local::is_local() {
+                        return chat_local::send(&to, &body);
+                    }
                     match file {
                         Some(path) => chat_api::send_file(&to, &body, &path),
                         None => chat_api::send(&to, &body, reply_id),
                     }
                 })
                 .await;
-            let round = cx
-                .background_executor()
-                .spawn(async move { fetch_round(Some(ws), after) })
-                .await;
+            let round = cx.background_executor().spawn(async move { job() }).await;
             let Some(this) = this.upgrade() else { return };
             this.update(cx, |app: &mut SeanceApp, cx| {
                 app.apply_round(round, cx);
@@ -2196,16 +2278,24 @@ impl SeanceApp {
         });
         self.chat.arrive();
         let thread_ws = ws.clone();
+        let job = self.round_job(Some(ws.clone()), after);
+        // A tap in local mode presses that option's digit in the lead's pane.
+        let local = chat_local::is_local()
+            .then(|| self.stage_lead(&ws).map(|l| (Arc::clone(&self.client), l)))
+            .flatten();
         cx.spawn(async move |this, cx| {
             let (to, text) = (ws.clone(), choice);
             let sent = cx
                 .background_executor()
-                .spawn(async move { chat_api::answer(&to, &text, answers) })
+                .spawn(async move {
+                    match local {
+                        Some((client, lead)) => chat_local::answer(&client, &lead, &text),
+                        None if chat_local::is_local() => Err(anyhow::anyhow!("no lead")),
+                        None => chat_api::answer(&to, &text, answers),
+                    }
+                })
                 .await;
-            let round = cx
-                .background_executor()
-                .spawn(async move { fetch_round(Some(ws), after) })
-                .await;
+            let round = cx.background_executor().spawn(async move { job() }).await;
             let Some(this) = this.upgrade() else { return };
             this.update(cx, |app: &mut SeanceApp, cx| {
                 app.apply_round(round, cx);
@@ -2584,7 +2674,13 @@ impl SeanceApp {
                             .children(self.render_afk_chip("chat", cx)),
                     )
                     .child(self.render_view_switch("chat", cx))
-                    .children(self.chat.search.as_ref().map(|s| Input::new(s)))
+                    .children(
+                        self.chat
+                            .search
+                            .as_ref()
+                            .filter(|_| !chat_local::is_local())
+                            .map(|s| Input::new(s)),
+                    )
                     .children(self.chat.search_note.as_ref().map(|n| {
                         div()
                             .text_xs()
@@ -2913,6 +3009,7 @@ impl SeanceApp {
                 .gap_1()
                 .child(match &self.chat.error {
                     Some(e) if e == chat_api::NO_URL_MESSAGE => e.clone(),
+                    Some(e) if chat_local::is_local() => format!("Can't read this circle: {e}"),
                     Some(e) => format!("Can't reach Invoke: {e}"),
                     None => "Loading circles…".to_string(),
                 })
@@ -2997,7 +3094,7 @@ impl SeanceApp {
             );
         let tasks_open = lead.as_deref().is_some_and(|l| self.tasks_popover_open(l));
         let chip_lead = lead.clone();
-        header = header.when(!read_only, |header| {
+        header = header.when(!read_only && !chat_local::is_local(), |header| {
             header.child(
                 carve::plate(
                     div().id("chat-todo"),
@@ -3113,7 +3210,11 @@ impl SeanceApp {
                 div()
                     .text_sm()
                     .text_color(SeancePalette::text_faint())
-                    .child("No messages yet. Say something to the lead."),
+                    .child(if chat_local::is_local() && !chat_local::has_claude(&ws) {
+                        chat_local::NO_LEAD_MESSAGE
+                    } else {
+                        "No messages yet. Say something to the lead."
+                    }),
             );
         }
 
@@ -3145,7 +3246,7 @@ impl SeanceApp {
                     .threads
                     .get(&ws)
                     .and_then(|t| t.context)
-                    .filter(|c| *c >= CTX_ORANGE && !read_only)
+                    .filter(|c| *c >= CTX_ORANGE && !read_only && !chat_local::is_local())
                     .map(|_| self.compact_button(&ws, cx)),
             ));
         if let Some(e) = &self.chat.error {
@@ -3311,25 +3412,29 @@ impl SeanceApp {
                     .flex()
                     .items_end()
                     .gap_2()
-                    .child(
-                        carve::plate(
-                            div().id("chat-attach"),
-                            SeancePalette::surface(),
-                            Stock::Md,
-                            Cut::Control,
+                    .when(!chat_local::is_local(), |d| {
+                        d.child(
+                            carve::plate(
+                                div().id("chat-attach"),
+                                SeancePalette::surface(),
+                                Stock::Md,
+                                Cut::Control,
+                            )
+                            .flex_none()
+                            .px_2()
+                            .py_1p5()
+                            .text_sm()
+                            .text_color(SeancePalette::text_dim())
+                            .map(|d| carve::bg(d, SeancePalette::surface()))
+                            .hover(|s| s.text_color(SeancePalette::flame()))
+                            .cursor_pointer()
+                            .tooltip(tip("send a file or picture"))
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.chat_attach(window, cx)),
+                            )
+                            .child("📎"),
                         )
-                        .flex_none()
-                        .px_2()
-                        .py_1p5()
-                        .text_sm()
-                        .text_color(SeancePalette::text_dim())
-                        .map(|d| carve::bg(d, SeancePalette::surface()))
-                        .hover(|s| s.text_color(SeancePalette::flame()))
-                        .cursor_pointer()
-                        .tooltip(tip("send a file or picture"))
-                        .on_click(cx.listener(|this, _, window, cx| this.chat_attach(window, cx)))
-                        .child("📎"),
-                    )
+                    })
                     .child(
                         carve::carve(div(), SeancePalette::bg(), Cut::Slot)
                             .flex_1()
@@ -3630,7 +3735,9 @@ impl SeanceApp {
         // middle; the row is the hover group, so the arrow stays while the
         // pointer moves from the bubble onto it.
         let ws = self.chat.selected.as_deref().unwrap_or_default();
-        let arrow = reply_arrow_side(ws, m).zip(reply_draft(ws, m));
+        let arrow = reply_arrow_side(ws, m)
+            .zip(reply_draft(ws, m))
+            .filter(|_| !chat_local::is_local());
         let row = div()
             .group(REPLY_GROUP)
             .w_full()

@@ -595,6 +595,19 @@ impl GuiClient {
         )
     }
 
+    /// A lead's Claude conversation, read from `offset` (see `FsOp::LocalChat`).
+    /// Background threads only.
+    pub fn local_chat(&self, pane: &str, offset: u64, session: &str) -> Result<serde_json::Value> {
+        self.fs_call(
+            crate::runtime::protocol::FsOp::LocalChat {
+                pane: pane.to_string(),
+                offset,
+                session: session.to_string(),
+            },
+            FS_TIMEOUT,
+        )
+    }
+
     /// Run a host widget select command daemon-side; returns its stdout.
     pub fn host_select(&self, widget: &str, item: &str) -> Result<String> {
         let v = self.fs_call(

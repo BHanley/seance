@@ -433,6 +433,19 @@ pub enum FsOp {
     LeadTasks {
         pane: String,
     },
+    /// What the Chat layout shows for a circle lead, with no server: the new
+    /// bytes of its Claude conversation file past `offset` (whole lines only),
+    /// what its screen says it is doing, and the numbered options of a
+    /// question it is stopped on. `session` is the file the client last read;
+    /// a different one (or an offset past the end) starts over from the tail.
+    /// → `{claude, activity, evidence, prompt, session, size, from, to,
+    /// reset, b64}`.
+    LocalChat {
+        pane: String,
+        offset: u64,
+        #[serde(default)]
+        session: String,
+    },
     /// Run a shell command daemon-side (`sh -lc`). Same trust domain as the
     /// control plane (which already spawns arbitrary commands). Output is
     /// truncated to 64KiB per stream. → `{status, stdout, stderr}`.

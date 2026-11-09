@@ -6,6 +6,7 @@ mod control;
 mod gui;
 pub(crate) mod helpers;
 mod lifetime;
+mod local_chat;
 pub mod queue;
 mod sleep;
 mod spaces;
@@ -21,6 +22,7 @@ mod tests;
 
 // Re-export helpers used by sibling modules / tests.
 pub use helpers::OwnedFdAdopt;
+pub(crate) use local_chat::local_chat_reply;
 pub use sleep::auto_sleep_idle_ms;
 pub(crate) use sleep::title_is_claude;
 

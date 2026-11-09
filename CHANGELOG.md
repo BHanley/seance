@@ -17,6 +17,24 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.27.2] — 2026-11-09
+
+### Fixed
+
+- **Cmd+Q quits Seance on the Mac**, also with a terminal focused.
+
+### Added
+
+- **Chat works with no Invoke server.** It shows the circle lead's own Claude
+  conversation as bubbles (what you typed, and what Claude answered), and what
+  you type in Chat goes into that lead's terminal, as if you typed it there. A
+  note typed while the lead is busy waits and goes in when it is back at its
+  prompt. When Claude stops on a question with numbered answers, they show as
+  buttons and a tap presses that number. A circle with no Claude lead says so.
+  It runs entirely on this Mac. A machine with `seance-personal = true` and an
+  Invoke URL keeps its Invoke threads exactly as before; everyone else gets
+  this, and Chat is no longer hidden.
+
 ## [0.27.1] — 2026-11-09
 
 ### Fixed

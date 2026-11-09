@@ -73,30 +73,10 @@ fn put(text: &str, key: &str, value: impl Into<serde_json::Value>) -> String {
 /// Anything unreadable or unknown is Classic, so a bad file never strands a
 /// window on a layout it cannot show.
 fn decode(text: &str) -> ViewMode {
-    decode_for(text, crate::term_config::personal())
-}
-
-/// Chat needs Invoke, so without the personal switch a saved Chat opens Classic.
-fn decode_for(text: &str, personal: bool) -> ViewMode {
     serde_json::from_str::<serde_json::Value>(text)
         .ok()
         .and_then(|v| v.get("layout")?.as_str().and_then(ViewMode::parse))
-        .filter(|m| shows(*m, personal))
         .unwrap_or_default()
-}
-
-/// Chat is the one layout the personal switch hides.
-fn shows(mode: ViewMode, personal: bool) -> bool {
-    personal || mode != ViewMode::Chat
-}
-
-/// The next layout in cycle order that this build shows.
-fn next_shown(mode: ViewMode, personal: bool) -> ViewMode {
-    let mut next = mode.next();
-    while !shows(next, personal) {
-        next = next.next();
-    }
-    next
 }
 
 fn wall_all_of(text: &str) -> bool {
@@ -170,7 +150,7 @@ impl SeanceApp {
     }
 
     fn switch_view(&mut self, mode: ViewMode, persist: bool, cx: &mut Context<Self>) {
-        if mode == self.view.mode || !shows(mode, crate::term_config::personal()) {
+        if mode == self.view.mode {
             return;
         }
         let was_wall = self.overview();
@@ -239,14 +219,13 @@ impl SeanceApp {
 
     /// The layout ctrl+shift+t goes to next.
     pub(super) fn next_view(&self) -> ViewMode {
-        next_shown(self.view.mode, crate::term_config::personal())
+        self.view.mode.next()
     }
 
     /// Classic · Stage · Chat. Narrow enough for the slimmest rail: the
     /// segments share the width and the labels are one word.
     pub(super) fn render_view_switch(&self, key: &str, cx: &Context<Self>) -> gpui::AnyElement {
         let current = self.view.mode;
-        let personal = crate::term_config::personal();
         div()
             .id(SharedString::from(format!("view-switch-{key}")))
             .flex_none()
@@ -259,51 +238,43 @@ impl SeanceApp {
             .when(!carve::on(), |d| {
                 d.border_1().border_color(SeancePalette::border())
             })
-            .children(
-                ViewMode::ALL
-                    .into_iter()
-                    .filter(|m| shows(*m, personal))
-                    .map(|mode| {
-                        let on = mode == current;
-                        let fill = SeancePalette::surface();
-                        let tab = div().id(SharedString::from(format!("view-{key}-{}", mode.id())));
-                        let tab = if on {
-                            carve::plate(tab, fill, Stock::Sm, Cut::Control)
-                        } else {
-                            carve::corners(tab, Stock::Sm)
-                        };
-                        tab.flex_1()
-                            .min_w_0()
-                            .px_1p5()
-                            .flex()
-                            .justify_center()
-                            .text_xs()
-                            .overflow_hidden()
-                            .cursor_pointer()
-                            .when(on, |d| {
-                                carve::bg(d, SeancePalette::surface())
-                                    .text_color(SeancePalette::flame())
-                            })
-                            .when(!on, |d| {
-                                d.text_color(SeancePalette::text_dim())
-                                    .hover(|s| s.text_color(SeancePalette::text()))
-                            })
-                            .tooltip(tip(match mode {
-                                ViewMode::Classic => {
-                                    "classic: the rail and pane grid (ctrl+shift+t cycles)"
-                                }
-                                ViewMode::Stage => {
-                                    "stage: one circle's lead up front, crew beside it"
-                                }
-                                ViewMode::Chat => "chat: talk to each circle's lead, no terminal",
-                                ViewMode::Wall => "wall: every circle live (ctrl+shift+space)",
-                            }))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.set_view(mode, cx);
-                            }))
-                            .child(mode.id())
-                    }),
-            )
+            .children(ViewMode::ALL.into_iter().map(|mode| {
+                let on = mode == current;
+                let fill = SeancePalette::surface();
+                let tab = div().id(SharedString::from(format!("view-{key}-{}", mode.id())));
+                let tab = if on {
+                    carve::plate(tab, fill, Stock::Sm, Cut::Control)
+                } else {
+                    carve::corners(tab, Stock::Sm)
+                };
+                tab.flex_1()
+                    .min_w_0()
+                    .px_1p5()
+                    .flex()
+                    .justify_center()
+                    .text_xs()
+                    .overflow_hidden()
+                    .cursor_pointer()
+                    .when(on, |d| {
+                        carve::bg(d, SeancePalette::surface()).text_color(SeancePalette::flame())
+                    })
+                    .when(!on, |d| {
+                        d.text_color(SeancePalette::text_dim())
+                            .hover(|s| s.text_color(SeancePalette::text()))
+                    })
+                    .tooltip(tip(match mode {
+                        ViewMode::Classic => {
+                            "classic: the rail and pane grid (ctrl+shift+t cycles)"
+                        }
+                        ViewMode::Stage => "stage: one circle's lead up front, crew beside it",
+                        ViewMode::Chat => "chat: talk to each circle's lead, no terminal",
+                        ViewMode::Wall => "wall: every circle live (ctrl+shift+space)",
+                    }))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.set_view(mode, cx);
+                    }))
+                    .child(mode.id())
+            }))
             .into_any_element()
     }
 }
@@ -318,11 +289,6 @@ pub(super) fn grid_kicks_frame(mode: ViewMode) -> bool {
 mod tests {
     use super::*;
 
-    /// The codec as Brian's machines (switch on) see it.
-    fn decode(text: &str) -> ViewMode {
-        decode_for(text, true)
-    }
-
     #[test]
     fn only_layouts_that_draw_terminals_take_a_frame_per_grid() {
         assert!(grid_kicks_frame(ViewMode::Classic));
@@ -332,16 +298,9 @@ mod tests {
     }
 
     #[test]
-    fn chat_is_hidden_without_the_personal_switch() {
-        let chat = r#"{"layout":"chat"}"#;
-        assert_eq!(decode_for(chat, true), ViewMode::Chat);
-        assert_eq!(decode_for(chat, false), ViewMode::Classic);
-        assert_eq!(decode_for(r#"{"layout":"stage"}"#, false), ViewMode::Stage);
-        assert_eq!(next_shown(ViewMode::Stage, false), ViewMode::Classic);
-        assert_eq!(next_shown(ViewMode::Stage, true), ViewMode::Chat);
-        assert_eq!(next_shown(ViewMode::Classic, false), ViewMode::Stage);
-        assert_eq!(next_shown(ViewMode::Wall, false), ViewMode::Classic);
-        assert!(shows(ViewMode::Wall, false));
+    fn chat_shows_for_everyone_and_is_in_the_cycle() {
+        assert_eq!(decode(r#"{"layout":"chat"}"#), ViewMode::Chat);
+        assert_eq!(ViewMode::Stage.next(), ViewMode::Chat);
     }
 
     #[test]

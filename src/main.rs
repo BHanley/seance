@@ -5,6 +5,7 @@ mod caps;
 mod carve;
 mod chain;
 mod chat_api;
+mod chat_local;
 mod claude_check;
 mod clipboard;
 mod cmdlog;
@@ -422,6 +423,10 @@ fn boot_local(pref: Option<launch::LaunchPref>) -> Boot {
 /// that was actually missing.
 fn install_app_menu(cx: &mut gpui::App) {
     cx.on_action(|_: &app::actions::ActQuit, cx| cx.quit());
+    // Global (no key context), so it also works while a terminal has focus,
+    // and the menu item shows the chord.
+    #[cfg(target_os = "macos")]
+    cx.bind_keys([gpui::KeyBinding::new("cmd-q", app::actions::ActQuit, None)]);
     // gpui's restart: waits for this process to exit, then `open`s the bundle.
     cx.on_action(|_: &app::actions::ActRestart, cx| cx.restart());
     use gpui::{Menu, MenuItem};

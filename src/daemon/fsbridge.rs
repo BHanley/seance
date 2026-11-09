@@ -158,6 +158,19 @@ fn run_inner(op: FsOp, engine: &SharedEngine) -> Result<Value, String> {
             let eng = engine.lock().map_err(|_| "engine busy".to_string())?;
             Ok(eng.lead_tasks_json(&pane))
         }
+        FsOp::LocalChat {
+            pane,
+            offset,
+            session,
+        } => {
+            let look = {
+                let eng = engine.lock().map_err(|_| "engine busy".to_string())?;
+                eng.local_chat_look(&pane)
+            };
+            Ok(crate::runtime::engine::local_chat_reply(
+                look, offset, &session,
+            ))
+        }
         FsOp::HostSelect { widget, item } => {
             // Fresh load: select is rare and config may have changed on disk.
             let mut host = HostState::load();
