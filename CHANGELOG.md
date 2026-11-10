@@ -17,6 +17,14 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.2] — 2026-11-09
+
+### Fixed
+
+- The phone guide's text now wraps inside its card, and each step's buttons sit
+  under that step's text. Before, the buttons sat to the right of text that did
+  not wrap, off the card's edge, so "Turn on phone link" could not be seen.
+
 ## [0.28.1] — 2026-11-09
 
 - The bundled Invoke no longer carries anyone's login, tailnet name or Mac ssh

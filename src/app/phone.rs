@@ -45,6 +45,118 @@ pub(super) fn next_step(g: &Guide, phone_done: bool) -> usize {
     }
 }
 
+/// A button on a step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Act {
+    GetTailscale,
+    OpenTailscale,
+    Done,
+    LinkOn { busy: bool },
+    LinkOff,
+    Enable,
+}
+
+/// One step of the guide, as data: its tick, its words, and its buttons. The
+/// card draws the buttons UNDER the step's text, inside its column, so they can
+/// never sit beside text that has not wrapped (and be pushed off the card).
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct Step {
+    pub done: bool,
+    pub title: &'static str,
+    pub body: String,
+    pub actions: Vec<Act>,
+    /// A line under the buttons: an error, or Tailscale's one-time prompt.
+    pub note: Option<String>,
+}
+
+/// The four steps (the QR step is drawn after them once the link is on).
+pub(super) fn steps(
+    g: &Guide,
+    phone_done: bool,
+    busy: bool,
+    note: Option<&str>,
+    enable_page: bool,
+) -> Vec<Step> {
+    let phone_ok = phone_done || g.phones_online > 0;
+    let mut link_actions = Vec::new();
+    if !g.link_on && g.signed_in && g.invoke_running {
+        link_actions.push(Act::LinkOn { busy });
+    }
+    if g.link_on {
+        link_actions.push(Act::LinkOff);
+    }
+    if enable_page {
+        link_actions.push(Act::Enable);
+    }
+    vec![
+        Step {
+            done: g.installed,
+            title: "1. Tailscale on this Mac",
+            body: if g.installed {
+                "Tailscale is installed.".into()
+            } else {
+                "Install the Tailscale app, then come back here.".into()
+            },
+            actions: if g.installed {
+                vec![]
+            } else {
+                vec![Act::GetTailscale]
+            },
+            note: None,
+        },
+        Step {
+            done: g.signed_in,
+            title: "2. Signed in on this Mac",
+            body: match (&g.login, g.signed_in) {
+                (Some(l), true) => format!("Signed in as {l}."),
+                _ => "Open Tailscale from the menu bar and sign in.".into(),
+            },
+            actions: if g.installed && !g.signed_in {
+                vec![Act::OpenTailscale]
+            } else {
+                vec![]
+            },
+            note: None,
+        },
+        Step {
+            done: phone_ok,
+            title: "3. Tailscale on your phone",
+            body: if g.phones_online > 0 {
+                format!(
+                    "{} of your phones {} online.",
+                    g.phones_online,
+                    if g.phones_online == 1 { "is" } else { "are" }
+                )
+            } else {
+                "Install Tailscale on your phone and sign in with the same account. Seance \
+                 can't see this step unless the phone is online, so press Done when it is."
+                    .into()
+            },
+            actions: if g.phones_online == 0 && !phone_done {
+                vec![Act::Done]
+            } else {
+                vec![]
+            },
+            note: None,
+        },
+        Step {
+            done: g.link_on,
+            title: "4. Turn on the phone link",
+            body: if g.link_on {
+                "The phone link is on.".into()
+            } else if !g.invoke_running {
+                "Seance's phone chat is not running yet. Give it a moment, then check again.".into()
+            } else {
+                "Makes Seance reachable from your phone over HTTPS (needed for the app and \
+                 for notifications). Tailscale may ask once to turn on HTTPS for your account."
+                    .into()
+            },
+            actions: link_actions,
+            note: note.map(str::to_string),
+        },
+    ]
+}
+
 impl SeanceApp {
     pub(super) fn open_phone_guide(&mut self, cx: &mut Context<Self>) {
         self.phone.open = true;
@@ -145,6 +257,7 @@ impl SeanceApp {
         let tick = |done: bool| {
             div()
                 .w(px(18.))
+                .flex_none()
                 .text_sm()
                 .text_color(if done {
                     SeancePalette::success()
@@ -170,27 +283,63 @@ impl SeanceApp {
                 b.text_color(SeancePalette::text_faint()).child(label)
             }
         };
-        let row = |done: bool, title: &'static str, body: String| {
-            div().flex().flex_row().gap_2().child(tick(done)).child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .flex_1()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_semibold()
-                            .text_color(SeancePalette::text())
-                            .child(title),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(SeancePalette::text_dim())
-                            .child(body),
-                    ),
-            )
+        // One step: the tick, then a column holding the title, the text and
+        // (under the text, never beside it) the step's buttons. The column may
+        // shrink below its content (`min_w 0`), so the text wraps inside the
+        // card instead of running off its right edge.
+        let row = |done: bool,
+                   title: &'static str,
+                   body: String,
+                   note: Option<String>,
+                   actions: Vec<gpui::AnyElement>| {
+            let mut col = div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .flex_1()
+                .min_w(px(0.))
+                .child(
+                    div()
+                        .w_full()
+                        .text_sm()
+                        .font_semibold()
+                        .text_color(SeancePalette::text())
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .text_xs()
+                        .text_color(SeancePalette::text_dim())
+                        .child(body),
+                );
+            if let Some(note) = note {
+                col = col.child(
+                    div()
+                        .w_full()
+                        .text_xs()
+                        .text_color(SeancePalette::flame())
+                        .child(note),
+                );
+            }
+            if !actions.is_empty() {
+                col = col.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .gap_2()
+                        .pt_1()
+                        .children(actions),
+                );
+            }
+            div()
+                .w_full()
+                .flex()
+                .flex_row()
+                .gap_2()
+                .child(tick(done))
+                .child(col)
         };
         let mut card = div()
             .id("phone-card")
@@ -230,160 +379,98 @@ impl SeanceApp {
             );
             return Some(self.phone_shell(card, cx));
         }
-        card = card
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(SeancePalette::text_faint())
-                    .child(
-                        "Your phone reaches Seance over Tailscale, a private network that \
-                         is free for one person. Only you can open it.",
-                    ),
-            )
-            .child(
-                row(
-                    g.installed,
-                    "1. Tailscale on this Mac",
-                    if g.installed {
-                        "Tailscale is installed.".into()
-                    } else {
-                        "Install the Tailscale app, then come back here.".into()
-                    },
-                )
-                .when(!g.installed, |d| {
-                    d.child(
-                        button("phone-download", "Get Tailscale".into(), step == 0).on_click(
-                            cx.listener(|_, _, _, _| crate::sysopen::open_detached(DOWNLOAD_URL)),
-                        ),
-                    )
-                }),
-            )
-            .child(
-                row(
-                    g.signed_in,
-                    "2. Signed in on this Mac",
-                    match (&g.login, g.signed_in) {
-                        (Some(l), true) => format!("Signed in as {l}."),
-                        _ => "Open Tailscale from the menu bar and sign in.".into(),
-                    },
-                )
-                .when(g.installed && !g.signed_in, |d| {
-                    d.child(
-                        button("phone-open-ts", "Open Tailscale".into(), step == 1).on_click(
-                            cx.listener(|_, _, _, _| crate::sysopen::open_detached("tailscale://")),
-                        ),
-                    )
-                }),
-            )
-            .child(
-                row(
-                    self.phone.phone_done || g.phones_online > 0,
-                    "3. Tailscale on your phone",
-                    if g.phones_online > 0 {
-                        format!(
-                            "{} of your phones {} online.",
-                            g.phones_online,
-                            if g.phones_online == 1 { "is" } else { "are" }
-                        )
-                    } else {
-                        "Install Tailscale on your phone and sign in with the same account. \
-                         Seance can't see this step unless the phone is online, so press \
-                         Done when it is."
-                            .into()
-                    },
-                )
-                .when(g.phones_online == 0 && !self.phone.phone_done, |d| {
-                    d.child(
-                        button("phone-done", "Done".into(), step == 2).on_click(cx.listener(
-                            |this, _, _, cx| {
+        card = card.child(
+            div()
+                .w_full()
+                .text_xs()
+                .text_color(SeancePalette::text_faint())
+                .child(
+                    "Your phone reaches Seance over Tailscale, a private network that \
+                     is free for one person. Only you can open it.",
+                ),
+        );
+        let enable_url = self.phone.enable_url.clone();
+        let steps = steps(
+            g,
+            self.phone.phone_done,
+            self.phone.busy,
+            self.phone.note.as_deref(),
+            enable_url.is_some(),
+        );
+        for (i, st) in steps.into_iter().enumerate() {
+            let buttons: Vec<gpui::AnyElement> =
+                st.actions
+                    .iter()
+                    .map(|act| match *act {
+                        Act::GetTailscale => {
+                            button("phone-download", "Get Tailscale".into(), step == i)
+                                .on_click(cx.listener(|_, _, _, _| {
+                                    crate::sysopen::open_detached(DOWNLOAD_URL)
+                                }))
+                                .into_any_element()
+                        }
+                        Act::OpenTailscale => {
+                            button("phone-open-ts", "Open Tailscale".into(), step == i)
+                                .on_click(cx.listener(|_, _, _, _| {
+                                    crate::sysopen::open_detached("tailscale://")
+                                }))
+                                .into_any_element()
+                        }
+                        Act::Done => button("phone-done", "Done".into(), step == i)
+                            .on_click(cx.listener(|this, _, _, cx| {
                                 this.phone.phone_done = true;
                                 cx.notify();
-                            },
-                        )),
-                    )
-                }),
-            );
-        // Step 4: the phone link.
-        let busy = self.phone.busy;
-        card = card.child(
-            row(
-                g.link_on,
-                "4. Turn on the phone link",
-                if g.link_on {
-                    "The phone link is on.".into()
-                } else if !g.invoke_running {
-                    "Seance's phone chat is not running yet. Give it a moment, then check again."
-                        .into()
-                } else {
-                    "Makes Seance reachable from your phone over HTTPS (needed for the app \
-                     and for notifications). Tailscale may ask once to turn on HTTPS for \
-                     your account."
-                        .into()
-                },
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap_2()
-                    .when(!g.link_on && g.signed_in && g.invoke_running, |d| {
-                        d.child(
-                            button(
-                                "phone-link-on",
-                                if busy {
-                                    "Working..."
-                                } else {
-                                    "Turn on phone link"
-                                }
-                                .into(),
-                                step == 3,
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if !this.phone.busy {
-                                    this.phone_link(true, cx);
-                                }
-                            })),
+                            }))
+                            .into_any_element(),
+                        Act::LinkOn { busy } => button(
+                            "phone-link-on",
+                            if busy {
+                                "Working..."
+                            } else {
+                                "Turn on phone link"
+                            }
+                            .into(),
+                            step == i,
                         )
-                    })
-                    .when(g.link_on, |d| {
-                        d.child(button("phone-link-off", "Turn off".into(), false).on_click(
-                            cx.listener(|this, _, _, cx| {
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if !this.phone.busy {
+                                this.phone_link(true, cx);
+                            }
+                        }))
+                        .into_any_element(),
+                        Act::LinkOff => button("phone-link-off", "Turn off".into(), false)
+                            .on_click(cx.listener(|this, _, _, cx| {
                                 if !this.phone.busy {
                                     this.phone_link(false, cx);
                                 }
-                            }),
-                        ))
-                    }),
-            ),
-        );
-        if let Some(note) = &self.phone.note {
-            card = card.child(
-                div()
-                    .text_xs()
-                    .text_color(SeancePalette::flame())
-                    .child(note.clone()),
-            );
-        }
-        if let Some(url) = self.phone.enable_url.clone() {
-            card = card.child(
-                button("phone-enable", "Open the Tailscale page".into(), true)
-                    .on_click(cx.listener(move |_, _, _, _| crate::sysopen::open_detached(&url))),
-            );
+                            }))
+                            .into_any_element(),
+                        Act::Enable => {
+                            let url = enable_url.clone().unwrap_or_default();
+                            button("phone-enable", "Open the Tailscale page".into(), true)
+                                .on_click(cx.listener(move |_, _, _, _| {
+                                    crate::sysopen::open_detached(&url)
+                                }))
+                                .into_any_element()
+                        }
+                    })
+                    .collect();
+            card = card.child(row(st.done, st.title, st.body, st.note, buttons));
         }
         // Step 5: the address and its QR code.
         if let (true, Some(url)) = (g.link_on, g.url.clone()) {
-            card = card.child(
-                row(
-                    false,
-                    "5. Open it on your phone",
-                    "Scan this with your phone's camera, then use Share > Add to Home Screen \
-                     so it opens like an app."
-                        .into(),
-                )
-                .child(div()),
-            );
+            card = card.child(row(
+                false,
+                "5. Open it on your phone",
+                "Scan this with your phone's camera, then use Share > Add to Home Screen \
+                 so it opens like an app."
+                    .into(),
+                None,
+                vec![],
+            ));
             card = card.child(
                 div()
+                    .w_full()
                     .flex()
                     .flex_col()
                     .items_center()
@@ -392,6 +479,7 @@ impl SeanceApp {
                     .child(
                         div()
                             .id("phone-url")
+                            .max_w_full()
                             .text_xs()
                             .text_color(SeancePalette::text())
                             .child(url),
@@ -400,6 +488,7 @@ impl SeanceApp {
         }
         card = card.child(
             div()
+                .w_full()
                 .text_xs()
                 .text_color(SeancePalette::text_faint())
                 .child("Your phone reaches Seance only while this Mac is awake."),
@@ -501,6 +590,62 @@ mod tests {
         assert_eq!(next_step(&g, true), 3);
         g.link_on = true;
         assert_eq!(next_step(&g, true), 4);
+    }
+
+    /// Layout regression (0.28.2): the step buttons sat to the right of text
+    /// that did not wrap, off the card, so "Turn on phone link" was invisible.
+    /// Every button now belongs to its step and is drawn under the step's text;
+    /// this pins which step owns which button.
+    #[test]
+    fn every_button_belongs_to_a_step_and_so_sits_under_its_text() {
+        // Nothing done yet: only step 1 offers a button.
+        let g = guide();
+        let st = steps(&g, false, false, None, false);
+        assert_eq!(st.len(), 4);
+        assert_eq!(st[0].actions, [Act::GetTailscale]);
+        assert!(st[1].actions.is_empty() && st[3].actions.is_empty());
+        // Installed, signed out: Open Tailscale, on step 2.
+        let g = Guide {
+            installed: true,
+            ..guide()
+        };
+        assert_eq!(
+            steps(&g, false, false, None, false)[1].actions,
+            [Act::OpenTailscale]
+        );
+        // Signed in, no phone yet: Done on step 3, and the link button on 4.
+        let g = Guide {
+            installed: true,
+            signed_in: true,
+            ..guide()
+        };
+        let st = steps(&g, false, false, None, false);
+        assert_eq!(st[2].actions, [Act::Done]);
+        assert_eq!(st[3].actions, [Act::LinkOn { busy: false }]);
+        // Working: the same button, marked busy.
+        assert_eq!(
+            steps(&g, false, true, None, false)[3].actions,
+            [Act::LinkOn { busy: true }]
+        );
+        // The error line and the one-time enable button are step 4's too.
+        let st = steps(&g, true, false, Some("HTTPS is off"), true);
+        assert_eq!(st[3].note.as_deref(), Some("HTTPS is off"));
+        assert_eq!(st[3].actions, [Act::LinkOn { busy: false }, Act::Enable]);
+        assert!(st[2].actions.is_empty());
+        // Link on: Turn off replaces Turn on.
+        let g = Guide { link_on: true, ..g };
+        assert_eq!(
+            steps(&g, true, false, None, false)[3].actions,
+            [Act::LinkOff]
+        );
+        // Invoke not running: nothing to turn on.
+        let g = Guide {
+            installed: true,
+            signed_in: true,
+            invoke_running: false,
+            ..guide()
+        };
+        assert!(steps(&g, true, false, None, false)[3].actions.is_empty());
     }
 
     #[test]
