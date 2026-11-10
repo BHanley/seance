@@ -251,6 +251,11 @@ pub struct Guide {
     pub link_on: bool,
     /// (e) the address to open on the phone.
     pub url: Option<String>,
+    /// (f) phones that opened Invoke and said yes to notifications: the push
+    /// subscriptions Invoke has stored. That is the only trace a phone leaves,
+    /// so it is what ticks "Put Invoke on your phone".
+    #[serde(default)]
+    pub subscribed: u32,
 }
 
 /// Pure: the guide from what the probes found. `serve` is the status JSON of
@@ -295,7 +300,33 @@ pub fn guide_now() -> Guide {
         let (_, out) = run_capture(&cli, &["serve", "status", "--json"], Duration::from_secs(8));
         serde_json::from_str::<Value>(&out).ok()
     };
-    guide_from(bundled, port, true, status.as_ref(), serve.as_ref())
+    let mut g = guide_from(bundled, port, true, status.as_ref(), serve.as_ref());
+    g.subscribed = subscriptions_now();
+    g
+}
+
+/// How many entries are in Invoke's `subs.json` (a list of push
+/// subscriptions), 0 when it is missing or unreadable.
+pub fn count_subscriptions(text: &str) -> u32 {
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .and_then(|v| v.as_array().map(|a| a.len() as u32))
+        .unwrap_or(0)
+}
+
+/// Invoke keeps its state in `INVOKE_STATE`, else `~/.local/state/seance-chat`.
+fn subscriptions_now() -> u32 {
+    let dir = std::env::var("INVOKE_STATE")
+        .ok()
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| PathBuf::from(h).join(".local/state/seance-chat"))
+        });
+    dir.and_then(|d| std::fs::read_to_string(d.join("subs.json")).ok())
+        .map_or(0, |t| count_subscriptions(&t))
 }
 
 /// What turning the phone link on or off came to.

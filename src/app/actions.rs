@@ -29,6 +29,11 @@ pub struct ActCheckUpdates;
 #[action(namespace = seance, no_json)]
 pub struct ActPhoneGuide;
 
+/// Help > "Show Welcome Again".
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActShowWelcome;
+
 /// "Lead Reply Sound" submenu rows in the Seance menu.
 #[derive(Action, Clone, PartialEq, Deserialize)]
 #[action(namespace = seance, no_json)]

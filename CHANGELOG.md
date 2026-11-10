@@ -17,6 +17,12 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.11] — 2026-11-10
+
+### Added
+- Phone guide: a new last step, "Put Invoke on your phone", with iPhone and Android tabs (iPhone first): scan the QR, open in Safari or Chrome, add it to the Home Screen, open Invoke, tap Allow for notifications. It ticks when a phone has opened Invoke and turned notifications on (read from Invoke's stored push subscriptions).
+- A three-card welcome the first time the app opens, with Skip on each card and a Set up phone button on the last. Help > Show Welcome Again brings it back.
+
 ## [0.28.10] — 2026-11-10
 
 ### Added

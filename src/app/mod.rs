@@ -53,6 +53,7 @@ mod util;
 mod views;
 mod wall;
 mod wall_model;
+mod welcome;
 mod workspaces;
 
 use self::actions::*;
@@ -359,6 +360,7 @@ pub struct SeanceApp {
     first_run: first_run::FirstRun,
     /// Settings > "Use Seance on your phone".
     phone: phone::Phone,
+    welcome: welcome::Welcome,
     /// The "Update ready" bar.
     update: updatebar::UpdateUi,
     /// Host-provided menus (`menus[]` of ~/.config/seance/host.json) — chips
@@ -602,6 +604,7 @@ impl SeanceApp {
             quicklaunch_editor: None,
             first_run: first_run::FirstRun::Off,
             phone: phone::Phone::default(),
+            welcome: welcome::Welcome::default(),
             update: updatebar::UpdateUi::default(),
             host_menus: Vec::new(),
             host_menus_mtime: None,
@@ -619,6 +622,7 @@ impl SeanceApp {
         if !empty {
             app.start_first_run_check(cx);
             app.start_update_checks(cx);
+            app.start_welcome(cx);
         }
         // Seed the prompt-library user file on the DAEMON machine (write-if-
         // missing) and pre-warm the cache so the palette has user prompts by
@@ -3199,6 +3203,9 @@ impl Render for SeanceApp {
             .on_action(cx.listener(|this, _: &ActPhoneGuide, _, cx| {
                 this.open_phone_guide(cx);
             }))
+            .on_action(cx.listener(|this, _: &ActShowWelcome, _, cx| {
+                this.show_welcome_again(cx);
+            }))
             .on_action(cx.listener(|this, act: &ActToggleTiled, _, cx| {
                 this.toggle_tiled(&act.0, cx);
             }))
@@ -3444,6 +3451,7 @@ impl Render for SeanceApp {
             .children(self.render_quicklaunch_editor(cx))
             .children(self.render_first_run(cx))
             .children(self.render_phone(cx))
+            .children(self.render_welcome(cx))
             .children(self.render_update_bar(cx))
             .children(self.render_gui_menu(cx))
             .children(self.render_tasks_popover(window, cx))

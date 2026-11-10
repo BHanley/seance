@@ -184,3 +184,15 @@ fn e2e_phone_guide_against_a_scratch_daemon() {
     show("serve off", client.invoke_serve(false).unwrap());
     show("guide", client.invoke_guide().unwrap());
 }
+
+#[test]
+fn subscriptions_are_counted_from_invokes_file() {
+    assert_eq!(count_subscriptions(""), 0);
+    assert_eq!(count_subscriptions("not json"), 0);
+    assert_eq!(count_subscriptions("{}"), 0);
+    assert_eq!(count_subscriptions("[]"), 0);
+    assert_eq!(
+        count_subscriptions(r#"[{"endpoint":"https://a"},{"endpoint":"https://b"}]"#),
+        2
+    );
+}

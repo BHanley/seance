@@ -536,13 +536,19 @@ fn set_app_menu(cx: &mut gpui::App) {
             MenuItem::action(*label, app::actions::ActLeadSound(tags[i].into())).checked(ticked)
         }
     });
-    cx.set_menus([Menu::new("Seance").items([
-        MenuItem::action("Check for Updates…", app::actions::ActCheckUpdates),
-        MenuItem::action("Use Seance on Your Phone…", app::actions::ActPhoneGuide),
-        MenuItem::submenu(Menu::new("Lead Reply Sound").items(rows)),
-        MenuItem::action("Restart Seance", app::actions::ActRestart),
-        MenuItem::action("Quit Seance", app::actions::ActQuit),
-    ])]);
+    cx.set_menus([
+        Menu::new("Seance").items([
+            MenuItem::action("Check for Updates…", app::actions::ActCheckUpdates),
+            MenuItem::action("Use Seance on Your Phone…", app::actions::ActPhoneGuide),
+            MenuItem::submenu(Menu::new("Lead Reply Sound").items(rows)),
+            MenuItem::action("Restart Seance", app::actions::ActRestart),
+            MenuItem::action("Quit Seance", app::actions::ActQuit),
+        ]),
+        Menu::new("Help").items([MenuItem::action(
+            "Show Welcome Again",
+            app::actions::ActShowWelcome,
+        )]),
+    ]);
 }
 
 /// The live ssh tunnel for this GUI process, if any. Static so the quit hook

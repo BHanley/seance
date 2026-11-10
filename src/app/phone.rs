@@ -31,6 +31,62 @@ pub(super) struct Phone {
     pub note: Option<String>,
     /// The page that turns Serve/HTTPS on for this tailnet, once, when asked.
     pub enable_url: Option<String>,
+    /// Which phone's install steps are showing.
+    pub tab: PhoneTab,
+}
+
+/// The install steps come in two flavours: iPhone first.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum PhoneTab {
+    #[default]
+    IPhone,
+    Android,
+}
+
+const IPHONE_STEPS: [&str; 5] = [
+    "Scan the QR code above with the Camera app and open the link in Safari. \
+     Not Chrome: an iPhone only installs it from Safari.",
+    "Tap the Share button, then Add to Home Screen, then Add.",
+    "Open Invoke from its new icon on your Home Screen.",
+    "Tap Allow when it asks about notifications.",
+    "Notifications need iOS 16.4 or newer, and only work from the Home Screen icon.",
+];
+
+const ANDROID_STEPS: [&str; 4] = [
+    "Scan the QR code above with your camera and open the link in Chrome.",
+    "Tap Install app (or the three dots, then Add to Home screen).",
+    "Open Invoke from its new icon.",
+    "Tap Allow when it asks about notifications.",
+];
+
+/// The words of the "Put Invoke on your phone" step for one tab: the numbered
+/// how-to, then what the tick is waiting for.
+pub(super) fn install_text(tab: PhoneTab, g: &Guide) -> String {
+    let steps: &[&str] = match tab {
+        PhoneTab::IPhone => &IPHONE_STEPS,
+        PhoneTab::Android => &ANDROID_STEPS,
+    };
+    let mut lines: Vec<String> = Vec::new();
+    for (i, st) in steps.iter().enumerate() {
+        // The last iPhone line is a note, not a step.
+        if matches!(tab, PhoneTab::IPhone) && i == steps.len() - 1 {
+            lines.push(format!("Note: {st}"));
+        } else {
+            lines.push(format!("{}. {st}", i + 1));
+        }
+    }
+    lines.push(if on_phone(g) {
+        "Invoke is on your phone and notifications are on.".into()
+    } else {
+        "This ticks when your phone has opened Invoke and you have tapped Allow.".into()
+    });
+    lines.join("\n")
+}
+
+/// Has a phone opened Invoke and turned notifications on? That is the one
+/// thing a phone leaves behind (a stored push subscription), so it is the tick.
+pub(super) fn on_phone(g: &Guide) -> bool {
+    g.subscribed > 0
 }
 
 /// Which step is the first one not done, 0 based (5: all done). Pure, so the
@@ -482,8 +538,7 @@ impl SeanceApp {
             card = card.child(row(
                 false,
                 "5. Open it on your phone",
-                "Scan this with your phone's camera, then use Share > Add to Home Screen \
-                 so it opens like an app."
+                "Scan this with your phone's camera. The next step puts it on your Home Screen."
                     .into(),
                 None,
                 vec![],
@@ -512,6 +567,35 @@ impl SeanceApp {
                             .child(SCAN_NOTE),
                     ),
             );
+        }
+        // Step 6: put Invoke on the phone, with a tab for each kind.
+        if g.link_on && g.url.is_some() {
+            let tab = self.phone.tab;
+            let tabs = vec![
+                button("phone-tab-iphone", "iPhone".into(), tab == PhoneTab::IPhone)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.phone.tab = PhoneTab::IPhone;
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+                button(
+                    "phone-tab-android",
+                    "Android".into(),
+                    tab == PhoneTab::Android,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.phone.tab = PhoneTab::Android;
+                    cx.notify();
+                }))
+                .into_any_element(),
+            ];
+            card = card.child(row(
+                on_phone(g),
+                "6. Put Invoke on your phone",
+                install_text(tab, g),
+                None,
+                tabs,
+            ));
         }
         card = card.child(
             div()
@@ -743,5 +827,26 @@ mod tests {
             .to_colors()
             .iter()
             .any(|c| *c == qrcode::types::Color::Dark));
+    }
+
+    #[test]
+    fn the_install_step_ticks_only_once_a_phone_has_subscribed() {
+        let g = guide();
+        assert!(!on_phone(&g));
+        assert!(install_text(PhoneTab::IPhone, &g).contains("This ticks when"));
+        let g = Guide { subscribed: 1, ..g };
+        assert!(on_phone(&g));
+        assert!(install_text(PhoneTab::Android, &g).contains("notifications are on"));
+    }
+
+    #[test]
+    fn each_tab_has_its_own_steps_and_iphone_is_first() {
+        assert_eq!(PhoneTab::default(), PhoneTab::IPhone);
+        let g = guide();
+        let i = install_text(PhoneTab::IPhone, &g);
+        let a = install_text(PhoneTab::Android, &g);
+        assert!(i.contains("Safari") && i.contains("Add to Home Screen") && i.contains("16.4"));
+        assert!(a.contains("Chrome") && a.contains("Install app") && !a.contains("Safari"));
+        assert!(i.contains("Note: ") && !a.contains("Note: "));
     }
 }
