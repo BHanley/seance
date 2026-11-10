@@ -89,6 +89,21 @@ done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/seance.icns"
 
 cp "$BIN" "$APP/Contents/MacOS/seance"
+# Lead Reply Sound files (thump.wav, gloop.wav). They are NOT in git: the
+# builder keeps them in SEANCE_SOUNDS_DIR (default ~/.config/seance-sounds) and
+# they are copied in here. Missing is a warning, not a failure; the menu then
+# falls back to Glass/Pop or silence.
+SOUNDS_SRC="${SEANCE_SOUNDS_DIR:-$HOME/.config/seance-sounds}"
+mkdir -p "$APP/Contents/Resources/sounds"
+for snd in thump gloop; do
+  if [[ -f "$SOUNDS_SRC/$snd.wav" ]]; then
+    cp "$SOUNDS_SRC/$snd.wav" "$APP/Contents/Resources/sounds/$snd.wav"
+  else
+    echo "warning: $SOUNDS_SRC/$snd.wav is missing; the Lead Reply Sound menu will lack $snd" >&2
+  fi
+done
+rmdir "$APP/Contents/Resources/sounds" 2>/dev/null || true
+
 mkdir -p "$APP/Contents/Resources/skills"
 cp -R "$ROOT/skills/seance-control" "$APP/Contents/Resources/skills/"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
