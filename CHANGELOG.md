@@ -17,6 +17,12 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.1] — 2026-11-09
+
+- The bundled Invoke no longer carries anyone's login, tailnet name or Mac ssh
+  target: those come from a `site.json` that only the owner's own server has.
+  With none, and not standalone, nobody is let in.
+
 ## [0.28.0] — 2026-11-09
 
 ### Added
