@@ -19,6 +19,20 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [0.28.2] — 2026-11-09
 
+### Added
+
+- Seance updates itself with one click. It checks a small JSON feed
+  (`{version, url, sha256, notes}`) when it opens and every hour, and a newer
+  build shows an "Update ready" bar. The button downloads the zip with `curl`
+  (no quarantine), checks its sha256 against the feed, swaps the new app into
+  the same place (the old one kept hidden until the new one is up), relaunches,
+  and restarts your sessions without asking again, since the click was the
+  consent. The feed is `seance-update-feed` in terminal.conf (`https://` or
+  `file://`); the build default is a local folder. The release step writes
+  `latest.json` next to the zip. Brian's own Seance (`seance-personal`) and thin
+  clients never update. A bad checksum, a failed download, a read-only folder or
+  an app run from the disk image leaves the old app as it was and says why.
+
 ### Fixed
 
 - The phone guide's text now wraps inside its card, and each step's buttons sit

@@ -48,6 +48,7 @@ mod stage;
 mod stage_parse;
 mod tiles;
 mod torches;
+mod updatebar;
 mod util;
 mod views;
 mod wall;
@@ -358,6 +359,8 @@ pub struct SeanceApp {
     first_run: first_run::FirstRun,
     /// Settings > "Use Seance on your phone".
     phone: phone::Phone,
+    /// The "Update ready" bar.
+    update: updatebar::UpdateUi,
     /// Host-provided menus (`menus[]` of ~/.config/seance/host.json) — chips
     /// that run a list command on click instead of being polled.
     host_menus: Vec<crate::host::HostMenuConfig>,
@@ -594,6 +597,7 @@ impl SeanceApp {
             quicklaunch_editor: None,
             first_run: first_run::FirstRun::Off,
             phone: phone::Phone::default(),
+            update: updatebar::UpdateUi::default(),
             host_menus: Vec::new(),
             host_menus_mtime: None,
             host_menus_checked: None,
@@ -609,6 +613,7 @@ impl SeanceApp {
         app.start_stage_ticker(cx);
         if !empty {
             app.start_first_run_check(cx);
+            app.start_update_checks(cx);
         }
         // Seed the prompt-library user file on the DAEMON machine (write-if-
         // missing) and pre-warm the cache so the palette has user prompts by
@@ -3431,6 +3436,7 @@ impl Render for SeanceApp {
             .children(self.render_quicklaunch_editor(cx))
             .children(self.render_first_run(cx))
             .children(self.render_phone(cx))
+            .children(self.render_update_bar(cx))
             .children(self.render_gui_menu(cx))
             .children(self.render_tasks_popover(window, cx))
             .children(match &self.drawer {

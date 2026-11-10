@@ -26,6 +26,7 @@
 //! | `seance-auto-sleep-idle` (e.g. `6h`), `seance-auto-sleep-skip` (circle slugs, comma separated) | daemon's auto-sleep of idle Claude panes |
 //! | `seance-done-sound`, `seance-done-sound-volume` | sound when a circle lead finishes out of sight |
 //! | `seance-lead-sprite.<circle-slug>` | a seed that swaps that circle's lead creature (GUI) |
+//! | `seance-update-feed` | where the standalone Mac app looks for updates: `https://` or `file://` JSON `{version, url, sha256, notes}`; the build default is a local folder |
 //! | `seance-new-circle-command` | the first pane of a circle made with Stage's "+ circle" (GUI; runs on the daemon's machine) |
 //! | `seance-desktop-notifications` (`true`/`false`, also `off`/`0`) | `false` posts no macOS/Linux banners at all; sounds and clearing stale banners are unaffected (read at launch) |
 //! | `seance-personal` (`true`/`false`, also `on`/`1`) | Brian's own setup, default off: the Chat view (needs Invoke), Invoke's task list on the lead-tasks card and the AFK chip. Each machine reads its own file |
@@ -106,6 +107,9 @@ pub struct TermConfig {
     /// `seance-new-circle-command`: what the first pane of a circle made with
     /// Stage's "+ circle" runs. None is a plain shell.
     pub seance_new_circle_command: Option<String>,
+    /// `seance-update-feed`: where the app looks for a newer build
+    /// (`https://` or `file://` JSON `{version, url, sha256, notes}`).
+    pub seance_update_feed: Option<String>,
     /// `seance-desktop-notifications = false` posts no banners.
     pub seance_desktop_notifications: bool,
     /// `seance-origin-gutter = false` hides the input-origin stripe.
@@ -142,6 +146,7 @@ impl Default for TermConfig {
             seance_auto_sleep_idle_ms: None,
             seance_auto_sleep_skip: Vec::new(),
             seance_new_circle_command: None,
+            seance_update_feed: None,
             seance_desktop_notifications: true,
             seance_origin_gutter: true,
             seance_personal: false,
@@ -292,6 +297,7 @@ fn apply(cfg: &mut TermConfig, key: &str, value: &str) {
         "seance-usage-file" => cfg.seance_usage_file = non_empty(value),
         "seance-needs-sound" => cfg.seance_needs_sound = non_empty(value),
         "seance-new-circle-command" => cfg.seance_new_circle_command = non_empty(value),
+        "seance-update-feed" => cfg.seance_update_feed = non_empty(value),
         "seance-desktop-notifications" => {
             cfg.seance_desktop_notifications = !matches!(value, "false" | "off" | "0")
         }

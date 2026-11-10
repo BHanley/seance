@@ -53,7 +53,23 @@ ditto -c -k --keepParent "$STAGE/app/Seance.app" "$ZIP"
 
 (cd "$OUT" && shasum -a 256 "$(basename "$DMG")" "$(basename "$ZIP")" > SHA256SUMS)
 
+# The update feed the app reads (`seance-update-feed`): the newest build, where
+# its zip is, and its checksum. Written on every build, next to the zip.
+ZIP_SHA="$(shasum -a 256 "$ZIP" | cut -d' ' -f1)"
+NOTES="${SEANCE_RELEASE_NOTES:-$(awk -v v="$VERSION" '
+  $0 ~ "^## \\[" v "\\]" { on=1; next }
+  on && /^## \[/ { exit }
+  on && /^- / { sub(/^- /, ""); print; exit }
+ ' "$ROOT/CHANGELOG.md")}"
+OUT_ABS="$(cd "$OUT" && pwd)"
+python3 - "$VERSION" "file://$OUT_ABS/Seance-$VERSION.zip" "$ZIP_SHA" "$NOTES" > "$OUT/latest.json" <<'PY'
+import json, sys
+version, url, sha, notes = sys.argv[1:5]
+print(json.dumps({"version": version, "url": url, "sha256": sha, "notes": notes}, indent=2))
+PY
+
 echo
 echo "release $VERSION:"
 ls -lh "$DMG" "$ZIP" | awk '{print "  " $5 "  " $9}'
 echo "  $OUT/SHA256SUMS"
+echo "  $OUT/latest.json"

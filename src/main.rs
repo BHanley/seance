@@ -34,6 +34,7 @@ mod remote_term_view;
 mod replayexport;
 mod runtime;
 mod scratchpad;
+mod selfupdate;
 mod skin;
 mod state;
 mod subscriptions_pref;
@@ -103,6 +104,50 @@ fn main() {
             }
             Err(e) => {
                 eprintln!("[seance] ensure-daemon failed: {e:#}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // `seance _self-update [--feed URL]` — headless twin of the "Update ready"
+    // bar's button: ask the feed, and when it names a newer build download it,
+    // check it, and swap it into the app this binary lives in. No relaunch. For
+    // dry runs against a scratch copy; exits 3 when there is nothing newer.
+    if args.get(1).map(String::as_str) == Some("_self-update") {
+        let feed = args
+            .iter()
+            .position(|a| a == "--feed")
+            .and_then(|i| args.get(i + 1).cloned())
+            .unwrap_or_else(selfupdate::feed_url);
+        let current = env!("CARGO_PKG_VERSION");
+        match selfupdate::check(current, &feed) {
+            Ok(None) => {
+                eprintln!("[seance] {current} is the newest the feed knows");
+                std::process::exit(3);
+            }
+            Ok(Some(found)) => {
+                let Some(app) = selfupdate::app_path() else {
+                    eprintln!("[seance] not running from an app, nothing to replace");
+                    std::process::exit(1);
+                };
+                match selfupdate::apply(&found, &app) {
+                    Ok(()) => {
+                        selfupdate::grant_consent();
+                        eprintln!(
+                            "[seance] updated {current} -> {} at {}",
+                            found.version,
+                            app.display()
+                        );
+                        return;
+                    }
+                    Err(e) => {
+                        eprintln!("[seance] update failed: {e:#}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("[seance] could not read the update feed: {e:#}");
                 std::process::exit(1);
             }
         }

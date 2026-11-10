@@ -35,7 +35,7 @@ pub(crate) fn parse_version(v: &str) -> Option<Vec<u64>> {
 }
 
 /// True when `a` is strictly older than `b` (missing parts count as 0).
-fn is_older(a: &str, b: &str) -> bool {
+pub(crate) fn is_older(a: &str, b: &str) -> bool {
     let (Some(mut a), Some(mut b)) = (parse_version(a), parse_version(b)) else {
         return false;
     };
@@ -232,6 +232,10 @@ pub fn restart_sessions(old_build: &str) -> Result<usize> {
 /// True only on an explicit click of the restart button.
 #[cfg(target_os = "macos")]
 pub fn confirm_restart() -> bool {
+    // Pressing Update was the consent: restart the sessions without asking.
+    if crate::selfupdate::take_consent() {
+        return true;
+    }
     let script = "display dialog \"Seance was updated. Restart sessions to finish.\" \
         with title \"Seance\" buttons {\"Not now\", \"Restart sessions\"} \
         default button \"Restart sessions\" cancel button \"Not now\"";
