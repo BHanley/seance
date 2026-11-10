@@ -56,6 +56,10 @@ pub struct SubscriptionsPref {
     /// machine too. Opening the pane clears it.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub later: BTreeSet<String>,
+    /// Circles whose Chat file panel the human closed. Open is the default, so
+    /// only the exceptions are stored. Per circle, shared like `docked`.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub files_hidden: BTreeSet<String>,
     /// The rail's spaces (`seance_core::spaces`). `pinned` above is the ★ set.
     #[serde(default, skip_serializing_if = "seance_core::spaces::Spaces::is_empty")]
     pub spaces: seance_core::spaces::Spaces,
@@ -149,10 +153,11 @@ impl SubscriptionsPref {
     /// Drop names the daemon no longer knows about (killed / renamed circles),
     /// so the file doesn't accrete forever. Returns true when it changed.
     pub fn prune(&mut self, known: &BTreeSet<String>) -> bool {
-        let before = (self.seen.len(), self.pinned.len());
+        let before = (self.seen.len(), self.pinned.len(), self.files_hidden.len());
         self.seen.retain(|w| known.contains(w));
         self.pinned.retain(|w| known.contains(w));
-        before != (self.seen.len(), self.pinned.len())
+        self.files_hidden.retain(|w| known.contains(w));
+        before != (self.seen.len(), self.pinned.len(), self.files_hidden.len())
     }
 }
 

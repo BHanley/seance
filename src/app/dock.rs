@@ -15,7 +15,50 @@ use crate::theme::SeancePalette;
 use super::util::tip;
 use super::{Drawer, SeanceApp};
 
+/// The circle whose files the side panel shows. Chat shows only its open
+/// circle's, never the one Classic last selected; with no chat open, nothing.
+fn dock_circle<'a>(
+    chat: bool,
+    chat_open: Option<&'a str>,
+    selected: Option<&'a str>,
+) -> Option<&'a str> {
+    if chat {
+        chat_open
+    } else {
+        selected
+    }
+}
+
+/// Chat's files button shows only for a circle that has files.
+fn files_chip_shown(count: usize) -> bool {
+    count > 0
+}
+
 impl SeanceApp {
+    /// Docked files in a circle: the count on Chat's "files" button.
+    pub(super) fn docked_count(&self, ws: &str) -> usize {
+        self.docked_in(ws).len()
+    }
+
+    /// Chat's file panel is open unless this circle's was closed.
+    pub(super) fn chat_files_open(&self, ws: &str) -> bool {
+        !self.subs_pref.files_hidden.contains(ws)
+    }
+
+    pub(super) fn toggle_chat_files(&mut self, ws: &str, cx: &mut Context<Self>) {
+        if !self.subs_pref.files_hidden.remove(ws) {
+            self.subs_pref.files_hidden.insert(ws.to_string());
+        }
+        self.save_arrangement();
+        cx.notify();
+    }
+
+    /// The label for Chat's files button, None when the circle has no files.
+    pub(super) fn chat_files_chip(&self, ws: &str) -> Option<String> {
+        let n = self.docked_count(ws);
+        files_chip_shown(n).then(|| format!("files {n}"))
+    }
+
     pub(super) fn is_docked(&self, p: &Pane) -> bool {
         !p.tiled
             && p.popped.is_none()
@@ -100,7 +143,15 @@ impl SeanceApp {
     }
 
     pub(super) fn render_dock_panel(&self, cx: &Context<Self>) -> Option<gpui::AnyElement> {
-        let ws = self.selected_workspace.as_deref()?;
+        let chat = self.view.mode == super::views::ViewMode::Chat;
+        let ws = dock_circle(
+            chat,
+            self.chat.selected.as_deref(),
+            self.selected_workspace.as_deref(),
+        )?;
+        if chat && !self.chat_files_open(ws) {
+            return None;
+        }
         let docked = self.docked_in(ws);
         let open = self
             .dock_tab
@@ -195,5 +246,41 @@ impl SeanceApp {
                 )
                 .into_any_element(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chat_shows_its_own_circles_files_not_the_selected_one() {
+        assert_eq!(
+            dock_circle(true, Some("seance"), Some("pm")),
+            Some("seance")
+        );
+        assert_eq!(dock_circle(true, None, Some("pm")), None);
+        assert_eq!(dock_circle(false, Some("seance"), Some("pm")), Some("pm"));
+    }
+
+    #[test]
+    fn the_files_button_hides_with_no_files() {
+        assert!(!files_chip_shown(0));
+        assert!(files_chip_shown(2));
+    }
+
+    #[test]
+    fn closed_state_is_per_circle_and_survives_the_blob() {
+        let mut pref = crate::subscriptions_pref::SubscriptionsPref::default();
+        pref.files_hidden.insert("pm".into());
+        let back =
+            crate::subscriptions_pref::parse(&crate::subscriptions_pref::encode(&pref).unwrap())
+                .unwrap();
+        assert!(back.files_hidden.contains("pm"));
+        assert!(!back.files_hidden.contains("seance"));
+        let known = ["seance".to_string()].into_iter().collect();
+        let mut back = back;
+        assert!(back.prune(&known), "a gone circle's flag is swept");
+        assert!(back.files_hidden.is_empty());
     }
 }
