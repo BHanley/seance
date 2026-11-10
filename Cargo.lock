@@ -4995,6 +4995,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
+
+[[package]]
 name = "quick-error"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5842,7 +5848,7 @@ checksum = "1c107b6f4780854c8b126e228ea8869f4d7b71260f962fefb57b996b8959ba6b"
 
 [[package]]
 name = "seance"
-version = "0.27.9"
+version = "0.28.0"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -5856,6 +5862,7 @@ dependencies = [
  "libc",
  "markdown",
  "notify 8.2.0",
+ "qrcode",
  "rand 0.8.7",
  "regex",
  "seance-core",
@@ -5867,7 +5874,7 @@ dependencies = [
 
 [[package]]
 name = "seance-core"
-version = "0.27.9"
+version = "0.28.0"
 dependencies = [
  "base64",
  "flate2",
@@ -5878,7 +5885,7 @@ dependencies = [
 
 [[package]]
 name = "seance-web"
-version = "0.27.9"
+version = "0.28.0"
 dependencies = [
  "base64",
  "flate2",

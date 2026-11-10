@@ -40,6 +40,7 @@ mod lead_tasks;
 mod menus;
 mod pads;
 mod palette;
+mod phone;
 mod quicklaunch;
 mod sidebar;
 mod sprite;
@@ -355,6 +356,8 @@ pub struct SeanceApp {
     /// Open quicklaunch create/edit modal (None = closed).
     quicklaunch_editor: Option<quicklaunch::QuickLaunchEditor>,
     first_run: first_run::FirstRun,
+    /// Settings > "Use Seance on your phone".
+    phone: phone::Phone,
     /// Host-provided menus (`menus[]` of ~/.config/seance/host.json) — chips
     /// that run a list command on click instead of being polled.
     host_menus: Vec<crate::host::HostMenuConfig>,
@@ -590,6 +593,7 @@ impl SeanceApp {
             quicklaunch_checked: None,
             quicklaunch_editor: None,
             first_run: first_run::FirstRun::Off,
+            phone: phone::Phone::default(),
             host_menus: Vec::new(),
             host_menus_mtime: None,
             host_menus_checked: None,
@@ -3179,6 +3183,9 @@ impl Render for SeanceApp {
                     cx.stop_propagation();
                 }
             }))
+            .on_action(cx.listener(|this, _: &ActPhoneGuide, _, cx| {
+                this.open_phone_guide(cx);
+            }))
             .on_action(cx.listener(|this, act: &ActToggleTiled, _, cx| {
                 this.toggle_tiled(&act.0, cx);
             }))
@@ -3423,6 +3430,7 @@ impl Render for SeanceApp {
             .children(self.render_palette(cx))
             .children(self.render_quicklaunch_editor(cx))
             .children(self.render_first_run(cx))
+            .children(self.render_phone(cx))
             .children(self.render_gui_menu(cx))
             .children(self.render_tasks_popover(window, cx))
             .children(match &self.drawer {

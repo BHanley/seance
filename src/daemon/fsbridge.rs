@@ -184,6 +184,18 @@ fn run_inner(op: FsOp, engine: &SharedEngine) -> Result<Value, String> {
                 .map_err(|e| format!("{e:#}"))?;
             Ok(json!({ "pane": pane, "claude": claude }))
         }
+        FsOp::InvokeGuide => {
+            Ok(serde_json::to_value(crate::invoke::guide_now()).map_err(|e| e.to_string())?)
+        }
+        FsOp::InvokeServe { on } => {
+            use crate::invoke::ServeOutcome;
+            Ok(match crate::invoke::serve(on) {
+                ServeOutcome::On(url) => json!({ "outcome": "on", "url": url }),
+                ServeOutcome::Off => json!({ "outcome": "off" }),
+                ServeOutcome::NeedsEnable(url) => json!({ "outcome": "needs_enable", "url": url }),
+                ServeOutcome::Failed(m) => json!({ "outcome": "failed", "message": m }),
+            })
+        }
         FsOp::HostSelect { widget, item } => {
             // Fresh load: select is rare and config may have changed on disk.
             let mut host = HostState::load();

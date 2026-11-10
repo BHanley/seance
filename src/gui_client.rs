@@ -623,6 +623,22 @@ impl GuiClient {
         ))
     }
 
+    /// The "Use Seance on your phone" steps, checked on the daemon's Mac.
+    pub fn invoke_guide(&self) -> Result<serde_json::Value> {
+        self.fs_call(
+            crate::runtime::protocol::FsOp::InvokeGuide,
+            Duration::from_secs(30),
+        )
+    }
+
+    /// Turn the phone link on or off; see `FsOp::InvokeServe` for the answer.
+    pub fn invoke_serve(&self, on: bool) -> Result<serde_json::Value> {
+        self.fs_call(
+            crate::runtime::protocol::FsOp::InvokeServe { on },
+            Duration::from_secs(40),
+        )
+    }
+
     /// The pane Chat talks to in `workspace` when no lead was set: its Claude.
     pub fn local_lead(&self, workspace: &str) -> Result<Option<String>> {
         let v = self.fs_call(

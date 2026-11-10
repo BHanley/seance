@@ -169,6 +169,8 @@ fn run_daemon_inner(args: Vec<String>) -> Result<()> {
     modewatch::start_mode_poller(Arc::clone(&engine));
     // Idle Claude panes stop holding RAM (terminal.conf `seance-auto-sleep-idle`).
     sleepsweep::start_sleep_sweeper(Arc::clone(&engine));
+    // Standalone Mac build: the phone chat (Invoke) runs under this daemon.
+    crate::invoke::start_supervisor();
     agentsessions::start_agent_session_watcher(Arc::clone(&engine));
     // `send --queue`: deliver queued tasks when their pane goes idle.
     {

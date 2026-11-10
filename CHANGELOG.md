@@ -17,6 +17,30 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.0] — 2026-11-09
+
+### Added
+
+- Invoke for coworkers, inside the Mac app. Invoke is the phone chat for
+  circles (a web app with push notifications). On the standalone Mac build the
+  local daemon starts it on 127.0.0.1 from a bundled Python runtime and stops
+  it with the daemon; `seance-personal = true` never starts it. The phone
+  reaches it over the owner's own Tailscale account.
+- Settings > "Use Seance on Your Phone": a guide where each step checks itself
+  with a green tick (Tailscale installed, signed in, a phone on the account,
+  the phone link, then a QR code and the address). "Turn on phone link" runs
+  `tailscale serve` for Invoke and shows Tailscale's one-time HTTPS prompt when
+  it comes up; "Turn off" undoes it. The phone reaches Seance only while the
+  Mac is awake.
+- `ctl lead --json` carries `claude`: the circle's lead that was set, else the
+  Claude running there (not a plain shell that merely came first).
+- The standalone app puts a `seance` link ahead of PATH for its panes, so
+  `seance ctl finish` works in a drag-installed app.
+- Build: `SEANCE_INVOKE_DIR` and `SEANCE_PYTHON_DIR` (see
+  `scripts/bundle-macos.sh` and `scripts/prepare-invoke-python.sh`) bundle
+  Invoke into the app. Unset, the app is built without it; set but missing,
+  the build stops.
+
 ## [0.27.9] — 2026-11-09
 
 ### Added

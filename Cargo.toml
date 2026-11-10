@@ -4,7 +4,7 @@ members = ["crates/seance-core", "crates/seance-web"]
 exclude = ["deps"]
 
 [workspace.package]
-version = "0.27.9"
+version = "0.28.0"
 edition = "2021"
 
 [workspace.dependencies]
@@ -50,6 +50,7 @@ serde_json = { workspace = true }
 notify = "8"
 shellexpand = "3"
 libc = "0.2"
+qrcode = { version = "0.14", default-features = false }
 base64 = { workspace = true }
 # `seance web` bridge: websocket ↔ unix-socket proxy + static file server.
 tungstenite = "0.24"

@@ -312,6 +312,15 @@ impl Engine {
         // every interactive pane otherwise.
         #[cfg(target_os = "macos")]
         env.insert("BASH_SILENCE_DEPRECATION_WARNING".into(), "1".into());
+        // The standalone Mac app has no `seance` on PATH: its link dir goes
+        // first (Brian's own Seance keeps the PATH it has).
+        #[cfg(target_os = "macos")]
+        if !crate::term_config::personal() {
+            if let Some(cli) = crate::daemon::local_copy::cli_dir().filter(|d| d.is_dir()) {
+                let rest = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into());
+                env.insert("PATH".into(), format!("{}:{rest}", cli.display()));
+            }
+        }
         env.insert(
             "SEANCE_SOCKET".into(),
             crate::control::bind_socket_path()

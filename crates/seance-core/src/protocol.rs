@@ -458,6 +458,15 @@ pub enum FsOp {
     StartClaude {
         workspace: String,
     },
+    /// Where each step of "Use Seance on your phone" stands (Tailscale
+    /// installed, signed in, a phone seen, the phone link, the address).
+    /// Runs `tailscale`, daemon-side. → the guide object.
+    InvokeGuide,
+    /// Turn the phone link (`tailscale serve` for Invoke) on or off.
+    /// → `{outcome: "on"|"off"|"needs_enable"|"failed", url, message}`.
+    InvokeServe {
+        on: bool,
+    },
     /// Run a shell command daemon-side (`sh -lc`). Same trust domain as the
     /// control plane (which already spawns arbitrary commands). Output is
     /// truncated to 64KiB per stream. → `{status, stdout, stderr}`.

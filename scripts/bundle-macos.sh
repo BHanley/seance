@@ -95,6 +95,27 @@ iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/seance.icns"
 cp "$BIN" "$APP/Contents/MacOS/seance"
 mkdir -p "$APP/Contents/Resources/skills"
 cp -R "$ROOT/skills/seance-control" "$APP/Contents/Resources/skills/"
+
+# Invoke (the phone chat), optional. Its code is not part of this repository:
+# the builder points SEANCE_INVOKE_DIR at a folder holding `seance-chat` and
+# `seance-chat-web/`, and SEANCE_PYTHON_DIR at a runtime made by
+# scripts/prepare-invoke-python.sh. Unset, the app is built without it. Set but
+# wrong, the build stops here rather than ship an app that silently lacks it.
+if [[ -n "${SEANCE_INVOKE_DIR:-}${SEANCE_PYTHON_DIR:-}" ]]; then
+  [[ -f "${SEANCE_INVOKE_DIR:-}/seance-chat" ]] || {
+    echo "SEANCE_INVOKE_DIR='${SEANCE_INVOKE_DIR:-}' has no seance-chat file" >&2; exit 1; }
+  [[ -d "$SEANCE_INVOKE_DIR/seance-chat-web" ]] || {
+    echo "SEANCE_INVOKE_DIR='$SEANCE_INVOKE_DIR' has no seance-chat-web folder" >&2; exit 1; }
+  [[ -x "${SEANCE_PYTHON_DIR:-}/bin/python3" ]] || {
+    echo "SEANCE_PYTHON_DIR='${SEANCE_PYTHON_DIR:-}' has no bin/python3 (run scripts/prepare-invoke-python.sh)" >&2; exit 1; }
+  INV="$APP/Contents/Resources/invoke"
+  mkdir -p "$INV"
+  cp -R "$SEANCE_PYTHON_DIR" "$INV/python"
+  cp "$SEANCE_INVOKE_DIR/seance-chat" "$INV/seance-chat"
+  cp -R "$SEANCE_INVOKE_DIR/seance-chat-web" "$INV/seance-chat-web"
+  chmod +x "$INV/seance-chat"
+  echo "bundled Invoke ($(du -sh "$INV" | cut -f1))"
+fi
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 cat > "$APP/Contents/Info.plist" <<PLIST

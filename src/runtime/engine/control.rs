@@ -505,6 +505,10 @@ impl Engine {
                     "workspace": circle,
                     "workspace_name": self.workspace_label(&circle),
                     "lead": self.effective_lead(&circle),
+                    // The circle's Claude: the lead that was set, else the
+                    // one running there (a plain shell that merely came first
+                    // is not one). What Invoke talks to on the standalone Mac.
+                    "claude": self.local_lead(&circle),
                     "explicit": self.comms.leads.contains_key(&circle),
                     "former_labels": self.comms.former_labels.get(&circle),
                     "panes": members,

@@ -1562,3 +1562,37 @@ fn a_new_circles_first_pane_is_claude_and_its_lead() {
         assert!(!eng.comms.leads.contains_key("circle-3"));
     });
 }
+
+#[test]
+fn ctl_lead_names_the_circles_claude_apart_from_the_first_pane() {
+    with_test_state_dir("lead-claude-field", || {
+        let scratch = temp_scratch("lead-claude-field");
+        let (mut eng, _rx) = Engine::bare_for_test(scratch.clone());
+        let shell = eng.push_stub_pane("shell", "lab");
+        let lead = |eng: &mut Engine| {
+            let r = eng.handle_control(ControlRequest::Lead {
+                workspace: Some("lab".into()),
+                pane: None,
+                scope: None,
+                from: None,
+            });
+            assert!(r.ok, "{:?}", r.error);
+            r.data.unwrap()
+        };
+        // Only a shell: it is the lead by the old rule, and there is no Claude.
+        let d = lead(&mut eng);
+        assert_eq!(d["lead"], shell.as_str());
+        assert!(d["claude"].is_null());
+        // A Claude joins: the lead (earliest pane) is still the shell, but
+        // Invoke is pointed at the Claude.
+        let cl = eng.push_stub_pane("claude", "lab");
+        {
+            let p = eng.panes.iter_mut().find(|p| p.slug == cl).unwrap();
+            p.command = "claude".into();
+            p.agent_session = Some("9f3c1a2b-0000-4000-a000-0000000000d1".into());
+        }
+        let d = lead(&mut eng);
+        assert_eq!(d["lead"], shell.as_str());
+        assert_eq!(d["claude"], cl.as_str());
+    });
+}

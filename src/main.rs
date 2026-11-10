@@ -17,6 +17,7 @@ mod events;
 mod fileview;
 mod gui_client;
 mod host;
+mod invoke;
 mod latency_probe;
 mod launch;
 mod looks;
@@ -435,6 +436,7 @@ fn install_app_menu(cx: &mut gpui::App) {
     use gpui::{Menu, MenuItem};
 
     cx.set_menus([Menu::new("Seance").items([
+        MenuItem::action("Use Seance on Your Phone…", app::actions::ActPhoneGuide),
         MenuItem::action("Restart Seance", app::actions::ActRestart),
         MenuItem::action("Quit Seance", app::actions::ActQuit),
     ])]);

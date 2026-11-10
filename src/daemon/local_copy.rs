@@ -117,6 +117,22 @@ fn in_use(path: &Path) -> bool {
         .unwrap_or(true)
 }
 
+/// `~/Library/Application Support/Seance/cli`: holds a `seance` link to the
+/// current daemon copy, put ahead of PATH for panes (and Invoke), because a
+/// drag-installed app has no `seance` on PATH and Claude is told to run
+/// `seance ctl finish`.
+pub fn cli_dir() -> Option<PathBuf> {
+    Some(bin_dir()?.parent()?.join("cli"))
+}
+
+fn link_cli(dest: &Path) {
+    let Some(dir) = cli_dir() else { return };
+    let _ = std::fs::create_dir_all(&dir);
+    let link = dir.join("seance");
+    let _ = std::fs::remove_file(&link);
+    let _ = std::os::unix::fs::symlink(dest, &link);
+}
+
 fn bin_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").filter(|h| !h.is_empty())?;
     Some(PathBuf::from(home).join("Library/Application Support/Seance/bin"))
@@ -130,6 +146,11 @@ pub fn local_exe() -> Result<PathBuf> {
     let exe = std::env::current_exe()?;
     if !cfg!(target_os = "macos") || !in_bundle(&exe) {
         return Ok(exe);
+    }
+    // Invoke (the phone chat) is carried inside the app: unpack it beside the
+    // daemon copy so the app itself is never what runs.
+    if !crate::term_config::personal() {
+        crate::invoke::stage_from_bundle(&exe);
     }
     match ensure_copy(&exe) {
         Ok(copy) => Ok(copy),
@@ -149,6 +170,9 @@ fn ensure_copy(exe: &Path) -> Result<PathBuf> {
     // enough to reuse a copy.
     if !(dest.is_file() && same_bytes(exe, &dest)) {
         install_copy(exe, &dest)?;
+    }
+    if !crate::term_config::personal() {
+        link_cli(&dest);
     }
     let names: Vec<String> = std::fs::read_dir(&dir)?
         .flatten()
