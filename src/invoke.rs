@@ -48,6 +48,16 @@ fn port_is_free(port: u16) -> bool {
 
 // ---- Tailscale -------------------------------------------------------------
 
+/// One of the owner's phones on the tailnet.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PhoneInfo {
+    /// Its Tailscale name (the MagicDNS label, else the host name).
+    pub name: String,
+    /// "iOS" or "Android".
+    pub os: String,
+    pub online: bool,
+}
+
 /// What `tailscale status --json` says that the guide needs.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct TsStatus {
@@ -60,6 +70,8 @@ pub struct TsStatus {
     /// Phones (iOS or Android) on the same account.
     pub phones: u32,
     pub phones_online: u32,
+    /// The same phones by name, online ones first.
+    pub phone_list: Vec<PhoneInfo>,
 }
 
 pub fn parse_status(v: &Value) -> TsStatus {
@@ -83,12 +95,32 @@ pub fn parse_status(v: &Value) -> TsStatus {
         for p in peers.values() {
             let phone = matches!(p["OS"].as_str(), Some("iOS" | "android"));
             if phone && p["UserID"].as_i64() == Some(uid) {
+                let online = p["Online"] == true;
                 out.phones += 1;
-                if p["Online"] == true {
+                if online {
                     out.phones_online += 1;
                 }
+                let name = p["DNSName"]
+                    .as_str()
+                    .and_then(|d| d.split('.').next())
+                    .filter(|n| !n.is_empty())
+                    .or_else(|| p["HostName"].as_str().filter(|n| !n.is_empty()))
+                    .unwrap_or("a phone")
+                    .to_string();
+                let os = match p["OS"].as_str() {
+                    Some("iOS") => "iOS",
+                    _ => "Android",
+                };
+                out.phone_list.push(PhoneInfo {
+                    name,
+                    os: os.into(),
+                    online,
+                });
             }
         }
+        // Online first, then by name, so the list does not jump about.
+        out.phone_list
+            .sort_by(|a, b| b.online.cmp(&a.online).then_with(|| a.name.cmp(&b.name)));
     }
     out
 }
@@ -214,6 +246,7 @@ pub struct Guide {
     /// detected otherwise: the guide offers a manual "Done").
     pub phones: u32,
     pub phones_online: u32,
+    pub phone_list: Vec<PhoneInfo>,
     /// (d) the phone link (`tailscale serve`) points at Invoke.
     pub link_on: bool,
     /// (e) the address to open on the phone.
@@ -241,6 +274,7 @@ pub fn guide_from(
         g.login = s.login.clone();
         g.phones = s.phones;
         g.phones_online = s.phones_online;
+        g.phone_list = s.phone_list.clone();
     }
     if port != 0 {
         g.url = serve.and_then(|v| serve_url(v, port));

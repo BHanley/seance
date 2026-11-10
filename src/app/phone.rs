@@ -11,6 +11,10 @@ use crate::theme::SeancePalette;
 
 use super::SeanceApp;
 
+/// Under the QR code: a phone that is not on the tailnet can't open the link.
+pub(super) const SCAN_NOTE: &str =
+    "Scan with a phone listed in step 3. Other phones can't open it.";
+
 /// The Tailscale download page for the Mac.
 const DOWNLOAD_URL: &str = "https://tailscale.com/download/mac";
 
@@ -69,6 +73,32 @@ pub(super) struct Step {
     pub note: Option<String>,
 }
 
+/// Step 3's words: each phone on the owner's account by name and system, so
+/// the phone in your hand can be told from another one that is online.
+pub(super) fn phones_text(phones: &[crate::invoke::PhoneInfo], phone_done: bool) -> String {
+    let mut lines: Vec<String> = phones
+        .iter()
+        .map(|p| {
+            if p.online {
+                format!("{} ({}) is online.", p.name, p.os)
+            } else {
+                format!("{} ({}), offline: open Tailscale on it.", p.name, p.os)
+            }
+        })
+        .collect();
+    if !phones.iter().any(|p| p.online) {
+        lines.insert(0, "No phone is on your Tailscale yet.".into());
+        if !phone_done {
+            lines.push(
+                "Install Tailscale on your phone and sign in with the same account. If \
+                 it still does not show here, press Done once it is signed in."
+                    .into(),
+            );
+        }
+    }
+    lines.join("\n")
+}
+
 /// The four steps (the QR step is drawn after them once the link is on).
 pub(super) fn steps(
     g: &Guide,
@@ -121,17 +151,7 @@ pub(super) fn steps(
         Step {
             done: phone_ok,
             title: "3. Tailscale on your phone",
-            body: if g.phones_online > 0 {
-                format!(
-                    "{} of your phones {} online.",
-                    g.phones_online,
-                    if g.phones_online == 1 { "is" } else { "are" }
-                )
-            } else {
-                "Install Tailscale on your phone and sign in with the same account. Seance \
-                 can't see this step unless the phone is online, so press Done when it is."
-                    .into()
-            },
+            body: phones_text(&g.phone_list, phone_done),
             actions: if g.phones_online == 0 && !phone_done {
                 vec![Act::Done]
             } else {
@@ -483,6 +503,13 @@ impl SeanceApp {
                             .text_xs()
                             .text_color(SeancePalette::text())
                             .child(url),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .text_xs()
+                            .text_color(SeancePalette::text_dim())
+                            .child(SCAN_NOTE),
                     ),
             );
         }
@@ -646,6 +673,66 @@ mod tests {
             ..guide()
         };
         assert!(steps(&g, true, false, None, false)[3].actions.is_empty());
+    }
+
+    fn status_with(peers: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "BackendState": "Running",
+            "Self": { "UserID": 7, "DNSName": "mac.tail0000.ts.net." },
+            "User": { "7": { "LoginName": "alice@example.com" } },
+            "Peer": peers
+        })
+    }
+
+    fn wording(peers: serde_json::Value, done: bool) -> String {
+        let s = crate::invoke::parse_status(&status_with(peers));
+        phones_text(&s.phone_list, done)
+    }
+
+    /// Brian's live test: one phone online was his Android while he scanned with
+    /// a work iPhone that was not on the tailnet. Step 3 now names the phones.
+    #[test]
+    fn step_three_names_the_phones_it_sees() {
+        // None on the account (another account's phone and a laptop don't count).
+        let none = serde_json::json!({
+            "a": { "UserID": 9, "OS": "iOS", "Online": true, "DNSName": "other.tail0000.ts.net." },
+            "b": { "UserID": 7, "OS": "macOS", "Online": true, "DNSName": "laptop.tail0000.ts.net." }
+        });
+        let t = wording(none.clone(), false);
+        assert!(t.starts_with("No phone is on your Tailscale yet."), "{t}");
+        assert!(!t.contains("other") && !t.contains("laptop"));
+        // Once the person says Done, the install nag goes.
+        assert_eq!(wording(none, true), "No phone is on your Tailscale yet.");
+
+        // One online.
+        let one = serde_json::json!({
+            "a": { "UserID": 7, "OS": "android", "Online": true, "DNSName": "nostradamus.tail0000.ts.net." }
+        });
+        assert_eq!(wording(one, false), "nostradamus (Android) is online.");
+
+        // One online and one offline, online first.
+        let two = serde_json::json!({
+            "a": { "UserID": 7, "OS": "iOS", "Online": false, "DNSName": "work-iphone.tail0000.ts.net." },
+            "b": { "UserID": 7, "OS": "android", "Online": true, "DNSName": "nostradamus.tail0000.ts.net." }
+        });
+        assert_eq!(
+            wording(two, false),
+            "nostradamus (Android) is online.\nwork-iphone (iOS), offline: open Tailscale on it."
+        );
+
+        // Only an offline phone: told so, and none counts as online.
+        let off = serde_json::json!({
+            "a": { "UserID": 7, "OS": "iOS", "Online": false, "HostName": "Work iPhone" }
+        });
+        let t = wording(off, true);
+        assert_eq!(
+            t,
+            "No phone is on your Tailscale yet.\nWork iPhone (iOS), offline: open Tailscale on it."
+        );
+        assert_eq!(
+            SCAN_NOTE,
+            "Scan with a phone listed in step 3. Other phones can't open it."
+        );
     }
 
     #[test]

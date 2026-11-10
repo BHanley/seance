@@ -17,6 +17,16 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.4] — 2026-11-09
+
+### Changed
+
+- The phone guide's step 3 names the phones it sees on your Tailscale account
+  ("nostradamus (Android) is online", "work-iphone (iOS), offline: open
+  Tailscale on it", or "No phone is on your Tailscale yet."), so a phone that
+  isn't on the tailnet can't be mistaken for one that is. Under the QR code:
+  "Scan with a phone listed in step 3. Other phones can't open it."
+
 ## [0.28.3] — 2026-11-09
 
 - Test build for one-click updates (no code changes).
