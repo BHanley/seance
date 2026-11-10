@@ -17,6 +17,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.10] — 2026-11-10
+
+### Added
+- Seance menu: **Lead Reply Sound**. Choose Thump (the new default, ships inside the app), Gloop, macOS's Glass or Pop, Custom… (any wav, aiff, mp3 or m4a) or None. A pick plays a short preview and takes effect at once. It is the sound a circle's lead plays when it finishes while you look elsewhere; the needs-you sound and the terminal bell are unchanged. A choice made here wins over `seance-done-sound` in terminal.conf.
+
 ## [0.28.8] — 2026-11-10
 
 ### Changed
