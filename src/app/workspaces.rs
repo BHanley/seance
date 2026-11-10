@@ -751,6 +751,39 @@ impl SeanceApp {
             .any(|p| p.workspace == workspace && !p.asleep && self.pane_is_live_working(&p.slug))
     }
 
+    /// Does a pane in this circle ask for the human right now (live status)?
+    pub(super) fn workspace_needs_human(&self, workspace: &str) -> bool {
+        self.panes.iter().any(|p| {
+            p.workspace == workspace
+                && matches!(
+                    self.statuses.get(&p.slug).map(|s| s.state.as_str()),
+                    Some("needs-human") | Some("blocked") | Some("risky")
+                )
+        })
+    }
+
+    /// Does this circle's creature dance? Every creature in the app asks this
+    /// one question: any pane in the circle mid-turn (the lead, a builder or a
+    /// worker, whichever machine it runs on), unless a pane needs the human,
+    /// which wins. `also_busy` is a busy answer from another source (Chat's
+    /// server) for the same circle.
+    pub(super) fn circle_dancing(&self, workspace: &str, also_busy: bool) -> bool {
+        let facts: Vec<PaneFact> = self
+            .panes
+            .iter()
+            .filter(|p| p.workspace == workspace)
+            .map(|p| PaneFact {
+                asleep: p.asleep,
+                busy: self.pane_is_live_working(&p.slug),
+                needs: matches!(
+                    self.statuses.get(&p.slug).map(|s| s.state.as_str()),
+                    Some("needs-human") | Some("blocked") | Some("risky")
+                ),
+            })
+            .collect();
+        dancing_from(&facts, also_busy)
+    }
+
     /// Live-busy, as the DAEMON sees it: braille OSC title spinner, or
     /// agent-owned status.
     ///
@@ -1593,5 +1626,82 @@ mod tests {
             recency_rank(3_599_999) < recency_rank(3_600_000),
             "59m < 1h"
         );
+    }
+}
+
+/// What the dance rule needs to know about one pane of a circle.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PaneFact {
+    pub asleep: bool,
+    pub busy: bool,
+    pub needs: bool,
+}
+
+/// The rule, pure: a circle dances when any awake pane is busy (or `also_busy`
+/// says so), and never while any pane needs the human.
+pub(super) fn dancing_from(panes: &[PaneFact], also_busy: bool) -> bool {
+    let needs = panes.iter().any(|p| p.needs);
+    let busy = also_busy || panes.iter().any(|p| p.busy && !p.asleep);
+    busy && !needs
+}
+
+#[cfg(test)]
+mod dance_tests {
+    use super::*;
+
+    fn pane(busy: bool, needs: bool) -> PaneFact {
+        PaneFact {
+            asleep: false,
+            busy,
+            needs,
+        }
+    }
+
+    #[test]
+    fn an_idle_lead_with_a_busy_builder_dances() {
+        assert!(dancing_from(
+            &[pane(false, false), pane(true, false)],
+            false
+        ));
+    }
+
+    #[test]
+    fn all_idle_is_still() {
+        assert!(!dancing_from(
+            &[pane(false, false), pane(false, false)],
+            false
+        ));
+        assert!(!dancing_from(&[], false));
+    }
+
+    #[test]
+    fn needs_you_wins_over_a_busy_pane() {
+        assert!(!dancing_from(
+            &[pane(false, true), pane(true, false)],
+            false
+        ));
+        assert!(!dancing_from(&[pane(true, true)], true));
+    }
+
+    #[test]
+    fn a_busy_remote_pane_counts_like_any_other() {
+        // Remote (Mac) panes sit in the same pane list with the daemon's busy flag.
+        assert!(dancing_from(&[pane(true, false)], false));
+    }
+
+    #[test]
+    fn a_sleeping_pane_never_makes_it_dance() {
+        let asleep = PaneFact {
+            asleep: true,
+            busy: true,
+            needs: false,
+        };
+        assert!(!dancing_from(&[asleep], false));
+    }
+
+    #[test]
+    fn another_source_saying_busy_counts() {
+        assert!(dancing_from(&[pane(false, false)], true));
+        assert!(dancing_from(&[], true));
     }
 }

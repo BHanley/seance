@@ -2916,14 +2916,20 @@ impl SeanceApp {
     fn chat_row_creature(&self, c: &CircleRow) -> AnyElement {
         let sprite = super::sprite::for_circle(&c.ws);
         let slot = div().flex_none().w(px(30.)).flex().justify_center();
+        // Needs-you wins: no crew and no dance while a pane asks for the human.
+        let needs = self.workspace_needs_human(&c.ws);
         let dance = self
             .chat
             .list_dances
             .get(&c.ws)
-            .filter(|_| self.chat.list_dancing.contains(&c.ws));
+            .filter(|_| self.chat.list_dancing.contains(&c.ws) && !needs);
         let Some(dance) = dance else {
             return slot
-                .child(super::sprite::render(&sprite, 2., c.working))
+                .child(super::sprite::render(
+                    &sprite,
+                    2.,
+                    self.circle_dancing(&c.ws, c.working),
+                ))
                 .into_any_element();
         };
         let cuts = super::sprite::crew_at(&c.crew, dance, now_ms());
@@ -2957,7 +2963,13 @@ impl SeanceApp {
         let target = ws.to_string();
         let sprite = super::sprite::for_circle(ws);
         // Two or more panes working: a crew of cutouts instead of one creature.
-        let crew = self.chat.threads.get(ws).map_or(&[][..], |t| &t.crew);
+        // Needs-you wins: a single, still creature while a pane asks for the human.
+        let crew = self
+            .chat
+            .threads
+            .get(ws)
+            .filter(|_| !self.workspace_needs_human(ws))
+            .map_or(&[][..], |t| &t.crew);
         let dance = self
             .chat
             .crew_dance
@@ -3040,7 +3052,7 @@ impl SeanceApp {
         };
         let circle = self.chat.circles.iter().find(|c| c.ws == ws);
         let name = circle.map_or(ws.clone(), |c| c.name.clone());
-        let working = circle.is_some_and(|c| c.working);
+        let working = self.circle_dancing(&ws, circle.is_some_and(|c| c.working));
         let line = self
             .chat
             .progress
