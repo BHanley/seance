@@ -32,7 +32,7 @@ use crate::events;
 use crate::theme::SeancePalette;
 
 use super::lead_tasks::clock;
-use super::util::{now_ms, tip};
+use super::util::{now_ms, tip, tip_s};
 use super::views::ViewMode;
 use super::SeanceApp;
 
@@ -3191,6 +3191,33 @@ impl SeanceApp {
                 let ws = ws.clone();
                 cx.listener(move |this, _, _, cx| this.toggle_chat_files(&ws, cx))
             })
+            .child(label)
+        }));
+        // AFK (standalone app): the same switch as the Seance menu's.
+        let afk_label = super::afk_ui::chip_label(&self.afk).filter(|_| !read_only);
+        let afk_on = self.afk.on;
+        let afk_tip = super::afk_ui::chip_tip(&self.afk);
+        header = header.children(afk_label.map(|label| {
+            carve::plate(
+                div().id("chat-afk"),
+                SeancePalette::surface(),
+                Stock::Sm,
+                Cut::Control,
+            )
+            .flex_none()
+            .px_2()
+            .py_0p5()
+            .text_xs()
+            .text_color(if afk_on {
+                SeancePalette::flame()
+            } else {
+                SeancePalette::text_dim()
+            })
+            .map(|d| carve::bg(d, SeancePalette::surface()))
+            .hover(|s| s.text_color(SeancePalette::flame()))
+            .cursor_pointer()
+            .tooltip(tip_s(afk_tip))
+            .on_click(cx.listener(|this, _, _, cx| this.afk_toggle(cx)))
             .child(label)
         }));
         header = header.when(!read_only, |header| {

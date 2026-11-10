@@ -467,6 +467,11 @@ pub enum FsOp {
     InvokeServe {
         on: bool,
     },
+    /// The standalone app's AFK switch: `on` Some sets it, None only reads it.
+    /// → `{on, since_ms, mac_awake, note}`.
+    Afk {
+        on: Option<bool>,
+    },
     /// Run a shell command daemon-side (`sh -lc`). Same trust domain as the
     /// control plane (which already spawns arbitrary commands). Output is
     /// truncated to 64KiB per stream. → `{status, stdout, stderr}`.

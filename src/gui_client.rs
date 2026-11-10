@@ -639,6 +639,11 @@ impl GuiClient {
         )
     }
 
+    /// The AFK switch: `Some(on)` flips it, None reads it. See `FsOp::Afk`.
+    pub fn afk(&self, on: Option<bool>) -> Result<serde_json::Value> {
+        self.fs_call(crate::runtime::protocol::FsOp::Afk { on }, FS_TIMEOUT)
+    }
+
     /// The pane Chat talks to in `workspace` when no lead was set: its Claude.
     pub fn local_lead(&self, workspace: &str) -> Result<Option<String>> {
         let v = self.fs_call(

@@ -34,6 +34,11 @@ pub struct ActPhoneGuide;
 #[action(namespace = seance, no_json)]
 pub struct ActShowWelcome;
 
+/// "AFK" in the Seance menu: step away, keep working from the phone.
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActAfkToggle;
+
 /// "Lead Reply Sound" submenu rows in the Seance menu.
 #[derive(Action, Clone, PartialEq, Deserialize)]
 #[action(namespace = seance, no_json)]

@@ -1,3 +1,4 @@
+mod afk;
 mod agency;
 mod agents;
 mod app;
@@ -524,7 +525,7 @@ fn pick_lead_sound(choice: lead_sound::Choice, cx: &mut gpui::App) {
     }
 }
 
-fn set_app_menu(cx: &mut gpui::App) {
+pub(crate) fn set_app_menu(cx: &mut gpui::App) {
     use gpui::{Menu, MenuItem};
     let saved = lead_sound::load();
     let tags = ["thump", "gloop", "glass", "pop", "", "none"];
@@ -536,14 +537,22 @@ fn set_app_menu(cx: &mut gpui::App) {
             MenuItem::action(*label, app::actions::ActLeadSound(tags[i].into())).checked(ticked)
         }
     });
+    let mut seance_items = vec![
+        MenuItem::action("Check for Updates…", app::actions::ActCheckUpdates),
+        MenuItem::action("Use Seance on Your Phone…", app::actions::ActPhoneGuide),
+        MenuItem::submenu(Menu::new("Lead Reply Sound").items(rows)),
+    ];
+    // AFK is the standalone app's; the personal build has its own.
+    if claude_check::starts_claude_here() {
+        seance_items.push(
+            MenuItem::action("AFK", app::actions::ActAfkToggle)
+                .checked(app::AFK_ON.load(std::sync::atomic::Ordering::Relaxed)),
+        );
+    }
+    seance_items.push(MenuItem::action("Restart Seance", app::actions::ActRestart));
+    seance_items.push(MenuItem::action("Quit Seance", app::actions::ActQuit));
     cx.set_menus([
-        Menu::new("Seance").items([
-            MenuItem::action("Check for Updates…", app::actions::ActCheckUpdates),
-            MenuItem::action("Use Seance on Your Phone…", app::actions::ActPhoneGuide),
-            MenuItem::submenu(Menu::new("Lead Reply Sound").items(rows)),
-            MenuItem::action("Restart Seance", app::actions::ActRestart),
-            MenuItem::action("Quit Seance", app::actions::ActQuit),
-        ]),
+        Menu::new("Seance").items(seance_items),
         Menu::new("Help").items([MenuItem::action(
             "Show Welcome Again",
             app::actions::ActShowWelcome,

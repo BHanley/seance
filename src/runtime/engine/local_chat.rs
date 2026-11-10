@@ -43,6 +43,28 @@ pub(crate) fn pick_local_lead(set: Option<&str>, claudes: &[(String, u64)]) -> O
 }
 
 impl Engine {
+    /// One line typed to every circle's lead (AFK turning on). A lead that is
+    /// asleep has no session and is skipped. Returns how many were told.
+    pub(crate) fn tell_leads(&mut self, text: &str) -> usize {
+        let mut circles: Vec<String> = self.panes.iter().map(|p| p.workspace.clone()).collect();
+        circles.sort();
+        circles.dedup();
+        let mut told = 0;
+        for circle in circles {
+            let Some(lead) = self.local_lead(&circle) else {
+                continue;
+            };
+            let Some(pane) = self.panes.iter().find(|p| p.slug == lead) else {
+                continue;
+            };
+            if let Some(session) = pane.session.as_ref() {
+                session.inject(text.to_string(), true);
+                told += 1;
+            }
+        }
+        told
+    }
+
     /// The pane Chat uses for `circle` (see [`pick_local_lead`]).
     pub(crate) fn local_lead(&self, circle: &str) -> Option<String> {
         let set = self.comms.leads.get(circle).filter(|l| {

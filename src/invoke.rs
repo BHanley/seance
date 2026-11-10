@@ -568,6 +568,7 @@ fn spawn_invoke(dir: &Path, port: u16) -> Option<std::process::Child> {
         .arg("run")
         .current_dir(dir)
         .env("INVOKE_MODE", "standalone")
+        .env("INVOKE_AFK_DIR", crate::afk::dir())
         .env("INVOKE_PORT", port.to_string())
         .env("INVOKE_HTTPS_PORT", HTTPS_PORT.to_string())
         .env("INVOKE_PARENT_PID", std::process::id().to_string())

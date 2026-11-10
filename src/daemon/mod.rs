@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context as _, Result};
 
+pub mod afkwatch;
 pub mod agentsessions;
 pub mod fsbridge;
 pub mod local_copy;
@@ -171,6 +172,8 @@ fn run_daemon_inner(args: Vec<String>) -> Result<()> {
     sleepsweep::start_sleep_sweeper(Arc::clone(&engine));
     // Standalone Mac build: the phone chat (Invoke) runs under this daemon.
     crate::invoke::start_supervisor();
+    // Standalone Mac build: AFK (keep the Mac awake, tell the leads).
+    afkwatch::start_afk_watch(Arc::clone(&engine));
     agentsessions::start_agent_session_watcher(Arc::clone(&engine));
     // `send --queue`: deliver queued tasks when their pane goes idle.
     {

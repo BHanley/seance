@@ -196,6 +196,17 @@ fn run_inner(op: FsOp, engine: &SharedEngine) -> Result<Value, String> {
                 ServeOutcome::Failed(m) => json!({ "outcome": "failed", "message": m }),
             })
         }
+        FsOp::Afk { on } => {
+            let d = crate::afk::dir();
+            if let Some(on) = on {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|t| t.as_secs())
+                    .unwrap_or(0);
+                crate::afk::set_wanted(&d, on, now);
+            }
+            Ok(crate::afk::status_json(&d))
+        }
         FsOp::HostSelect { widget, item } => {
             // Fresh load: select is rare and config may have changed on disk.
             let mut host = HostState::load();

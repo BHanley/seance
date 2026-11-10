@@ -30,10 +30,12 @@ use std::sync::Arc;
 
 pub(crate) mod actions;
 mod afk;
+mod afk_ui;
 mod alerts;
 pub(crate) mod chat;
 mod chrome;
 mod dock;
+pub(crate) use afk_ui::AFK_ON;
 mod first_run;
 mod layout;
 mod lead_tasks;
@@ -360,6 +362,7 @@ pub struct SeanceApp {
     first_run: first_run::FirstRun,
     /// Settings > "Use Seance on your phone".
     phone: phone::Phone,
+    afk: afk_ui::AfkUi,
     welcome: welcome::Welcome,
     /// The "Update ready" bar.
     update: updatebar::UpdateUi,
@@ -604,6 +607,7 @@ impl SeanceApp {
             quicklaunch_editor: None,
             first_run: first_run::FirstRun::Off,
             phone: phone::Phone::default(),
+            afk: afk_ui::AfkUi::default(),
             welcome: welcome::Welcome::default(),
             update: updatebar::UpdateUi::default(),
             host_menus: Vec::new(),
@@ -623,6 +627,7 @@ impl SeanceApp {
             app.start_first_run_check(cx);
             app.start_update_checks(cx);
             app.start_welcome(cx);
+            app.start_afk(cx);
         }
         // Seed the prompt-library user file on the DAEMON machine (write-if-
         // missing) and pre-warm the cache so the palette has user prompts by
@@ -3202,6 +3207,9 @@ impl Render for SeanceApp {
             }))
             .on_action(cx.listener(|this, _: &ActPhoneGuide, _, cx| {
                 this.open_phone_guide(cx);
+            }))
+            .on_action(cx.listener(|this, _: &ActAfkToggle, _, cx| {
+                this.afk_toggle(cx);
             }))
             .on_action(cx.listener(|this, _: &ActShowWelcome, _, cx| {
                 this.show_welcome_again(cx);
