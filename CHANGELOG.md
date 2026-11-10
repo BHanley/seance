@@ -17,6 +17,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.12] — 2026-11-10
+
+### Fixed
+- A circle's creature now dances whenever any pane in the circle is mid-turn (the lead, a builder or a worker), not only the lead. One rule decides every creature (pane header, Stage, Chat's list row and header). A pane that needs you wins: the creature stays still.
+
 ## [0.28.11] — 2026-11-10
 
 ### Added
