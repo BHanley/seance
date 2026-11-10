@@ -17,6 +17,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.13] — 2026-11-10
+
+### Added
+- **AFK** in the standalone app: a button in the Seance menu and in Chat, and Invoke's ··· AFK toggle on the phone, all flipping one switch. While it is on, the Mac stays awake with its lid closed, phone notifications are not held back, and each lead is told AFK is on. The first time, macOS asks once for your Mac password to allow exactly `pmset -a disablesleep 1` and `0` (a sudoers entry for your user only); if you cancel, AFK still works but the Mac may sleep with the lid closed, and the app says so. AFK ends by itself when you use the keyboard or trackpad again after a minute away, or the battery drops under 15% unplugged, and the Mac's sleep setting is always put back (also at the next launch after a crash).
+
 ## [0.28.12] — 2026-11-10
 
 ### Fixed
