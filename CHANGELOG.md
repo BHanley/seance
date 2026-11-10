@@ -17,6 +17,12 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.8] — 2026-11-10
+
+### Changed
+- Releases are signed with a stable local identity ("Seance Local Signing") and a fixed designated requirement (identifier plus certificate hash) on the app, the daemon copy and the bundled Python runtime, so macOS permission grants survive updates. This build still asks once more; later signed builds should not.
+- The daemon's local copy is never re-signed ad-hoc over a real signature, and self-update only installs a build signed by the same identity (the first move from ad-hoc is allowed).
+
 ## [0.28.7] — 2026-11-09
 
 ### Added
