@@ -36,6 +36,16 @@ uv pip install --quiet --python "$OUT/bin/python3" --target "$LIB/site-packages"
 find "$OUT" -name __pycache__ -type d -prune -exec rm -rf {} +
 find "$OUT" -name '*.dist-info' -type d -exec rm -rf {} + 2>/dev/null || true
 
+# The runtime remembers the path it was unpacked to (the builder's home folder).
+# Overwrite it with same-length filler, so nobody's user name ships, and sign
+# again whatever that touched.
+if [[ -n "${HOME:-}" && "${#HOME}" -gt 1 ]]; then
+  while IFS= read -r f; do
+    HOME_PATH="$HOME" perl -pi -e 'BEGIN { $h = $ENV{HOME_PATH}; $x = "x" x length($h) } s/\Q$h\E/$x/g' "$f"
+    if file "$f" | grep -q 'Mach-O'; then codesign --force -s - "$f" >/dev/null 2>&1; fi
+  done < <(grep -rlaF "$HOME" "$OUT" || true)
+fi
+
 # It has to start and import what Invoke needs.
 "$OUT/bin/python3" -I -c "import ssl, sqlite3, cryptography, py_vapid, http.server; print('ok')" >/dev/null
 echo "prepared $OUT ($(du -sh "$OUT" | cut -f1))"
