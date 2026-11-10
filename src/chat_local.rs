@@ -795,6 +795,52 @@ mod tests {
         eprintln!("empty circle says: {NO_LEAD_MESSAGE}");
     }
 
+    /// Claude's first-launch dialog in Chat, against a scratch daemon whose
+    /// `claude` fixture prints the trust dialog (no digits) and then reads one
+    /// line: the card appears with its options, and a tap answers it with arrows
+    /// and Enter. `SEANCE_E2E_WS` names the circle to make.
+    #[test]
+    #[ignore]
+    fn e2e_a_first_launch_dialog_is_answered_from_chat() {
+        let (client, _events) = GuiClient::connect_empty().expect("connect");
+        let ws = std::env::var("SEANCE_E2E_WS").unwrap();
+        client.create_workspace(&ws).unwrap();
+        let (pane, _) = client.start_claude(&ws).unwrap();
+        let ask = || LocalAsk {
+            client: Arc::clone(&client),
+            circles: vec![(ws.clone(), ws.clone(), None, false)],
+            ws: Some(ws.clone()),
+        };
+        let mut card = None;
+        for _ in 0..40 {
+            let r = round(ask()).expect("round");
+            let (_, t) = r.thread.expect("thread");
+            if let Some(m) = t.messages.iter().find(|m| !m.choices.is_empty()) {
+                card = Some(m.clone());
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        let card = card.expect("no dialog card appeared");
+        eprintln!("card text: {}", card.text.replace('\n', " / "));
+        eprintln!("card buttons: {:?}", card.choices);
+        let pick = card
+            .choices
+            .iter()
+            .find(|c| c.starts_with("2."))
+            .unwrap()
+            .clone();
+        answer(&client, &ws, &pane, &pick).unwrap();
+        eprintln!("answered: {pick}");
+        // A second tap meant for the same card, after the dialog is gone, presses nothing.
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        let _ = round(ask());
+        eprintln!(
+            "late tap: {:?}",
+            answer(&client, &ws, &pane, &pick).map_err(|e| e.to_string())
+        );
+    }
+
     /// "New circles start with Claude", against a scratch daemon: make the
     /// circle `SEANCE_E2E_WS`, start its first pane, and print what the daemon
     /// answered and who Chat would talk to.

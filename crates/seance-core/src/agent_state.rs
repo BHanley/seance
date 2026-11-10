@@ -247,6 +247,15 @@ fn arrow_options(lines: &[&str], from: usize) -> Option<(String, Vec<String>, us
     while last + 1 < lines.len() && indented(lines[last + 1]) {
         last += 1;
     }
+    // A dialog is the last thing on the screen: only blank lines and its own
+    // footer hint may follow the list. Text after it means it was answered.
+    let footer = |l: &str| DIALOG_FOOTERS.iter().any(|m| l.contains(m));
+    if lines[last + 1..]
+        .iter()
+        .any(|l| !l.trim().is_empty() && !footer(l))
+    {
+        return None;
+    }
     let label = |l: &str| marked(l).unwrap_or_else(|| l.trim().to_string());
     let options: Vec<String> = lines[first..=last].iter().map(|l| label(l)).collect();
     if options.len() < 2 {
@@ -686,6 +695,13 @@ mod tests {
         assert_eq!(d.kind, DialogKind::Numbered);
         assert_eq!(d.options.len(), 3);
         assert!(d.question.contains("To change this later") || d.question.contains("text style"));
+    }
+
+    #[test]
+    fn an_answered_dialog_left_in_the_scrollback_is_not_a_list_to_tap_again() {
+        let answered = format!("{TRUST_ARROWS}\n got keys: ^[[B\n");
+        let d = dialog_prompt(&answered, false);
+        assert!(d.is_none_or(|d| d.kind != DialogKind::Arrows));
     }
 
     #[test]
