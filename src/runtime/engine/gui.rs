@@ -1518,6 +1518,16 @@ impl Engine {
                 self.stamp_workspace_touch(&pane);
                 None
             }
+            GuiRequest::InjectSecret { pane, text } => {
+                // No record_event, no events::log: the text is a secret.
+                if let Some(s) = self.session_mut(&pane) {
+                    s.set_input_origin("human");
+                    s.scroll_to_bottom();
+                    s.inject(text, true);
+                    s.bump_rev();
+                }
+                None
+            }
             GuiRequest::GhostAccept { pane } => {
                 let ghost = self
                     .session_mut(&pane)

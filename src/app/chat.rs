@@ -793,6 +793,11 @@ pub(super) struct ChatState {
     /// Claude plan usage from the last thread answer; none hides the strip.
     usage: Option<Usage>,
     search: Option<Entity<InputState>>,
+    /// The masked box on a sign-in card. Its text is cleared the moment it is
+    /// sent and is never kept anywhere else.
+    code_input: Option<Entity<InputState>>,
+    /// Sign-in cards whose code was sent: they say "Sent", nothing more.
+    code_sent: HashSet<i64>,
     /// What the search found; none while the box is empty (the circles show).
     hits: Option<Vec<Hit>>,
     /// Counts keystrokes in the search box, so only the last one searches.
@@ -2397,6 +2402,24 @@ impl SeanceApp {
             window.focus(&focus, cx);
             self.chat.input = Some(input);
         }
+        if self.chat.code_input.is_none() {
+            let code = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .masked(true)
+                    .placeholder("Paste the code")
+            });
+            cx.subscribe_in(
+                &code,
+                window,
+                |this: &mut SeanceApp, _, event: &InputEvent, window, cx| {
+                    if matches!(event, InputEvent::PressEnter { .. }) {
+                        this.chat_send_code(window, cx);
+                    }
+                },
+            )
+            .detach();
+            self.chat.code_input = Some(code);
+        }
         if self.chat.search.is_none() {
             let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search chats"));
             cx.subscribe_in(
@@ -3912,77 +3935,179 @@ impl SeanceApp {
             .clone()
             .or_else(|| self.chat.tapped.get(&m.id).cloned());
         let id = m.id;
-        div()
+        // A sign-in card: a masked box and Send in place of the code "choice".
+        let code_row = (chat_local::is_local()
+            && m.choices.iter().any(|c| c == chat_local::CODE_BOX))
+        .then(|| {
+            if self.chat.code_sent.contains(&id) {
+                return div()
+                    .text_sm()
+                    .text_color(SeancePalette::text_dim())
+                    .child("Sent")
+                    .into_any_element();
+            }
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .children(
+                    self.chat
+                        .code_input
+                        .as_ref()
+                        .map(|i| div().w(px(260.)).child(Input::new(i))),
+                )
+                .child(
+                    carve::plate(
+                        div().id(SharedString::from(format!("code-send-{id}"))),
+                        SeancePalette::surface(),
+                        Stock::Full,
+                        Cut::Control,
+                    )
+                    .px_3()
+                    .py_1()
+                    .text_sm()
+                    .text_color(SeancePalette::violet())
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.chat_send_code(window, cx);
+                    }))
+                    .child("Send"),
+                )
+                .into_any_element()
+        });
+        let pills = div()
             .max_w(relative(0.72))
             .flex()
             .flex_wrap()
             .gap_2()
-            .children(m.choices.iter().enumerate().map(|(i, choice)| {
-                let is_picked = picked.as_deref() == Some(choice.as_str());
-                let lead_pick = i == 0 && picked.is_none();
-                let fill = if is_picked {
-                    SeancePalette::violet()
-                } else if lead_pick {
-                    SeancePalette::violet().opacity(0.14)
-                } else {
-                    SeancePalette::surface()
-                };
-                let pill = carve::plate(
-                    div().id(SharedString::from(format!("choice-{id}-{i}"))),
-                    // Slick paints the pill's own fill; stone bevels from surface.
-                    if carve::slick() {
-                        fill
-                    } else {
-                        SeancePalette::surface()
-                    },
-                    Stock::Full,
-                    Cut::Control,
-                )
-                .px_3()
-                .py_1()
-                .text_sm()
-                .when(!carve::slick(), |d| {
-                    d.border_1().border_color(if is_picked || lead_pick {
-                        SeancePalette::violet()
-                    } else {
-                        SeancePalette::border()
-                    })
-                })
-                .text_color(if is_picked {
-                    SeancePalette::bg()
-                } else if lead_pick {
-                    SeancePalette::violet()
-                } else {
-                    SeancePalette::text()
-                })
-                .when(is_picked || lead_pick, |d| carve::bg(d, fill))
-                .when(picked.is_some() && !is_picked, |d| d.opacity(0.4))
-                .child(choice.clone());
-                if picked.is_some() {
-                    return pill;
-                }
-                let spec_change = changes_spec(m, choice);
-                let choice = choice.clone();
-                pill.cursor_pointer()
-                    .when(!carve::slick(), |d| {
-                        d.hover(|s| s.bg(SeancePalette::violet().opacity(0.25)))
-                    })
-                    .when(carve::slick(), |d| d.hover(|s| s.opacity(0.8)))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if spec_change {
-                            this.chat.focus_input = true;
-                            cx.notify();
-                        } else if chat_local::is_local() && choice == chat_local::SHOW_TERMINAL {
-                            // The way out of any dialog card: the pane itself.
-                            if let Some(ws) = this.chat.selected.clone() {
-                                this.chat_show_terminal(&ws, window, cx);
-                            }
+            .children(
+                m.choices
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| *c != chat_local::CODE_BOX)
+                    .map(|(i, choice)| {
+                        let is_picked = picked.as_deref() == Some(choice.as_str());
+                        let lead_pick = i == 0 && picked.is_none();
+                        let fill = if is_picked {
+                            SeancePalette::violet()
+                        } else if lead_pick {
+                            SeancePalette::violet().opacity(0.14)
                         } else {
-                            this.chat_answer(id, choice.clone(), cx);
+                            SeancePalette::surface()
+                        };
+                        let pill = carve::plate(
+                            div().id(SharedString::from(format!("choice-{id}-{i}"))),
+                            // Slick paints the pill's own fill; stone bevels from surface.
+                            if carve::slick() {
+                                fill
+                            } else {
+                                SeancePalette::surface()
+                            },
+                            Stock::Full,
+                            Cut::Control,
+                        )
+                        .px_3()
+                        .py_1()
+                        .text_sm()
+                        .when(!carve::slick(), |d| {
+                            d.border_1().border_color(if is_picked || lead_pick {
+                                SeancePalette::violet()
+                            } else {
+                                SeancePalette::border()
+                            })
+                        })
+                        .text_color(if is_picked {
+                            SeancePalette::bg()
+                        } else if lead_pick {
+                            SeancePalette::violet()
+                        } else {
+                            SeancePalette::text()
+                        })
+                        .when(is_picked || lead_pick, |d| carve::bg(d, fill))
+                        .when(picked.is_some() && !is_picked, |d| d.opacity(0.4))
+                        .child(choice.clone());
+                        if picked.is_some() {
+                            return pill;
                         }
-                    }))
-            }))
+                        let spec_change = changes_spec(m, choice);
+                        let choice = choice.clone();
+                        pill.cursor_pointer()
+                            .when(!carve::slick(), |d| {
+                                d.hover(|s| s.bg(SeancePalette::violet().opacity(0.25)))
+                            })
+                            .when(carve::slick(), |d| d.hover(|s| s.opacity(0.8)))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                if spec_change {
+                                    this.chat.focus_input = true;
+                                    cx.notify();
+                                } else if chat_local::is_local()
+                                    && choice == chat_local::SHOW_TERMINAL
+                                {
+                                    // The way out of any dialog card: the pane itself.
+                                    if let Some(ws) = this.chat.selected.clone() {
+                                        this.chat_show_terminal(&ws, window, cx);
+                                    }
+                                } else {
+                                    this.chat_answer(id, choice.clone(), cx);
+                                }
+                            }))
+                    }),
+            );
+        div()
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap_2()
+            .children(code_row)
+            .child(pills)
             .into_any_element()
+    }
+
+    /// Send the sign-in code to the pane and clear the box at once. The text
+    /// lives only in this call: not in the thread, not echoed, not logged.
+    fn chat_send_code(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(ws), Some(input)) = (self.chat.selected.clone(), self.chat.code_input.clone())
+        else {
+            return;
+        };
+        let Some(id) = self.chat.threads.get(&ws).and_then(|t| {
+            t.messages
+                .iter()
+                .rev()
+                .find(|m| m.choices.iter().any(|c| c == chat_local::CODE_BOX))
+                .map(|m| m.id)
+        }) else {
+            return;
+        };
+        if self.chat.code_sent.contains(&id) {
+            return;
+        }
+        let code = input.read(cx).value().to_string();
+        if code.trim().is_empty() {
+            return;
+        }
+        input.update(cx, |i, cx| i.set_value("", window, cx));
+        let Some(lead) = chat_local::lead_of(&ws) else {
+            return;
+        };
+        self.chat.code_sent.insert(id);
+        let client = Arc::clone(&self.client);
+        cx.spawn(async move |this, cx| {
+            let sent = cx
+                .background_executor()
+                .spawn(async move { chat_local::send_code(&client, &ws, &lead, &code) })
+                .await;
+            let Some(this) = this.upgrade() else { return };
+            this.update(cx, |app: &mut SeanceApp, cx| {
+                if let Err(e) = sent {
+                    app.chat.code_sent.remove(&id);
+                    app.chat.error = Some(format!("not sent: {e}"));
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
     }
 }
 

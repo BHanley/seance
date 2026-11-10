@@ -157,6 +157,10 @@ pub enum DialogKind {
     Arrows,
     /// Something is waiting that this can't read as a list.
     Unknown,
+    /// Claude's sign-in step: it opened the browser and waits for the code the
+    /// browser shows ("Paste code here if prompted >"). Answered with typed
+    /// text, never a key.
+    LoginCode,
 }
 
 /// An interactive dialog on a Claude pane's screen: the first-launch pickers
@@ -174,6 +178,17 @@ pub struct DialogPrompt {
     pub screen: String,
 }
 
+/// The sign-in step is on screen: Claude's last line is its "Paste code here
+/// if prompted >" prompt. Only the last non-blank line counts, so the words in
+/// a reply, or a step that has moved on, are not it.
+fn login_prompt(lines: &[&str]) -> bool {
+    lines
+        .iter()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .is_some_and(|l| l.trim_start().starts_with("Paste code here"))
+}
+
 /// Footer hints a picker shows under its options.
 const DIALOG_FOOTERS: &[&str] = &["Enter to confirm", "Enter to select", "Esc to cancel"];
 /// Bottom lines kept for an unreadable dialog.
@@ -186,6 +201,15 @@ pub fn dialog_prompt(screen: &str, awaiting: bool) -> Option<DialogPrompt> {
     let lines: Vec<&str> = screen.lines().collect();
     if idle_composer(&lines) {
         return None;
+    }
+    if login_prompt(&lines) {
+        return Some(DialogPrompt {
+            kind: DialogKind::LoginCode,
+            question: "Claude is waiting for the sign-in code.".into(),
+            options: Vec::new(),
+            selected: 0,
+            screen: String::new(),
+        });
     }
     let tail_start = lines.len().saturating_sub(TAIL_WINDOW + STATUS_WINDOW);
     let footer = lines[tail_start..]
@@ -323,6 +347,7 @@ const AWAITING: &[&str] = &[
     "one you trust?",
     "Enter to select",
     "Skip until next version",
+    "Paste code here",
 ];
 
 const BUSY: &[&str] = &[
@@ -1165,5 +1190,62 @@ mod tests {
     fn a_dialog_is_never_mistaken_for_the_box_by_its_footer() {
         let screen = format!("{RULE}\n❯\n{RULE2}\n Enter to select · Esc to cancel\n Do you trust the files in this folder?\n");
         assert_eq!(classify(&screen, None).activity, Activity::AwaitingInput);
+    }
+
+    // Claude's own first-run login step, captured from a real `claude 2.1.318`
+    // started with a throwaway config (the OAuth challenge and state redacted).
+    const LOGIN_PASTE: &str = include_str!("fixtures/login-paste-screen.txt");
+
+    #[test]
+    fn the_login_paste_step_is_a_login_code_dialog() {
+        let d = dialog_prompt(LOGIN_PASTE, false).expect("a card for the login step");
+        assert_eq!(d.kind, DialogKind::LoginCode);
+        assert!(d.options.is_empty());
+        assert_eq!(
+            classify(LOGIN_PASTE, None).activity,
+            Activity::AwaitingInput
+        );
+        // The classifier's own verdict makes no difference.
+        assert_eq!(
+            dialog_prompt(LOGIN_PASTE, true).unwrap().kind,
+            DialogKind::LoginCode
+        );
+    }
+
+    #[test]
+    fn no_other_screen_is_a_login_code_dialog() {
+        for (name, screen) in [
+            ("trust", TRUST_NUMBERED),
+            ("arrows", TRUST_ARROWS),
+            ("theme", THEME),
+            ("unknown", UNKNOWN),
+        ] {
+            let kind = dialog_prompt(screen, true).map(|d| d.kind);
+            assert_ne!(kind, Some(DialogKind::LoginCode), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_login_text_quoted_in_a_reply_or_scrolled_past_is_not_the_step() {
+        // A reply quoting it above the normal input box.
+        let quoted = format!(
+            "\n⏺ At sign-in it shows:\n\n     Paste code here if prompted >\n\n✻ Cooked for 3s\n\n{RULE}\n❯\n{RULE2}\n{STATUS}"
+        );
+        assert_eq!(dialog_prompt(&quoted, false), None);
+        assert_ne!(classify(&quoted, None).activity, Activity::AwaitingInput);
+        // The step has moved on: more output after it.
+        let moved = format!("{LOGIN_PASTE}\n Login successful. Press Enter to continue\n");
+        assert_eq!(dialog_prompt(&moved, false), None);
+    }
+
+    #[test]
+    fn two_looks_at_the_login_step_are_the_same_dialog() {
+        let a = dialog_prompt(LOGIN_PASTE, false).unwrap();
+        let b = dialog_prompt(LOGIN_PASTE, true).unwrap();
+        assert!(same_dialog(&a, &b));
+        assert!(!same_dialog(
+            &a,
+            &dialog_prompt(TRUST_ARROWS, true).unwrap()
+        ));
     }
 }

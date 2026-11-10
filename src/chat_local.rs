@@ -481,6 +481,10 @@ pub const SHOW_TERMINAL: &str = "Show terminal";
 /// could approve something the person has not seen.
 pub const PRESS_ESC: &str = "Press Esc";
 
+/// The card's stand-in for the sign-in box: Chat draws a masked text box and a
+/// Send button where this "choice" would be a pill. Never sent as an answer.
+pub const CODE_BOX: &str = "Sign-in code";
+
 /// A dialog as a message card: its text and its buttons.
 fn dialog_card(d: &DialogPrompt) -> (String, Vec<String>) {
     match d.kind {
@@ -494,6 +498,12 @@ fn dialog_card(d: &DialogPrompt) -> (String, Vec<String>) {
             choices.push(SHOW_TERMINAL.into());
             (d.question.clone(), choices)
         }
+        DialogKind::LoginCode => (
+            "Claude needs you to sign in. Finish in the browser it opened, copy the code \
+             it shows, and paste the code here."
+                .to_string(),
+            vec![CODE_BOX.into(), SHOW_TERMINAL.into()],
+        ),
         DialogKind::Unknown => (
             format!("Claude is waiting for you. Its screen:\n{}", d.screen),
             vec![PRESS_ESC.into(), SHOW_TERMINAL.into()],
@@ -510,6 +520,10 @@ pub fn plan_answer(old: &DialogPrompt, new: &DialogPrompt, choice: &str) -> Resu
     }
     if choice == PRESS_ESC {
         return Ok(b"\x1b".to_vec());
+    }
+    if new.kind == DialogKind::LoginCode {
+        // Typed text only, through `send_code`: no tap is a key for this one.
+        return Err(anyhow!("Type the code in the box."));
     }
     let n = choice
         .split_once(". ")
@@ -559,6 +573,38 @@ pub fn answer(client: &GuiClient, ws: &str, lead: &str, choice: &str) -> Result<
         .map_err(|_| anyhow!("Claude is not waiting on that any more."))?;
     let keys = plan_answer(&old, &fresh, choice)?;
     client.input(lead, &keys)
+}
+
+/// The sign-in code, typed into the pane and submitted. Only while the pane
+/// still shows the sign-in step. The code goes straight to that pane: it is not
+/// kept (no chat message, no state, no log), and the daemon records nothing
+/// for it (`GuiRequest::InjectSecret`).
+pub fn send_code(client: &GuiClient, ws: &str, lead: &str, code: &str) -> Result<()> {
+    let shown = STATE
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(ws))
+        .and_then(|st| st.dialog.as_ref().map(|d| d.kind));
+    let code = check_code(code, shown)?;
+    let v = client.local_chat(lead, u64::MAX, "")?;
+    serde_json::from_value::<DialogPrompt>(v["prompt"].clone())
+        .ok()
+        .filter(|d| d.kind == DialogKind::LoginCode)
+        .ok_or_else(|| anyhow!("Claude is not waiting for a code any more."))?;
+    client.inject_secret(lead, code)
+}
+
+/// Is this something to send, and is the sign-in step what the card showed?
+fn check_code(code: &str, shown: Option<DialogKind>) -> Result<&str> {
+    let code = code.trim();
+    if code.is_empty() || code.contains(['\n', '\r']) {
+        return Err(anyhow!("Paste the code from the browser, on one line."));
+    }
+    if shown != Some(DialogKind::LoginCode) {
+        return Err(anyhow!("Claude is not waiting for a code any more."));
+    }
+    Ok(code)
 }
 
 /// Esc: Claude stops its turn.
@@ -841,6 +887,53 @@ mod tests {
         );
     }
 
+    /// The sign-in step, against a scratch daemon whose lead is a fixture
+    /// Claude that prints Claude's real "Paste code here if prompted >" line
+    /// and reads one line back: the card has the code box, the code reaches
+    /// the pane, and a second send after the step is gone is refused.
+    /// `SEANCE_E2E_WS` names the circle; `SEANCE_E2E_CODE` is the test code.
+    #[test]
+    #[ignore]
+    fn e2e_a_login_code_is_typed_into_the_pane() {
+        let (client, _events) = GuiClient::connect_empty().expect("connect");
+        let ws = std::env::var("SEANCE_E2E_WS").unwrap();
+        let code = std::env::var("SEANCE_E2E_CODE").unwrap();
+        client.create_workspace(&ws).unwrap();
+        let (pane, _) = client.start_claude(&ws).unwrap();
+        let ask = || LocalAsk {
+            client: Arc::clone(&client),
+            circles: vec![(ws.clone(), ws.clone(), None, false)],
+            ws: Some(ws.clone()),
+        };
+        let mut card = None;
+        for _ in 0..40 {
+            let r = round(ask()).expect("round");
+            let (_, t) = r.thread.expect("thread");
+            if let Some(m) = t
+                .messages
+                .iter()
+                .find(|m| m.choices.iter().any(|c| c == CODE_BOX))
+            {
+                card = Some(m.clone());
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        let card = card.expect("no sign-in card appeared");
+        eprintln!("card text: {}", card.text.replace('\n', " / "));
+        eprintln!("card buttons: {:?}", card.choices);
+        eprintln!(
+            "sent: {:?}",
+            send_code(&client, &ws, &pane, &code).map_err(|e| e.to_string())
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        let _ = round(ask());
+        eprintln!(
+            "second send: {:?}",
+            send_code(&client, &ws, &pane, &code).map_err(|e| e.to_string())
+        );
+    }
+
     /// "New circles start with Claude", against a scratch daemon: make the
     /// circle `SEANCE_E2E_WS`, start its first pane, and print what the daemon
     /// answered and who Chat would talk to.
@@ -926,5 +1019,35 @@ mod tests {
             t.messages.iter().any(|m| m.text == "you pressed 2")
                 && t.messages.iter().all(|m| m.choices.is_empty())
         });
+    }
+
+    #[test]
+    fn the_sign_in_card_has_a_code_box_and_the_terminal_and_no_key_answers() {
+        let d = DialogPrompt {
+            kind: DialogKind::LoginCode,
+            question: "Claude is waiting for the sign-in code.".into(),
+            options: vec![],
+            selected: 0,
+            screen: String::new(),
+        };
+        let (text, choices) = dialog_card(&d);
+        assert!(text.contains("sign in") && text.contains("code"));
+        assert_eq!(choices, [CODE_BOX, SHOW_TERMINAL]);
+        // No tap on this card presses a key, whatever its label.
+        assert!(plan_answer(&d, &d, CODE_BOX).is_err());
+        assert!(plan_answer(&d, &d, "1. Yes").is_err());
+    }
+
+    #[test]
+    fn a_code_is_sent_only_while_the_sign_in_step_is_what_the_card_showed() {
+        assert_eq!(
+            check_code("  abc#123  ", Some(DialogKind::LoginCode)).unwrap(),
+            "abc#123"
+        );
+        assert!(check_code("", Some(DialogKind::LoginCode)).is_err());
+        assert!(check_code("   ", Some(DialogKind::LoginCode)).is_err());
+        assert!(check_code("a\nb", Some(DialogKind::LoginCode)).is_err());
+        assert!(check_code("abc", None).is_err());
+        assert!(check_code("abc", Some(DialogKind::Numbered)).is_err());
     }
 }

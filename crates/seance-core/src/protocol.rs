@@ -230,6 +230,13 @@ pub enum GuiRequest {
         #[serde(default = "default_true")]
         submit: bool,
     },
+    /// Text for a pane that must leave no trace (a sign-in code): typed in and
+    /// submitted like `Inject`, but never recorded in the replay ring and
+    /// never logged, not even its length.
+    InjectSecret {
+        pane: String,
+        text: String,
+    },
     GhostAccept {
         pane: String,
     },

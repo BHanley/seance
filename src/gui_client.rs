@@ -210,6 +210,15 @@ impl GuiClient {
         })
     }
 
+    /// Type `text` into the pane and press Enter, leaving no trace (a sign-in
+    /// code): not recorded, not logged. See `GuiRequest::InjectSecret`.
+    pub fn inject_secret(&self, pane: &str, text: &str) -> Result<()> {
+        self.send(GuiRequest::InjectSecret {
+            pane: pane.to_string(),
+            text: text.to_string(),
+        })
+    }
+
     pub fn ghost_accept(&self, pane: &str) -> Result<()> {
         self.send(GuiRequest::GhostAccept {
             pane: pane.to_string(),
