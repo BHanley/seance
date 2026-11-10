@@ -141,12 +141,53 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+# Release signing (optional). With SEANCE_SIGN_IDENTITY (a certificate name made
+# by scripts/create-signing-identity.sh) and its keychain, every build carries
+# the SAME code identity, so macOS keeps its permission grants across updates.
+# Unset, the app is ad-hoc signed as below. The keychain's password is read
+# from SEANCE_SIGN_KEYCHAIN_PASSWORD_FILE (default
+# ~/.config/seance-signing/keychain-password); nothing secret is in this repo.
+SIGNED=0
+if [[ -n "${SEANCE_SIGN_IDENTITY:-}" ]]; then
+  SIGN_KC="${SEANCE_SIGN_KEYCHAIN:-$HOME/Library/Keychains/seance-signing.keychain-db}"
+  SIGN_PW_FILE="${SEANCE_SIGN_KEYCHAIN_PASSWORD_FILE:-$HOME/.config/seance-signing/keychain-password}"
+  [[ -f "$SIGN_KC" ]] || { echo "SEANCE_SIGN_IDENTITY is set but there is no keychain at $SIGN_KC" >&2; exit 1; }
+  [[ -f "$SIGN_PW_FILE" ]] || { echo "no keychain password file at $SIGN_PW_FILE" >&2; exit 1; }
+  security unlock-keychain -p "$(cat "$SIGN_PW_FILE")" "$SIGN_KC"
+  LEAF="$(security find-certificate -c "$SEANCE_SIGN_IDENTITY" -Z "$SIGN_KC" | awk '/SHA-1 hash:/ {print $3}')"
+  [[ -n "$LEAF" ]] || { echo "no certificate named '$SEANCE_SIGN_IDENTITY' in $SIGN_KC" >&2; exit 1; }
+  # Stable identity: the designated requirement is the identifier plus the
+  # certificate's own hash, not this build's hash.
+  sign_one() {   # sign_one PATH IDENTIFIER
+    codesign --force --keychain "$SIGN_KC" -s "$SEANCE_SIGN_IDENTITY" --identifier "$2" \
+      -r="designated => identifier \"$2\" and certificate leaf = H\"$LEAF\"" --timestamp=none "$1"
+  }
+  echo "signing with '$SEANCE_SIGN_IDENTITY' ($LEAF)…"
+  # Invoke's Python runtime: every Mach-O inside it.
+  if [[ -d "$APP/Contents/Resources/invoke" ]]; then
+    while IFS= read -r f; do
+      file "$f" | grep -q 'Mach-O' && sign_one "$f" "$BUNDLE_ID.invoke.$(basename "$f")"
+    done < <(find "$APP/Contents/Resources/invoke" -type f)
+  fi
+  # The daemon: signed on its own (a bundle's main executable is bound to the
+  # bundle's Info.plist, so a loose copy of that would not verify), and copied
+  # out of here by the app. Same identifier and requirement as the app.
+  cp "$BIN" "$APP/Contents/Resources/seance-daemon"
+  sign_one "$APP/Contents/Resources/seance-daemon" "$BUNDLE_ID"
+  sign_one "$APP" "$BUNDLE_ID"
+  codesign --verify --deep --strict "$APP"
+  codesign -d -r- "$APP" 2>&1 | sed -n 's/^# //p' | sed 's/^/  /'
+  SIGNED=1
+fi
+
 # Ad-hoc signature. Cargo already ad-hoc signs the bare binary on Apple
 # Silicon, but that signature covers the executable alone — everything added
 # above is outside it, and an inconsistent bundle is what makes macOS refuse
 # to launch a freshly-copied app.
+if [[ $SIGNED -eq 0 ]]; then
 echo "signing (ad-hoc)…"
 codesign --force --sign - --timestamp=none "$APP" 2>&1 | sed 's/^/  /' || true
+fi
 
 if [[ -n "$APP_ONLY" ]]; then
   mkdir -p "$APP_ONLY"

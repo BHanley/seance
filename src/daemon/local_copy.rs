@@ -82,25 +82,64 @@ fn install_copy(src: &Path, dest: &Path) -> Result<()> {
     let tmp = dest.with_extension(format!("tmp-{}", std::process::id()));
     std::fs::copy(src, &tmp).with_context(|| format!("copy to {}", tmp.display()))?;
     std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
-    sign_if_needed(&tmp);
+    sign_if_needed(src, &tmp);
     std::fs::rename(&tmp, dest).with_context(|| format!("rename to {}", dest.display()))?;
     Ok(())
 }
 
-/// A copied Mach-O keeps its embedded ad-hoc signature; if the copy no longer
-/// verifies, sign it again (ad-hoc is enough for a process the app starts).
-fn sign_if_needed(path: &Path) {
+/// What to do about a copy: sign it ad-hoc again, or leave it as it is. Only
+/// an ad-hoc source whose copy no longer verifies is re-signed. A source with a
+/// real signature (the release's own certificate) is never downgraded to
+/// ad-hoc: that would hand macOS a different identity for the daemon and its
+/// permission grants would be asked for again.
+pub fn needs_adhoc_sign(copy_verifies: bool, source_is_adhoc: bool) -> bool {
+    !copy_verifies && source_is_adhoc
+}
+
+/// Is this Mach-O ad-hoc signed (or not signed at all)?
+fn is_adhoc(path: &Path) -> bool {
+    let out = std::process::Command::new("codesign")
+        .arg("-dv")
+        .arg(path)
+        .output();
+    let Ok(o) = out else { return true };
+    let text = String::from_utf8_lossy(&o.stderr);
+    text.contains("Signature=adhoc") || text.contains("not signed at all")
+}
+
+/// A copied Mach-O keeps its embedded signature. When the copy no longer
+/// verifies and the source was only ad-hoc signed, sign it again (ad-hoc is
+/// enough for a process the app starts); see [`needs_adhoc_sign`].
+fn sign_if_needed(src: &Path, path: &Path) {
     let ok = std::process::Command::new("codesign")
         .arg("-v")
         .arg(path)
         .output()
         .is_ok_and(|o| o.status.success());
-    if !ok {
+    if needs_adhoc_sign(ok, is_adhoc(src)) {
         let _ = std::process::Command::new("codesign")
             .args(["--force", "-s", "-"])
             .arg(path)
             .output();
+    } else if !ok {
+        eprintln!(
+            "[seance] the daemon copy {} does not verify, but it carries the release's signature, so it is left as it is",
+            path.display()
+        );
     }
+}
+
+/// The file the daemon copy is made from. A signed release carries the daemon
+/// as `Contents/Resources/seance-daemon`, signed on its own (a bundle's main
+/// executable is bound to the bundle's Info.plist, so a loose copy of it does
+/// not verify). Without that file (ad-hoc and dev builds) it is the running
+/// binary, as before.
+pub fn daemon_source(exe: &Path) -> PathBuf {
+    exe.parent()
+        .and_then(Path::parent)
+        .map(|contents| contents.join("Resources/seance-daemon"))
+        .filter(|p| p.is_file())
+        .unwrap_or_else(|| exe.to_path_buf())
 }
 
 /// Does any process run from `path`?
@@ -168,8 +207,9 @@ fn ensure_copy(exe: &Path) -> Result<PathBuf> {
     let dest = dir.join(copy_name(version));
     // A same-version rebuild differs byte for byte, so the name alone is not
     // enough to reuse a copy.
-    if !(dest.is_file() && same_bytes(exe, &dest)) {
-        install_copy(exe, &dest)?;
+    let src = daemon_source(exe);
+    if !(dest.is_file() && same_bytes(&src, &dest)) {
+        install_copy(&src, &dest)?;
     }
     if !crate::term_config::personal() {
         link_cli(&dest);
@@ -193,6 +233,34 @@ mod tests {
 
     fn names(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_real_signature_is_never_downgraded_to_ad_hoc() {
+        // (copy verifies, source is ad-hoc)
+        assert!(!needs_adhoc_sign(true, true)); // fine as it is
+        assert!(!needs_adhoc_sign(true, false));
+        // The old behavior for ad-hoc builds: a copy that no longer verifies is signed again.
+        assert!(needs_adhoc_sign(false, true));
+        // The release's own certificate: never replaced by ad-hoc, verified or not.
+        assert!(!needs_adhoc_sign(false, false));
+    }
+
+    #[test]
+    fn the_daemon_is_copied_from_the_signed_standalone_file_when_the_app_has_one() {
+        let d = std::env::temp_dir().join(format!("seance-daemon-src-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let macos = d.join("Seance.app/Contents/MacOS");
+        std::fs::create_dir_all(&macos).unwrap();
+        std::fs::create_dir_all(d.join("Seance.app/Contents/Resources")).unwrap();
+        let exe = macos.join("seance");
+        std::fs::write(&exe, b"main").unwrap();
+        // No standalone file (ad-hoc and dev builds): the running binary.
+        assert_eq!(daemon_source(&exe), exe);
+        let standalone = d.join("Seance.app/Contents/Resources/seance-daemon");
+        std::fs::write(&standalone, b"daemon").unwrap();
+        assert_eq!(daemon_source(&exe), standalone);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

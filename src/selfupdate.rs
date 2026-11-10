@@ -250,6 +250,64 @@ pub fn cleanup_backup() {
     }
 }
 
+/// Who signed a build, as far as the update cares.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SigningId {
+    /// Ad-hoc (or unsigned): its identity is its own hash, new every build.
+    AdHoc,
+    /// The release certificate, by the SHA-1 of its leaf certificate.
+    Leaf(String),
+    /// Signed some other way.
+    Other,
+}
+
+/// The identity in a designated requirement (`codesign -d -r-`). The release
+/// build writes `designated => identifier "…" and certificate leaf = H"<sha1>"`.
+pub fn signing_id(requirement: &str) -> SigningId {
+    if let Some(i) = requirement.find("certificate leaf = H\"") {
+        let rest = &requirement[i + "certificate leaf = H\"".len()..];
+        if let Some(hash) = rest.split('"').next().filter(|h| !h.is_empty()) {
+            return SigningId::Leaf(hash.to_ascii_lowercase());
+        }
+    }
+    if requirement.contains("designated => cdhash H\"") {
+        return SigningId::AdHoc;
+    }
+    SigningId::Other
+}
+
+/// May `new` replace `running`? While the running app is only ad-hoc signed any
+/// build may (the one-time move to the release certificate). Once it carries the
+/// certificate, only a build with the same certificate may: a swap to anything
+/// else would lose every permission grant, or be someone else's app.
+pub fn identity_allows_swap(running: &SigningId, new: &SigningId) -> Result<(), String> {
+    match (running, new) {
+        (SigningId::AdHoc | SigningId::Other, _) => Ok(()),
+        (SigningId::Leaf(a), SigningId::Leaf(b)) if a == b => Ok(()),
+        (SigningId::Leaf(_), SigningId::AdHoc) => Err(
+            "the new build is not signed with Seance's certificate, so it was not installed".into(),
+        ),
+        (SigningId::Leaf(_), _) => Err(
+            "the new build is signed by a different certificate, so it was not installed".into(),
+        ),
+    }
+}
+
+fn requirement_of(app: &Path) -> String {
+    Command::new("codesign")
+        .args(["-d", "-r-"])
+        .arg(app)
+        .output()
+        .map(|o| {
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            )
+        })
+        .unwrap_or_default()
+}
+
 fn plist_version(app: &Path) -> Option<String> {
     let out = Command::new("plutil")
         .args(["-extract", "CFBundleShortVersionString", "raw", "-o", "-"])
@@ -318,6 +376,13 @@ fn apply_in(feed: &Feed, app: &Path, work: &Path) -> Result<()> {
         .is_ok_and(|o| o.status.success());
     if !signed {
         bail!("the new app's signature does not check out, so it was not installed");
+    }
+    // Same signing identity as the app being replaced (once it has one).
+    if let Err(why) = identity_allows_swap(
+        &signing_id(&requirement_of(app)),
+        &signing_id(&requirement_of(&new_app)),
+    ) {
+        bail!("{why}");
     }
     swap(app, &new_app, &backup_path(app))
 }

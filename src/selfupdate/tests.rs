@@ -199,3 +199,36 @@ fn every_check_comes_to_one_of_four_outcomes_and_is_logged() {
     assert!(matches!(&o, Outcome::Failed(m) if m.contains("No such file")));
     assert!(log_line(true, "u", &o).contains("result=failed: read /x"));
 }
+
+const LEAF: &str = "9F5FF690007AA1E110278DA31A4FC5B662556375";
+
+fn dr(hash: &str) -> String {
+    format!("designated => identifier \"xyz.ham.seance\" and certificate leaf = H\"{hash}\"")
+}
+
+#[test]
+fn the_signing_identity_is_read_from_the_designated_requirement() {
+    assert_eq!(signing_id(&dr(LEAF)), SigningId::Leaf(LEAF.to_lowercase()));
+    assert_eq!(
+        signing_id("# designated => cdhash H\"37509ce355b280d7a50d9847483dad76c6dd7939\""),
+        SigningId::AdHoc
+    );
+    assert_eq!(signing_id(""), SigningId::Other);
+    assert_eq!(signing_id("designated => anchor apple"), SigningId::Other);
+}
+
+#[test]
+fn a_swap_must_keep_the_signing_identity_once_there_is_one() {
+    let leaf = SigningId::Leaf(LEAF.to_lowercase());
+    let other = SigningId::Leaf("0000000000000000000000000000000000000000".into());
+    // The one-time move from ad-hoc to the certificate is allowed.
+    assert!(identity_allows_swap(&SigningId::AdHoc, &leaf).is_ok());
+    assert!(identity_allows_swap(&SigningId::AdHoc, &SigningId::AdHoc).is_ok());
+    // Signed with the certificate: only the same certificate may replace it.
+    assert!(identity_allows_swap(&leaf, &SigningId::Leaf(LEAF.to_lowercase())).is_ok());
+    let e = identity_allows_swap(&leaf, &SigningId::AdHoc).unwrap_err();
+    assert!(e.contains("not signed with Seance's certificate"), "{e}");
+    let e = identity_allows_swap(&leaf, &other).unwrap_err();
+    assert!(e.contains("different certificate"), "{e}");
+    assert!(identity_allows_swap(&leaf, &SigningId::Other).is_err());
+}
