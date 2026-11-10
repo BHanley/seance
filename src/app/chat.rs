@@ -2305,7 +2305,7 @@ impl SeanceApp {
                 .background_executor()
                 .spawn(async move {
                     match local {
-                        Some((client, lead)) => chat_local::answer(&client, &lead, &text),
+                        Some((client, lead)) => chat_local::answer(&client, &to, &lead, &text),
                         None if chat_local::is_local() => Err(anyhow::anyhow!("no lead")),
                         None => chat_api::answer(&to, &text, answers),
                     }
@@ -3901,10 +3901,15 @@ impl SeanceApp {
                         d.hover(|s| s.bg(SeancePalette::violet().opacity(0.25)))
                     })
                     .when(carve::slick(), |d| d.hover(|s| s.opacity(0.8)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, window, cx| {
                         if spec_change {
                             this.chat.focus_input = true;
                             cx.notify();
+                        } else if chat_local::is_local() && choice == chat_local::SHOW_TERMINAL {
+                            // The way out of any dialog card: the pane itself.
+                            if let Some(ws) = this.chat.selected.clone() {
+                                this.chat_show_terminal(&ws, window, cx);
+                            }
                         } else {
                             this.chat_answer(id, choice.clone(), cx);
                         }

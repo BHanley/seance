@@ -17,6 +17,7 @@ use serde_json::Value;
 
 use crate::chat_api::{CircleRow, Circles, Msg, Thread};
 use crate::gui_client::GuiClient;
+use seance_core::agent_state::{arrow_keys, same_dialog, DialogKind, DialogPrompt};
 
 /// Shown when a circle has no Claude lead to read.
 pub const NO_LEAD_MESSAGE: &str = "Start Claude in a pane in this circle to chat.";
@@ -260,6 +261,9 @@ struct WsState {
     /// The pane the last round talked to (the set lead, else the circle's
     /// own Claude).
     lead: Option<String>,
+    /// The dialog the last round showed as a card, so a tap can be checked
+    /// against what the screen says now.
+    dialog: Option<DialogPrompt>,
 }
 
 static STATE: Mutex<Option<HashMap<String, WsState>>> = Mutex::new(None);
@@ -361,21 +365,25 @@ pub fn round(ask: LocalAsk) -> Result<LocalRound> {
             st.queue.waiting_front(text);
         }
     }
-    let prompt = v["prompt"].as_object().map(|p| {
-        let question = p["question"].as_str().unwrap_or_default().to_string();
-        let options: Vec<String> = p["options"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|o| format!("{}. {}", o["n"], o["label"].as_str().unwrap_or_default()))
-            .collect();
-        (question, options)
+    // A dialog waiting on the pane's screen (first-launch pickers, the trust
+    // question, permission prompts): not in the transcript, so it comes from
+    // the screen. Shown as a card whose buttons answer it.
+    let dialog = serde_json::from_value::<DialogPrompt>(v["prompt"].clone()).ok();
+    let prompt = dialog.as_ref().map(dialog_card);
+    let key = dialog.as_ref().map(|d| {
+        format!(
+            "{:?}|{}|{}|{}",
+            d.kind,
+            d.question,
+            d.options.join("|"),
+            d.screen
+        )
     });
-    let key = prompt.as_ref().map(|(q, o)| format!("{q}|{}", o.join("|")));
     if key.is_some() && key != st.prompt_key {
         st.prompts_seen += 1;
     }
     st.prompt_key = key;
+    st.dialog = dialog;
     let mut messages = st.thread.msgs.clone();
     for (i, text) in st.queue.pending().into_iter().enumerate() {
         messages.push(Msg {
@@ -407,7 +415,7 @@ pub fn round(ask: LocalAsk) -> Result<LocalRound> {
         row.working = busy;
         row.last = messages.last().cloned();
     }
-    let sig = hash_of(&[&|h| (messages.len(), newest, &activity, busy).hash(h)]);
+    let sig = hash_of(&[&|h| (messages.len(), newest, &activity, busy, &st.prompt_key).hash(h)]);
     let quiet = sig == st.sig && !circles_moved;
     st.sig = sig;
     Ok(LocalRound {
@@ -466,6 +474,55 @@ pub fn send(ws: &str, text: &str) -> Result<()> {
     Ok(())
 }
 
+/// The button that leaves Chat for the pane itself: always offered with a
+/// dialog, the way out when a card can't say it.
+pub const SHOW_TERMINAL: &str = "Show terminal";
+/// The one key an unreadable dialog gets from Chat. Never a blind Enter: that
+/// could approve something the person has not seen.
+pub const PRESS_ESC: &str = "Press Esc";
+
+/// A dialog as a message card: its text and its buttons.
+fn dialog_card(d: &DialogPrompt) -> (String, Vec<String>) {
+    match d.kind {
+        DialogKind::Numbered | DialogKind::Arrows => {
+            let mut choices: Vec<String> = d
+                .options
+                .iter()
+                .enumerate()
+                .map(|(i, l)| format!("{}. {l}", i + 1))
+                .collect();
+            choices.push(SHOW_TERMINAL.into());
+            (d.question.clone(), choices)
+        }
+        DialogKind::Unknown => (
+            format!("Claude is waiting for you. Its screen:\n{}", d.screen),
+            vec![PRESS_ESC.into(), SHOW_TERMINAL.into()],
+        ),
+    }
+}
+
+/// The keys a tap sends, or why it must not send any. `old` is the dialog the
+/// card showed, `new` the one on the screen now: a tap only presses keys while
+/// it is still the same dialog.
+pub fn plan_answer(old: &DialogPrompt, new: &DialogPrompt, choice: &str) -> Result<Vec<u8>> {
+    if !same_dialog(old, new) {
+        return Err(anyhow!("The prompt changed. Look at the new one first."));
+    }
+    if choice == PRESS_ESC {
+        return Ok(b"\x1b".to_vec());
+    }
+    let n = choice
+        .split_once(". ")
+        .and_then(|(d, _)| d.parse::<usize>().ok())
+        .filter(|n| (1..=new.options.len()).contains(n))
+        .ok_or_else(|| anyhow!("not an option"))?;
+    match new.kind {
+        DialogKind::Numbered if n <= 9 => Ok(vec![b'0' + n as u8]),
+        DialogKind::Arrows => Ok(arrow_keys(new.selected, n - 1)),
+        _ => Err(anyhow!("Chat can't answer this one. Use the terminal.")),
+    }
+}
+
 /// The pane the circle's last round talked to: what a tap on an option or
 /// Stop goes to.
 pub fn lead_of(ws: &str) -> Option<String> {
@@ -487,14 +544,21 @@ pub fn has_claude(ws: &str) -> bool {
         .is_none_or(|st| !st.no_claude)
 }
 
-/// A tapped option ("2. Yes, and don't ask again"): press its digit.
-pub fn answer(client: &GuiClient, lead: &str, choice: &str) -> Result<()> {
-    let digit = choice
-        .chars()
-        .next()
-        .filter(char::is_ascii_digit)
-        .ok_or_else(|| anyhow!("not an option"))?;
-    client.input(lead, &[digit as u8])
+/// A tapped button on a dialog card: re-read the pane's screen, and only if it
+/// still shows that same dialog, press the keys (a digit, or arrows and Enter).
+pub fn answer(client: &GuiClient, ws: &str, lead: &str, choice: &str) -> Result<()> {
+    let old = STATE
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(ws))
+        .and_then(|st| st.dialog.clone())
+        .ok_or_else(|| anyhow!("Claude is not waiting on that any more."))?;
+    let v = client.local_chat(lead, u64::MAX, "")?;
+    let fresh = serde_json::from_value::<DialogPrompt>(v["prompt"].clone())
+        .map_err(|_| anyhow!("Claude is not waiting on that any more."))?;
+    let keys = plan_answer(&old, &fresh, choice)?;
+    client.input(lead, &keys)
 }
 
 /// Esc: Claude stops its turn.
@@ -504,6 +568,71 @@ pub fn stop(client: &GuiClient, lead: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    fn dialog(kind: DialogKind, options: &[&str], selected: usize) -> DialogPrompt {
+        DialogPrompt {
+            kind,
+            question: "Do you trust the files in this folder?".into(),
+            options: options.iter().map(|s| s.to_string()).collect(),
+            selected,
+            screen: "bottom of the screen".into(),
+        }
+    }
+
+    #[test]
+    fn a_dialog_becomes_a_card_with_its_options_and_a_way_to_the_terminal() {
+        let d = dialog(DialogKind::Numbered, &["Yes, proceed", "No, exit"], 0);
+        let (text, choices) = dialog_card(&d);
+        assert_eq!(text, "Do you trust the files in this folder?");
+        assert_eq!(choices, ["1. Yes, proceed", "2. No, exit", SHOW_TERMINAL]);
+        // One it can't read: the screen, and Esc, never a blind Enter.
+        let u = dialog(DialogKind::Unknown, &[], 0);
+        let (text, choices) = dialog_card(&u);
+        assert!(text.contains("bottom of the screen"));
+        assert_eq!(choices, [PRESS_ESC, SHOW_TERMINAL]);
+        assert!(!choices.iter().any(|c| c.to_lowercase().contains("enter")));
+    }
+
+    #[test]
+    fn a_tap_presses_a_digit_or_arrows_and_enter_only_for_the_same_dialog() {
+        let num = dialog(DialogKind::Numbered, &["Yes, proceed", "No, exit"], 0);
+        assert_eq!(plan_answer(&num, &num, "2. No, exit").unwrap(), b"2");
+        let arrows = dialog(
+            DialogKind::Arrows,
+            &["No, exit", "Yes, I trust this folder"],
+            0,
+        );
+        assert_eq!(
+            plan_answer(&arrows, &arrows, "2. Yes, I trust this folder").unwrap(),
+            b"\x1b[B\r"
+        );
+        // The selection moved since the card was drawn: counted from where it is now.
+        let moved = dialog(
+            DialogKind::Arrows,
+            &["No, exit", "Yes, I trust this folder"],
+            1,
+        );
+        assert_eq!(
+            plan_answer(&arrows, &moved, "1. No, exit").unwrap(),
+            b"\x1b[A\r"
+        );
+        // A different dialog is on screen now: nothing is pressed.
+        let other = dialog(DialogKind::Numbered, &["Dark mode", "Light mode"], 0);
+        let e = plan_answer(&num, &other, "1. Yes, proceed")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("changed"), "{e}");
+        // An option that is not there, and Enter-like words, press nothing.
+        assert!(plan_answer(&num, &num, "7. Nope").is_err());
+        assert!(plan_answer(&num, &num, "Enter").is_err());
+    }
+
+    #[test]
+    fn an_unreadable_dialog_is_answered_with_esc_only() {
+        let u = dialog(DialogKind::Unknown, &[], 0);
+        assert_eq!(plan_answer(&u, &u, PRESS_ESC).unwrap(), b"\x1b");
+        assert!(plan_answer(&u, &u, "1. Yes").is_err());
+    }
+
     use super::*;
 
     fn line(kind: &str, content: &str, extra: &str) -> String {
@@ -746,7 +875,7 @@ mod tests {
         assert_eq!(q.text, "Do you want to proceed?");
         assert_eq!(q.choices.len(), 3);
         assert_eq!(q.choices[0], "1. Yes");
-        answer(&client, &lead, &q.choices[1]).unwrap();
+        answer(&client, &ws, &lead, &q.choices[1]).unwrap();
         until("answered", &|t| {
             t.messages.iter().any(|m| m.text == "you pressed 2")
                 && t.messages.iter().all(|m| m.choices.is_empty())

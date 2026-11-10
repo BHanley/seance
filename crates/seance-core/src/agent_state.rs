@@ -147,6 +147,146 @@ pub fn numbered_options(screen: &str) -> Option<NumberedPrompt> {
     Some(NumberedPrompt { question, options })
 }
 
+/// How a dialog on the screen is answered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DialogKind {
+    /// Options with digits: press the digit.
+    Numbered,
+    /// A list with a moving selection and no digits: arrows, then Enter.
+    Arrows,
+    /// Something is waiting that this can't read as a list.
+    Unknown,
+}
+
+/// An interactive dialog on a Claude pane's screen: the first-launch pickers
+/// (theme, login, "Do you trust the files in this folder?") and permission
+/// prompts, which are not in the transcript.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct DialogPrompt {
+    pub kind: DialogKind,
+    pub question: String,
+    /// Each option's label, in order (digits and the selection marker removed).
+    pub options: Vec<String>,
+    /// The option the selection marker is on now (arrows only).
+    pub selected: usize,
+    /// The bottom of the screen, for a dialog that can't be read as a list.
+    pub screen: String,
+}
+
+/// Footer hints a picker shows under its options.
+const DIALOG_FOOTERS: &[&str] = &["Enter to confirm", "Enter to select", "Esc to cancel"];
+/// Bottom lines kept for an unreadable dialog.
+const UNKNOWN_LINES: usize = 12;
+
+/// The dialog waiting on `screen`, if any. `awaiting` is the classifier's
+/// verdict (a known permission or trust marker); a picker footer counts too, so
+/// the theme and login pickers show without being in that list.
+pub fn dialog_prompt(screen: &str, awaiting: bool) -> Option<DialogPrompt> {
+    let lines: Vec<&str> = screen.lines().collect();
+    let tail_start = lines.len().saturating_sub(TAIL_WINDOW + STATUS_WINDOW);
+    let footer = lines[tail_start..]
+        .iter()
+        .any(|l| DIALOG_FOOTERS.iter().any(|m| l.contains(m)));
+    if !awaiting && !footer {
+        return None;
+    }
+    if let Some(n) = numbered_options(screen) {
+        return Some(DialogPrompt {
+            kind: DialogKind::Numbered,
+            question: n.question,
+            options: n.options.into_iter().map(|(_, l)| l).collect(),
+            selected: 0,
+            screen: String::new(),
+        });
+    }
+    if let Some((question, options, selected)) = arrow_options(&lines, tail_start) {
+        return Some(DialogPrompt {
+            kind: DialogKind::Arrows,
+            question,
+            options,
+            selected,
+            screen: String::new(),
+        });
+    }
+    let mut tail: Vec<&str> = lines
+        .iter()
+        .rev()
+        .skip_while(|l| l.trim().is_empty())
+        .take(UNKNOWN_LINES)
+        .copied()
+        .collect();
+    tail.reverse();
+    Some(DialogPrompt {
+        kind: DialogKind::Unknown,
+        question: String::new(),
+        options: Vec::new(),
+        selected: 0,
+        screen: tail.join("\n"),
+    })
+}
+
+/// A list whose selection is a marker (`❯`) on one line and whose other
+/// lines are indented labels with no digit: (question, labels, selected).
+fn arrow_options(lines: &[&str], from: usize) -> Option<(String, Vec<String>, usize)> {
+    let marked = |l: &str| {
+        let t = l.trim_start();
+        t.strip_prefix('❯')
+            .or_else(|| t.strip_prefix('›'))
+            .map(|r| r.trim().to_string())
+    };
+    let at = (from..lines.len())
+        .rev()
+        .find(|&i| marked(lines[i]).is_some_and(|l| !l.is_empty()))?;
+    let indented = |l: &str| l.starts_with(' ') && !l.trim().is_empty();
+    let mut first = at;
+    while first > from && indented(lines[first - 1]) && marked(lines[first - 1]).is_none() {
+        first -= 1;
+    }
+    let mut last = at;
+    while last + 1 < lines.len() && indented(lines[last + 1]) {
+        last += 1;
+    }
+    let label = |l: &str| marked(l).unwrap_or_else(|| l.trim().to_string());
+    let options: Vec<String> = lines[first..=last].iter().map(|l| label(l)).collect();
+    if options.len() < 2 {
+        return None;
+    }
+    // The paragraph just above the list (a long question wraps over lines).
+    let above: Vec<&str> = lines[from..first].iter().map(|l| l.trim()).collect();
+    let end = above
+        .iter()
+        .rposition(|l| !l.is_empty())
+        .map_or(0, |i| i + 1);
+    let begin = above[..end]
+        .iter()
+        .rposition(|l| l.is_empty())
+        .map_or(0, |i| i + 1);
+    let question = above[begin..end].join(" ");
+    Some((question, options, at - first))
+}
+
+/// Keys that move a selection from `selected` to `target` and choose it:
+/// Down or Up arrows, then Enter.
+pub fn arrow_keys(selected: usize, target: usize) -> Vec<u8> {
+    let mut keys = Vec::new();
+    for _ in 0..target.abs_diff(selected) {
+        keys.extend_from_slice(if target > selected {
+            b"\x1b[B"
+        } else {
+            b"\x1b[A"
+        });
+    }
+    keys.push(b'\r');
+    keys
+}
+
+/// Is `b` still the dialog `a` was? Same words, so a tap meant for one can
+/// never answer another that has taken its place.
+pub fn same_dialog(a: &DialogPrompt, b: &DialogPrompt) -> bool {
+    a.kind == b.kind && a.question == b.question && a.options == b.options
+}
+
 /// Lines above the input box that count as "live status" territory.
 const STATUS_WINDOW: usize = 8;
 /// Claude prints tips (sometimes many lines) *under* its spinner, so the
@@ -509,6 +649,65 @@ fn echoes(screen: &str, text: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
+    // Captured screens of Claude's own first-launch and permission dialogs.
+    const TRUST_NUMBERED: &str = "\n Do you trust the files in this folder?\n\n /Users/me\n\n Claude Code may read files in this folder. Reading untrusted files may lead\n Claude Code to behave in unexpected ways.\n\n ❯ 1. Yes, proceed\n   2. No, exit\n\n Enter to confirm · Esc to cancel\n";
+    const TRUST_ARROWS: &str = "\n Is this a project you created or one you trust? (Like your own code, a well-\n known open source project, or work from your team).\n\n ❯ No, exit\n   Yes, I trust this folder\n";
+    const THEME: &str = "\n Welcome to Claude Code\n\n Choose the text style that looks best with your terminal\n To change this later, run /theme\n\n ❯ 1. Dark mode ✔\n   2. Light mode\n   3. Dark mode (colorblind-friendly)\n\n Enter to select · Esc to cancel\n";
+    const UNKNOWN: &str = "\n Some tool wants something\n Do you want to proceed?\n Press y to confirm, n to cancel\n";
+
+    #[test]
+    fn the_trust_dialog_reads_as_numbered_options() {
+        let d = dialog_prompt(TRUST_NUMBERED, true).unwrap();
+        assert_eq!(d.kind, DialogKind::Numbered);
+        assert_eq!(
+            d.question,
+            "/Users/me".to_string().replace("/Users/me", &d.question)
+        );
+        assert_eq!(d.options, ["Yes, proceed", "No, exit"]);
+    }
+
+    #[test]
+    fn the_trust_dialog_without_digits_is_an_arrow_list_with_its_selection() {
+        let d = dialog_prompt(TRUST_ARROWS, true).unwrap();
+        assert_eq!(d.kind, DialogKind::Arrows);
+        assert_eq!(d.options, ["No, exit", "Yes, I trust this folder"]);
+        assert_eq!(d.selected, 0);
+        assert!(d.question.contains("trust"), "{}", d.question);
+        // Choosing the second: one Down, then Enter. The first: just Enter.
+        assert_eq!(arrow_keys(d.selected, 1), b"\x1b[B\r");
+        assert_eq!(arrow_keys(0, 0), b"\r");
+        assert_eq!(arrow_keys(2, 0), b"\x1b[A\x1b[A\r");
+    }
+
+    #[test]
+    fn the_theme_picker_shows_without_a_known_marker_through_its_footer() {
+        // Not in the awaiting list: the picker footer is what gives it away.
+        let d = dialog_prompt(THEME, false).unwrap();
+        assert_eq!(d.kind, DialogKind::Numbered);
+        assert_eq!(d.options.len(), 3);
+        assert!(d.question.contains("To change this later") || d.question.contains("text style"));
+    }
+
+    #[test]
+    fn a_dialog_that_is_not_a_list_is_unknown_and_carries_the_screen() {
+        let d = dialog_prompt(UNKNOWN, true).unwrap();
+        assert_eq!(d.kind, DialogKind::Unknown);
+        assert!(d.options.is_empty());
+        assert!(d.screen.contains("Press y to confirm"), "{}", d.screen);
+    }
+
+    #[test]
+    fn an_ordinary_screen_has_no_dialog_and_the_same_dialog_is_recognized() {
+        assert_eq!(
+            dialog_prompt("\n ✻ Working…\n\n ╭─────╮\n │ >   │\n ╰─────╯\n", false),
+            None
+        );
+        let a = dialog_prompt(TRUST_NUMBERED, true).unwrap();
+        let b = dialog_prompt(TRUST_NUMBERED, true).unwrap();
+        assert!(same_dialog(&a, &b));
+        assert!(!same_dialog(&a, &dialog_prompt(THEME, false).unwrap()));
+    }
+
     use super::*;
 
     // Frames sampled live 2026-09-27 (narrow panes, so lines are truncated).

@@ -24,7 +24,7 @@ pub(crate) struct LocalChatLook {
     pub path: Option<PathBuf>,
     pub activity: String,
     pub evidence: Option<String>,
-    pub prompt: Option<seance_core::agent_state::NumberedPrompt>,
+    pub prompt: Option<seance_core::agent_state::DialogPrompt>,
 }
 
 /// Who Chat talks to in a circle: a lead that was set wins (Brian's own
@@ -115,9 +115,9 @@ impl Engine {
             path,
             activity: state.activity.as_str().into(),
             evidence: state.evidence,
-            prompt: awaiting
-                .then(|| seance_core::agent_state::numbered_options(&screen))
-                .flatten(),
+            // A dialog that is not in the transcript: a first-launch picker, the
+            // trust question, a permission prompt.
+            prompt: seance_core::agent_state::dialog_prompt(&screen, awaiting),
         }
     }
 }
@@ -133,10 +133,7 @@ pub(crate) fn local_chat_reply(
         "claude": look.claude,
         "activity": look.activity,
         "evidence": look.evidence,
-        "prompt": look.prompt.as_ref().map(|p| json!({
-            "question": p.question,
-            "options": p.options.iter().map(|(n, l)| json!({ "n": n, "label": l })).collect::<Vec<_>>(),
-        })),
+        "prompt": look.prompt,
         "session": "",
         "size": 0, "from": 0, "to": 0, "reset": false, "b64": "",
     });
