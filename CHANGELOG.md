@@ -17,6 +17,10 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.3] — 2026-11-09
+
+- Test build for one-click updates (no code changes).
+
 ## [0.28.2] — 2026-11-09
 
 ### Added
