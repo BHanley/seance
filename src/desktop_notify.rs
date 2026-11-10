@@ -213,15 +213,26 @@ pub fn bell_sound() {
     play(&LAST_BELL_MS, path, cfg.bell_audio_volume);
 }
 
-/// `seance-done-sound`: a circle lead finished while you were looking elsewhere.
-/// Several finishing within a second play once.
+/// A circle lead finished while you were looking elsewhere. Which sound is
+/// the Lead Reply Sound menu's business (`lead_sound`): the menu pick, else
+/// `seance-done-sound`, else Thump. Several finishing within a second play once.
 pub fn done_sound() {
     static LAST_DONE_MS: AtomicU64 = AtomicU64::new(0);
     let cfg = crate::term_config::get();
-    let Some(path) = cfg.seance_done_sound.clone() else {
+    let Some(path) = crate::lead_sound::current(cfg.seance_done_sound.as_deref()) else {
         return;
     };
     play(&LAST_DONE_MS, path, cfg.seance_done_sound_volume);
+}
+
+/// The one sound played on purpose: a short preview after a menu pick.
+pub fn preview_sound(path: std::path::PathBuf) {
+    static LAST_PREVIEW_MS: AtomicU64 = AtomicU64::new(0);
+    play(
+        &LAST_PREVIEW_MS,
+        path,
+        crate::term_config::get().seance_done_sound_volume,
+    );
 }
 
 /// Play a sound file at `volume` (0 to 1), at most once a second per `last`.

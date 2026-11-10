@@ -10,3 +10,7 @@
 
 # agent collab test outputs (local)
 data/agent-collab-runs/
+
+# sound files ship in the app, never in the public code
+seance-sounds/
+**/Resources/sounds/

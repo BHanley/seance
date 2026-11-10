@@ -29,6 +29,16 @@ pub struct ActCheckUpdates;
 #[action(namespace = seance, no_json)]
 pub struct ActPhoneGuide;
 
+/// "Lead Reply Sound" submenu rows in the Seance menu.
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActLeadSound(pub String);
+
+/// "Lead Reply Sound > Custom…": pick any sound file.
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActLeadSoundCustom;
+
 // Sidebar context-menu actions (menu items dispatch gpui actions).
 #[derive(Action, Clone, PartialEq, Deserialize)]
 #[action(namespace = seance, no_json)]

@@ -20,6 +20,7 @@ mod host;
 mod invoke;
 mod latency_probe;
 mod launch;
+mod lead_sound;
 mod looks;
 mod mark;
 mod mdfold;
@@ -478,11 +479,67 @@ fn install_app_menu(cx: &mut gpui::App) {
     cx.bind_keys([gpui::KeyBinding::new("cmd-q", app::actions::ActQuit, None)]);
     // gpui's restart: waits for this process to exit, then `open`s the bundle.
     cx.on_action(|_: &app::actions::ActRestart, cx| cx.restart());
-    use gpui::{Menu, MenuItem};
+    cx.on_action(|act: &app::actions::ActLeadSound, cx| {
+        let choice = match act.0.as_str() {
+            "thump" => lead_sound::Choice::Thump,
+            "gloop" => lead_sound::Choice::Gloop,
+            "glass" => lead_sound::Choice::Glass,
+            "pop" => lead_sound::Choice::Pop,
+            "none" => lead_sound::Choice::None,
+            _ => return,
+        };
+        pick_lead_sound(choice, cx);
+    });
+    cx.on_action(|_: &app::actions::ActLeadSoundCustom, cx| {
+        let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: None,
+        });
+        cx.spawn(async move |cx| {
+            let Ok(Ok(Some(paths))) = picked.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            if !lead_sound::is_sound_file(&path) {
+                return;
+            }
+            let _ = cx.update(|cx| pick_lead_sound(lead_sound::Choice::Custom(path), cx));
+        })
+        .detach();
+    });
+    set_app_menu(cx);
+}
 
+/// A menu pick: save it, tick it, and play it once so you hear what you chose.
+/// Takes effect at once, the next lead finish reads the file again.
+fn pick_lead_sound(choice: lead_sound::Choice, cx: &mut gpui::App) {
+    lead_sound::save(&choice);
+    set_app_menu(cx);
+    if let Some(file) = lead_sound::for_choice(&choice) {
+        desktop_notify::preview_sound(file);
+    }
+}
+
+fn set_app_menu(cx: &mut gpui::App) {
+    use gpui::{Menu, MenuItem};
+    let saved = lead_sound::load();
+    let tags = ["thump", "gloop", "glass", "pop", "", "none"];
+    let rows = lead_sound::ROWS.iter().enumerate().map(|(i, (label, _))| {
+        let ticked = lead_sound::ticked(saved.as_ref(), i);
+        if tags[i].is_empty() {
+            MenuItem::action(*label, app::actions::ActLeadSoundCustom).checked(ticked)
+        } else {
+            MenuItem::action(*label, app::actions::ActLeadSound(tags[i].into())).checked(ticked)
+        }
+    });
     cx.set_menus([Menu::new("Seance").items([
         MenuItem::action("Check for Updates…", app::actions::ActCheckUpdates),
         MenuItem::action("Use Seance on Your Phone…", app::actions::ActPhoneGuide),
+        MenuItem::submenu(Menu::new("Lead Reply Sound").items(rows)),
         MenuItem::action("Restart Seance", app::actions::ActRestart),
         MenuItem::action("Quit Seance", app::actions::ActQuit),
     ])]);
