@@ -506,6 +506,11 @@ impl SeanceApp {
         // `connect()` decides blank-window on its own (second process /
         // SEANCE_EMPTY_WINDOW); such a window must never persist a list.
         let empty = empty || client.is_empty_window();
+        if empty {
+            eprintln!(
+                "[seance] this window started blank (another Seance GUI of this user is running): no first-run or update check here"
+            );
+        }
         let subs_seeded = pref.is_some() && !empty;
         let remote_cache = Arc::new(crate::remote_cache::RemoteCache::new(Arc::clone(&client)));
         let view = views::ViewState::restore(empty);
@@ -3187,6 +3192,9 @@ impl Render for SeanceApp {
                 if this.wall_owns_keys() {
                     cx.stop_propagation();
                 }
+            }))
+            .on_action(cx.listener(|this, _: &ActCheckUpdates, _, cx| {
+                this.check_for_updates(cx);
             }))
             .on_action(cx.listener(|this, _: &ActPhoneGuide, _, cx| {
                 this.open_phone_guide(cx);

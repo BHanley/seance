@@ -370,5 +370,86 @@ pub fn check(current: &str, url: &str) -> Result<Option<Feed>> {
     Ok((compare(current, &feed.version) == Verdict::Newer).then_some(feed))
 }
 
+/// What a check came to, in the words the person (and the log) gets.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// Updating is off here: say why.
+    Off(String),
+    UpToDate(String),
+    Ready(Feed),
+    Failed(String),
+}
+
+/// Pure: a check's result as an outcome.
+pub fn outcome(enabled: bool, current: &str, result: Result<Option<Feed>>) -> Outcome {
+    if !enabled {
+        return Outcome::Off(
+            "Updates are off here (this is a personal or remote Seance, or not an installed app)."
+                .into(),
+        );
+    }
+    match result {
+        Ok(Some(feed)) => Outcome::Ready(feed),
+        Ok(None) => Outcome::UpToDate(format!("Seance {current} is up to date.")),
+        Err(e) => Outcome::Failed(format!("{e:#}")),
+    }
+}
+
+/// The line every check writes to gui.stderr.log.
+pub fn log_line(enabled: bool, feed: &str, o: &Outcome) -> String {
+    let result = match o {
+        Outcome::Off(_) => "off".to_string(),
+        Outcome::UpToDate(_) => "up to date".to_string(),
+        Outcome::Ready(f) => format!("newer {}", f.version),
+        Outcome::Failed(e) => format!("failed: {e}"),
+    };
+    format!("[seance] update check: enabled={enabled}, feed={feed}, result={result}")
+}
+
+/// Run a check now, logging it. Blocking: run it off the UI thread.
+pub fn check_now() -> Outcome {
+    let on = enabled_here();
+    let url = feed_url();
+    let current = env!("CARGO_PKG_VERSION");
+    let o = outcome(
+        on,
+        current,
+        if on { check(current, &url) } else { Ok(None) },
+    );
+    eprintln!("{}", log_line(on, &url, &o));
+    o
+}
+
+/// A native dialog (it does not depend on the window's own layout): the text
+/// and one or two buttons; returns the one pressed. Blocking.
+#[cfg(target_os = "macos")]
+pub fn dialog(text: &str, buttons: &[&str]) -> Option<String> {
+    let q = |s: &str| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""));
+    let list = buttons.iter().map(|b| q(b)).collect::<Vec<_>>().join(", ");
+    let last = q(buttons.last()?);
+    let script = format!(
+        "display dialog {} with title \"Seance\" buttons {{{list}}} default button {last}",
+        q(text)
+    );
+    let out = Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).to_string())
+        .and_then(|s| {
+            buttons
+                .iter()
+                .find(|b| s.contains(&format!("button returned:{b}")))
+                .map(|b| b.to_string())
+        })
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn dialog(_text: &str, _buttons: &[&str]) -> Option<String> {
+    None
+}
+
 #[cfg(test)]
 mod tests;

@@ -17,6 +17,23 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.5] — 2026-11-09
+
+### Fixed
+
+- The "Update ready" bar never showed in a second macOS account. Seance decided
+  it was a second window (a blank one, which skips the first-run and update
+  checks) because it counted any Seance GUI on the Mac, including the one in
+  another signed-in account. It now counts only the same user's own.
+
+### Added
+
+- Seance menu > "Check for Updates…": looks now and answers in a native
+  dialog ("up to date", the error, or "Seance X is ready to install" with an
+  Update button), and raises the bar when there is a newer build.
+- Every update check writes a line to gui.stderr.log (`update check: enabled=…,
+  feed=…, result=…`), and a window that starts blank says so.
+
 ## [0.28.4] — 2026-11-09
 
 ### Changed

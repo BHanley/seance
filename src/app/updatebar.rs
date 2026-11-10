@@ -19,33 +19,101 @@ pub(super) enum UpdateUi {
     Failed(Feed, String),
 }
 
+/// The strip the bar sits in: pinned to the window's bottom edge, full width,
+/// over whatever view is showing.
+fn bar_shell() -> gpui::Stateful<gpui::Div> {
+    div()
+        .id("update-bar")
+        .debug_selector(|| "update-bar".into())
+        .absolute()
+        .bottom_0()
+        .left_0()
+        .right_0()
+        .flex()
+        .justify_center()
+        .p_2()
+}
+
 impl SeanceApp {
     /// Look for a newer build when the app opens and every hour.
     pub(super) fn start_update_checks(&mut self, cx: &mut Context<Self>) {
         // The window is up: the app this one replaced is no longer needed.
         selfupdate::cleanup_backup();
-        if !selfupdate::enabled_here() {
-            return;
-        }
         cx.spawn(async move |this, cx| loop {
-            let url = selfupdate::feed_url();
             let found = cx
                 .background_executor()
-                .spawn(async move { selfupdate::check(env!("CARGO_PKG_VERSION"), &url) })
+                .spawn(async move { selfupdate::check_now() })
                 .await;
+            // Off here (logged once): nothing to look for, ever.
+            if matches!(found, selfupdate::Outcome::Off(_)) {
+                break;
+            }
             let Some(this) = this.upgrade() else { break };
             let _ = this.update(cx, |app: &mut SeanceApp, cx| {
                 // A feed that can't be read now is not worth a bar: try again next hour.
-                if let Ok(Some(feed)) = found {
-                    if !matches!(app.update, UpdateUi::Working(_)) {
-                        app.update = UpdateUi::Ready(feed);
-                        cx.notify();
-                    }
+                if let selfupdate::Outcome::Ready(feed) = found {
+                    app.show_update(feed, cx);
                 }
             });
             cx.background_executor()
                 .timer(selfupdate::CHECK_EVERY)
                 .await;
+        })
+        .detach();
+    }
+
+    fn show_update(&mut self, feed: Feed, cx: &mut Context<Self>) {
+        if !matches!(self.update, UpdateUi::Working(_)) {
+            self.update = UpdateUi::Ready(feed);
+            cx.notify();
+        }
+    }
+
+    /// "Check for Updates…" in the Seance menu: look now, and say what came of
+    /// it in a native dialog (so the answer shows however the window is laid
+    /// out). A newer build also raises the bar, and the dialog offers to
+    /// install it.
+    pub(super) fn check_for_updates(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let found = cx
+                .background_executor()
+                .spawn(async move { selfupdate::check_now() })
+                .await;
+            let say = match &found {
+                selfupdate::Outcome::Off(m) | selfupdate::Outcome::UpToDate(m) => m.clone(),
+                selfupdate::Outcome::Failed(e) => {
+                    format!("Seance could not look for updates: {e}")
+                }
+                selfupdate::Outcome::Ready(f) => format!(
+                    "Seance {} is ready to install.{}",
+                    f.version,
+                    if f.notes.trim().is_empty() {
+                        String::new()
+                    } else {
+                        format!("\n\n{}", f.notes.trim())
+                    }
+                ),
+            };
+            let ready = matches!(found, selfupdate::Outcome::Ready(_));
+            if let selfupdate::Outcome::Ready(feed) = found {
+                let Some(this) = this.upgrade() else { return };
+                let _ = this.update(cx, |app: &mut SeanceApp, cx| app.show_update(feed, cx));
+            }
+            let pressed = cx
+                .background_executor()
+                .spawn(async move {
+                    if ready {
+                        selfupdate::dialog(&say, &["Later", "Update"])
+                    } else {
+                        selfupdate::dialog(&say, &["OK"])
+                    }
+                })
+                .await;
+            if ready && pressed.as_deref() == Some("Update") {
+                if let Some(this) = this.upgrade() {
+                    let _ = this.update(cx, |app: &mut SeanceApp, cx| app.run_update(cx));
+                }
+            }
         })
         .detach();
     }
@@ -102,15 +170,7 @@ impl SeanceApp {
             _ => None,
         };
         Some(
-            div()
-                .id("update-bar")
-                .absolute()
-                .bottom_0()
-                .left_0()
-                .right_0()
-                .flex()
-                .justify_center()
-                .p_2()
+            bar_shell()
                 .child(
                     div()
                         .max_w(px(640.))
@@ -166,5 +226,49 @@ impl SeanceApp {
                 )
                 .into_any_element(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{Context, Render, Window};
+
+    /// The window as the app lays it out: a full-size flex root holding the
+    /// views, with the bar as one more child.
+    struct Root;
+    impl Render for Root {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .id("seance-root")
+                .size_full()
+                .flex()
+                .child(div().flex_1().h_full().child("the views"))
+                .child(bar_shell().child(div().child("Update ready: Seance 9.9.9")))
+        }
+    }
+
+    #[gpui::test]
+    fn the_bar_lands_inside_the_window_at_its_bottom_edge(cx: &mut gpui::TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| Root);
+        cx.run_until_parked();
+        let bar = cx
+            .debug_bounds("update-bar")
+            .expect("the bar was not laid out at all");
+        let win = cx.update(|window, _| window.bounds());
+        eprintln!("bar {bar:?} window {win:?}");
+        assert!(
+            bar.size.height > gpui::px(10.),
+            "bar has no height: {bar:?}"
+        );
+        assert!(bar.size.width > gpui::px(100.), "bar has no width: {bar:?}");
+        assert!(
+            bar.bottom() <= win.size.height + gpui::px(1.),
+            "bar is below the window: {bar:?}"
+        );
+        assert!(
+            bar.top() >= gpui::px(0.),
+            "bar is above the window: {bar:?}"
+        );
     }
 }

@@ -173,3 +173,29 @@ fn the_click_is_the_consent_for_a_short_while_and_only_once() {
     assert!(!consent_is_fresh("", 1000));
     assert!(!consent_is_fresh("soon", 1000));
 }
+
+fn a_feed() -> Feed {
+    parse_feed(&feed_json("0.28.5", SHA)).unwrap()
+}
+
+#[test]
+fn every_check_comes_to_one_of_four_outcomes_and_is_logged() {
+    // Off here: personal, remote, or not an app. Never reads the feed.
+    let o = outcome(false, "0.28.2", Ok(Some(a_feed())));
+    assert!(matches!(o, Outcome::Off(_)));
+    assert!(log_line(false, "file:///f.json", &o).contains("enabled=false"));
+    assert!(log_line(false, "file:///f.json", &o).ends_with("result=off"));
+    // Newer, same, and a feed that could not be read.
+    let o = outcome(true, "0.28.2", Ok(Some(a_feed())));
+    assert_eq!(o, Outcome::Ready(a_feed()));
+    assert_eq!(
+        log_line(true, "file:///f.json", &o),
+        "[seance] update check: enabled=true, feed=file:///f.json, result=newer 0.28.5"
+    );
+    let o = outcome(true, "0.28.5", Ok(None));
+    assert_eq!(o, Outcome::UpToDate("Seance 0.28.5 is up to date.".into()));
+    assert!(log_line(true, "u", &o).ends_with("result=up to date"));
+    let o = outcome(true, "0.28.2", Err(anyhow!("read /x: No such file")));
+    assert!(matches!(&o, Outcome::Failed(m) if m.contains("No such file")));
+    assert!(log_line(true, "u", &o).contains("result=failed: read /x"));
+}

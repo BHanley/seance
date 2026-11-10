@@ -481,6 +481,7 @@ fn install_app_menu(cx: &mut gpui::App) {
     use gpui::{Menu, MenuItem};
 
     cx.set_menus([Menu::new("Seance").items([
+        MenuItem::action("Check for Updates…", app::actions::ActCheckUpdates),
         MenuItem::action("Use Seance on Your Phone…", app::actions::ActPhoneGuide),
         MenuItem::action("Restart Seance", app::actions::ActRestart),
         MenuItem::action("Quit Seance", app::actions::ActQuit),

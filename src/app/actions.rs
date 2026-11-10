@@ -19,6 +19,11 @@ pub struct ActQuit;
 #[action(namespace = seance, no_json)]
 pub struct ActRestart;
 
+/// "Check for Updates…" in the Seance menu.
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActCheckUpdates;
+
 /// Open "Use Seance on your phone" (the app menu, Settings).
 #[derive(Action, Clone, PartialEq, Deserialize)]
 #[action(namespace = seance, no_json)]

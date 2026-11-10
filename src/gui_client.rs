@@ -682,34 +682,61 @@ pub fn fs_not_found(e: &anyhow::Error) -> bool {
 /// Owns the socket lifecycle: connect → hello → attach → pump requests +
 /// events → on drop, backoff and retry. `req_rx` is the app's outbound queue;
 /// `ev_tx` feeds the GUI event bridge.
-/// True if another non-daemon seance process is already running.
+/// One running process, as `ps` reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Proc {
+    pid: u32,
+    uid: u32,
+    cmdline: String,
+}
+
+/// Is there another GUI of this user's own? A GUI is a bare `seance` (no
+/// subcommand); `daemon`, `web`, `restart-gui`, `ctl` and the rest share the
+/// binary and the process name. Only THIS user's processes count: on a Mac with
+/// two accounts signed in at once (Fast User Switching), the other account's
+/// Seance is none of this one's business. Counting it made 0.28.2 in a second
+/// account start as a blank "second window": no first-run check, no update
+/// check. Under the 0.11 subscriptions model a wrong yes here also means a
+/// blank sidebar, so the check must be exact.
+fn other_gui_among(procs: &[Proc], self_pid: u32, my_uid: u32) -> bool {
+    procs
+        .iter()
+        .any(|p| p.pid != self_pid && p.uid == my_uid && is_bare_seance(&p.cmdline))
+}
+
+/// `seance` or `/path/to/seance` with nothing after it.
+fn is_bare_seance(cmdline: &str) -> bool {
+    let mut words = cmdline.split_whitespace();
+    let Some(first) = words.next() else {
+        return false;
+    };
+    first.rsplit('/').next() == Some("seance") && words.next().is_none()
+}
+
 fn other_gui_running() -> bool {
-    let self_pid = std::process::id();
-    let Ok(out) = std::process::Command::new("pgrep")
-        .args(["-x", "seance"])
+    // One `ps` for pid, uid and command of everything; the command is the
+    // rest of the line, so it can hold spaces ("Application Support").
+    let Ok(out) = std::process::Command::new("ps")
+        .args(["-axww", "-o", "pid=,uid=,command="])
         .output()
     else {
         return false;
     };
-    for pid_s in String::from_utf8_lossy(&out.stdout).split_whitespace() {
-        let Ok(pid) = pid_s.parse::<u32>() else {
-            continue;
-        };
-        if pid == self_pid {
-            continue;
-        }
-        // Only a bare `seance` invocation is a GUI. Anything with a
-        // subcommand (`daemon`, `web`, `restart-gui`, `ctl`, …) is not —
-        // under the 0.11 ownership model miscounting was masked by the
-        // daemon's sole-window vacuum, but with subscriptions an Attach as
-        // "second window" means a blank sidebar, so the check must be exact.
-        let cmdline = crate::sysopen::process_cmdline(pid);
-        if cmdline.split_whitespace().nth(1).is_some() {
-            continue;
-        }
-        return true;
-    }
-    false
+    let procs: Vec<Proc> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| {
+            let mut it = l.trim_start().splitn(3, char::is_whitespace);
+            let pid = it.next()?.parse().ok()?;
+            let uid = it.next()?.trim().parse().ok()?;
+            Some(Proc {
+                pid,
+                uid,
+                cmdline: it.next()?.trim().to_string(),
+            })
+        })
+        .collect();
+    // SAFETY: getuid has no preconditions.
+    other_gui_among(&procs, std::process::id(), unsafe { libc::getuid() })
 }
 
 /// Paces reconnects while the daemon can't be reached: the wait doubles from
@@ -1118,6 +1145,53 @@ mod tests {
             crate::update::stale_local_daemon(true, false, &text).as_deref(),
             Some("0.27.4")
         );
+    }
+
+    fn proc(pid: u32, uid: u32, cmd: &str) -> Proc {
+        Proc {
+            pid,
+            uid,
+            cmdline: cmd.into(),
+        }
+    }
+
+    /// Regression (0.28.5): a second macOS account's Seance made this one a blank
+    /// window, which skipped the update check, so no "Update ready" bar.
+    #[test]
+    fn another_accounts_seance_is_not_another_gui_of_mine() {
+        let theirs = proc(31498, 501, "/Applications/Seance.app/Contents/MacOS/seance");
+        // Mine is uid 502: their bare `seance` does not count.
+        assert!(!other_gui_among(&[theirs.clone()], 3951, 502));
+        // My own second GUI does.
+        let mine = proc(
+            4000,
+            502,
+            "/Users/me/Applications/Seance.app/Contents/MacOS/seance",
+        );
+        assert!(other_gui_among(&[theirs.clone(), mine], 3951, 502));
+        // Not myself, not a daemon, web bridge or ctl of mine.
+        let me = proc(
+            3951,
+            502,
+            "/Users/me/Applications/Seance.app/Contents/MacOS/seance",
+        );
+        let daemon = proc(
+            85651,
+            502,
+            "/Applications/Seance.app/Contents/MacOS/seance daemon",
+        );
+        let spaced = proc(
+            5,
+            502,
+            "/Users/me/Library/Application Support/Seance/bin/seance-0.28.2 daemon",
+        );
+        assert!(!other_gui_among(&[me, daemon, spaced], 3951, 502));
+        // A flag-only launch is still a bare GUI only when nothing follows the path.
+        assert!(is_bare_seance("seance"));
+        assert!(is_bare_seance("/x/Seance.app/Contents/MacOS/seance"));
+        assert!(!is_bare_seance("seance ctl list"));
+        assert!(!is_bare_seance("python seance"));
+        assert!(!is_bare_seance(""));
     }
 
     #[test]
