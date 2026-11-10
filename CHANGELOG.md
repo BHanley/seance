@@ -17,6 +17,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.14] — 2026-11-10
+
+### Fixed
+- A false "needs you": a finished reply that quoted a dialog (for example "Do you trust the files in this folder?") above Claude's normal input box read as a live prompt. The normal box (a rule, the empty ❯ line, a rule, then status lines) is now checked first; with it showing the pane is idle. Real prompts (trust, permissions, theme picker) still ping you, and Chat's dialog cards never show for the quoted text.
+
 ## [0.28.13] — 2026-11-10
 
 ### Added
