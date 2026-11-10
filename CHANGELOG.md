@@ -17,6 +17,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.15] — 2026-11-10
+
+### Added
+- Chat: when Claude's first-run sign-in step asks for the code the browser shows ("Paste code here if prompted >"), the pane's card gets a masked text box and Send, so you never open the terminal. The code goes only to that pane: it is not saved in Chat, not echoed back (the card just says Sent), not logged or recorded by the daemon. The box shows only on that step; other dialog cards and Show terminal are unchanged. That pane now also reads as needing you.
+
 ## [0.28.14] — 2026-11-10
 
 ### Fixed
