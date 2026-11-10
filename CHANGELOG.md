@@ -17,6 +17,13 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.7] — 2026-11-09
+
+### Added
+- Chat shows Claude's own first-launch and permission dialogs (trust this folder, theme, login) as a card with the options as buttons and a Show terminal fallback. A tap presses keys only while the same dialog is still on screen; an unreadable dialog offers only Esc.
+- Chat's side panel shows the open chat's circle files, with a per-circle "files N" button to open or close it (from mac-spaces).
+- Signing groundwork: the build script can sign the app, daemon copy and Python runtime with a stable identity (off unless configured).
+
 ## [0.28.6] — 2026-11-09
 
 - Test build for one-click updates (no code changes).
