@@ -154,6 +154,13 @@ if [[ -n "${SEANCE_SIGN_IDENTITY:-}" ]]; then
   [[ -f "$SIGN_KC" ]] || { echo "SEANCE_SIGN_IDENTITY is set but there is no keychain at $SIGN_KC" >&2; exit 1; }
   [[ -f "$SIGN_PW_FILE" ]] || { echo "no keychain password file at $SIGN_PW_FILE" >&2; exit 1; }
   security unlock-keychain -p "$(cat "$SIGN_PW_FILE")" "$SIGN_KC"
+  # codesign only finds an identity in the user's keychain search list, so the
+  # signing keychain joins it for this run and the list is put back on exit.
+  KC_LIST=()
+  while IFS= read -r k; do k="${k#"${k%%[![:space:]]*}"}"; k="${k//\"/}"; [[ -n "$k" ]] && KC_LIST+=("$k"); done \
+    < <(security list-keychains -d user)
+  security list-keychains -d user -s "$SIGN_KC" ${KC_LIST[@]+"${KC_LIST[@]}"}
+  trap 'security list-keychains -d user -s ${KC_LIST[@]+"${KC_LIST[@]}"}; rm -rf "$STAGE"' EXIT
   LEAF="$(security find-certificate -c "$SEANCE_SIGN_IDENTITY" -Z "$SIGN_KC" | awk '/SHA-1 hash:/ {print $3}')"
   [[ -n "$LEAF" ]] || { echo "no certificate named '$SEANCE_SIGN_IDENTITY' in $SIGN_KC" >&2; exit 1; }
   # Stable identity: the designated requirement is the identifier plus the
