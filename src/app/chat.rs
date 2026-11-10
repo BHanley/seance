@@ -742,7 +742,7 @@ const VIDEO_SECS: u64 = 900;
 #[derive(Default)]
 pub(super) struct ChatState {
     circles: Vec<CircleRow>,
-    selected: Option<String>,
+    pub(super) selected: Option<String>,
     threads: HashMap<String, Thread>,
     progress: HashMap<String, Progress>,
     /// Invoke's change counter as of the last round.
@@ -3153,6 +3153,34 @@ impl SeanceApp {
                 }),
             )
         });
+        let files_chip = self.chat_files_chip(&ws).filter(|_| !read_only);
+        let files_open = self.chat_files_open(&ws);
+        header = header.children(files_chip.map(|label| {
+            carve::plate(
+                div().id("chat-files"),
+                SeancePalette::surface(),
+                Stock::Sm,
+                Cut::Control,
+            )
+            .flex_none()
+            .px_2()
+            .py_0p5()
+            .text_xs()
+            .text_color(if files_open {
+                SeancePalette::text()
+            } else {
+                SeancePalette::text_dim()
+            })
+            .map(|d| carve::bg(d, SeancePalette::surface()))
+            .hover(|s| s.text_color(SeancePalette::flame()))
+            .cursor_pointer()
+            .tooltip(tip("show or hide this circle's files"))
+            .on_click({
+                let ws = ws.clone();
+                cx.listener(move |this, _, _, cx| this.toggle_chat_files(&ws, cx))
+            })
+            .child(label)
+        }));
         header = header.when(!read_only, |header| {
             header.child(
                 carve::plate(
