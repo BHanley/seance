@@ -179,11 +179,15 @@ pub fn classify(screen: &str, title: Option<&str>) -> AgentState {
     };
 
     let tail_start = lines.len().saturating_sub(TAIL_WINDOW + STATUS_WINDOW);
-    if let Some(l) = lines[tail_start..]
-        .iter()
-        .find(|l| AWAITING.iter().any(|m| l.contains(m)))
-    {
-        return verdict(Activity::AwaitingInput, Some(l));
+    // The normal input box first: with it showing, no dialog is, so a reply
+    // quoting one above it cannot read as one.
+    if !idle_composer(&lines) {
+        if let Some(l) = lines[tail_start..]
+            .iter()
+            .find(|l| AWAITING.iter().any(|m| l.contains(m)))
+        {
+            return verdict(Activity::AwaitingInput, Some(l));
+        }
     }
 
     let prompt = prompt_line(&lines);
@@ -223,6 +227,41 @@ pub fn classify(screen: &str, title: Option<&str>) -> AgentState {
         Some(i) => verdict(Activity::Idle, Some(lines[i])),
         None => verdict(Activity::Unknown, None),
     }
+}
+
+/// A horizontal rule: Claude draws one above and one below its composer, the
+/// top one sometimes carrying a title ("──── Seance · lead ─").
+fn is_rule(line: &str) -> bool {
+    let t = line.trim();
+    t.starts_with('─') && t.chars().filter(|c| *c == '─').count() >= 8
+}
+
+/// Claude's normal input box is showing: a rule, the `❯` line, a rule, then
+/// only status lines. A real dialog never looks like this: its `❯` marks the
+/// selected option (a digit and a label, or a label with more options and a
+/// footer hint around it), not an empty composer between two rules. When this
+/// is true the pane is not waiting on a dialog, whatever the text above it
+/// quotes (a finished reply that mentions "Do you trust the files in this
+/// folder?" is still just a reply).
+fn idle_composer(lines: &[&str]) -> bool {
+    let Some(p) = prompt_line(lines) else {
+        return false;
+    };
+    if p == 0 || p + 1 >= lines.len() || !is_rule(lines[p - 1]) || !is_rule(lines[p + 1]) {
+        return false;
+    }
+    let body = unboxed(lines[p]).trim_start_matches(['❯', '›']).trim();
+    let numbered = body
+        .split_once(". ")
+        .is_some_and(|(d, _)| !d.is_empty() && d.chars().all(|c| c.is_ascii_digit()));
+    let status = &lines[p + 2..];
+    !numbered
+        && status.len() <= STATUS_WINDOW
+        && !status.iter().any(|l| {
+            ["Enter to confirm", "Enter to select", "Esc to cancel"]
+                .iter()
+                .any(|m| l.contains(m))
+        })
 }
 
 /// A line with grok's input-box border (`│ ❯ … │`) peeled off.
@@ -775,5 +814,59 @@ mod tests {
             None,
         );
         assert_eq!(judge(&before, &running, text), Judgement::Delivered("busy"));
+    }
+    const TRUST_NUMBERED: &str = "\n Do you trust the files in this folder?\n\n /Users/me\n\n ❯ 1. Yes, proceed\n   2. No, exit\n\n Enter to confirm · Esc to cancel\n";
+    const TRUST_ARROWS: &str = "\n Is this a project you created or one you trust? (Like your own code, a well-\n known open source project, or work from your team).\n\n ❯ No, exit\n   Yes, I trust this folder\n";
+    const THEME: &str = "\n Welcome to Claude Code\n\n Choose the text style that looks best with your terminal\n\n ❯ 1. Dark mode ✔\n   2. Light mode\n\n Enter to select · Esc to cancel\n";
+    // A finished reply that quotes the trust dialog, above Claude's normal box.
+    const QUOTE_TOP: &str = "\n⏺ The trust dialog asks:\n\n    Do you trust the files in this folder?\n    ❯ 1. Yes, I trust this folder\n      2. No, exit\n\n  That is the one Seance answers for you.\n\n";
+    const RULE: &str = "──────────────────────────────────────────── Seance · Seance lead · XPS ─";
+    const RULE2: &str = "─────────────────────────────────────────────────────────────────────────";
+    const STATUS: &str = "     /home/me/Claude   main  Opus 5.5  ctx:28%  14:10\n  ⏵⏵ auto mode on (shift+tab to cycle)\n";
+
+    fn quote_screen(activity_line: &str) -> String {
+        format!("{QUOTE_TOP}{activity_line}\n\n{RULE}\n❯\n{RULE2}\n{STATUS}")
+    }
+
+    #[test]
+    fn a_reply_quoting_the_trust_dialog_above_the_normal_box_is_idle() {
+        let st = classify(&quote_screen("✻ Cooked for 16s"), None);
+        assert_eq!(st.activity, Activity::Idle, "{st:?}");
+    }
+
+    #[test]
+    fn the_same_quote_mid_turn_is_busy() {
+        let st = classify(&quote_screen("✻ Spinning… (45s · ↓ 3.0k tokens)"), None);
+        assert_eq!(st.activity, Activity::Busy, "{st:?}");
+    }
+
+    #[test]
+    fn the_real_dialogs_still_need_you() {
+        for (name, screen) in [
+            ("trust numbered", TRUST_NUMBERED),
+            ("trust arrows", TRUST_ARROWS),
+            ("theme", THEME),
+            ("permission", CLAUDE_PERMISSION),
+        ] {
+            assert_eq!(
+                classify(screen, None).activity,
+                Activity::AwaitingInput,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_boxed_permission_dialog_whose_last_option_is_selected_still_needs_you() {
+        let screen = format!(
+            "{RULE2}\n Bash command\n\n   rm -rf build\n\n Do you want to proceed?\n   1. Yes\n   2. Yes, and don't ask again\n ❯ 3. No, and tell Claude what to do differently (esc)\n{RULE2}\n"
+        );
+        assert_eq!(classify(&screen, None).activity, Activity::AwaitingInput);
+    }
+
+    #[test]
+    fn a_dialog_is_never_mistaken_for_the_box_by_its_footer() {
+        let screen = format!("{RULE}\n❯\n{RULE2}\n Enter to select · Esc to cancel\n Do you trust the files in this folder?\n");
+        assert_eq!(classify(&screen, None).activity, Activity::AwaitingInput);
     }
 }
