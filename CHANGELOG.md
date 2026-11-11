@@ -17,6 +17,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.17] — 2026-11-10
+
+### Added
+- Seance menu: **Suggest a Change…** opens a new feature request in your browser with the Seance version already filled in. The requests repo is private, so someone not yet invited sees GitHub's 404.
+
 ## [0.28.16] — 2026-11-10
 
 ### Fixed

@@ -4,7 +4,7 @@ members = ["crates/seance-core", "crates/seance-web"]
 exclude = ["deps"]
 
 [workspace.package]
-version = "0.28.16"
+version = "0.28.17"
 edition = "2021"
 
 [workspace.dependencies]
