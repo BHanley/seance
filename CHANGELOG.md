@@ -17,6 +17,14 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.18] — 2026-11-10
+
+### Changed
+- The rail and the main column draw as their own cached views, so a spinner tick no longer re-lays-out everything (a redraw benchmark ships with it).
+- Panes no longer resize while every circle's panes share one grid.
+- Only your own account's windows count as "another window", so a second account on a shared Mac starts normally.
+- Chat and Stage can make spaces and circles, and Chat can move a circle between spaces.
+
 ## [0.28.17] — 2026-11-10
 
 ### Added
