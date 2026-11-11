@@ -17,6 +17,13 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.19] — 2026-11-10
+
+### Added
+- **Seance Custom:** a built-in helper circle, made once per install, with a Claude that knows the app and can file feature requests. Lead Reply Sound > Custom… opens it in Chat and sends its first message (Custom file… is the old file picker).
+- One shared header for Chat, Classic and Stage, with a square + menu for new circles and spaces (Cmd+N makes a circle, Cmd+Option+N a space).
+- Menu: Suggest a Change… and Check for Updates… each sit in their own group.
+
 ## [0.28.18] — 2026-11-10
 
 ### Changed

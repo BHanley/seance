@@ -2763,16 +2763,13 @@ impl SeanceApp {
                             .items_center()
                             .gap_1()
                             .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .children(
-                                        self.chat
-                                            .search
-                                            .as_ref()
-                                            .filter(|_| !chat_local::is_local())
-                                            .map(|s| Input::new(s)),
-                                    ),
+                                div().flex_1().min_w_0().children(
+                                    self.chat
+                                        .search
+                                        .as_ref()
+                                        .filter(|_| !chat_local::is_local())
+                                        .map(|s| Input::new(s)),
+                                ),
                             )
                             .child(self.render_plus_button(
                                 "chat-plus",
