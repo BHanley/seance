@@ -81,6 +81,9 @@ pub struct RemoteTerminal {
     client: Arc<GuiClient>,
     rev: u64,
     resize: Mutex<ResizeGate>,
+    /// While set, layout measurements are not sent: the tile on screen is not
+    /// a size anyone chose (see `hold_resizes` in the app).
+    hold_resize: std::sync::atomic::AtomicBool,
 }
 
 impl RemoteTerminal {
@@ -92,6 +95,7 @@ impl RemoteTerminal {
             last_input_origin: None,
             client,
             rev: 0,
+            hold_resize: std::sync::atomic::AtomicBool::new(false),
             resize: Mutex::new(ResizeGate {
                 sent: (0, 0),
                 seen: (0, 0),
@@ -273,7 +277,21 @@ impl RemoteTerminal {
         }
     }
 
+    /// The size last asked of the daemon, `(0, 0)` before any request.
+    #[cfg(test)]
+    pub fn sent_size(&self) -> (u16, u16) {
+        self.resize.lock().unwrap().sent
+    }
+
+    pub fn set_resize_hold(&self, hold: bool) {
+        self.hold_resize
+            .store(hold, std::sync::atomic::Ordering::Relaxed);
+    }
+
     pub fn resize_cells(&self, cols: u16, rows: u16) {
+        if self.hold_resize.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
         let want = (cols.max(2), rows.max(2));
         let should_send = self.resize.lock().unwrap().measure(want);
         if should_send {

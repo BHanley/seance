@@ -81,6 +81,15 @@ impl SeanceApp {
         active: bool,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let hold = hold_resizes(
+            self.selected_workspace.as_deref(),
+            self.known_workspace_names().len(),
+        );
+        for p in &self.panes {
+            if let Some(t) = p.remote_terminal() {
+                t.read(cx).set_resize_hold(hold);
+            }
+        }
         // Timed section construction (SEANCE_DEBUG_RENDER=1 reports per-section
         // avg/max ms — pinpoints which surface makes frames expensive).
         let t1 = std::time::Instant::now();
@@ -118,5 +127,27 @@ impl SeanceApp {
             .child(awaken_el)
             .child(tiles_el)
             .into_any_element()
+    }
+}
+
+/// Classic with no circle picked lays every pane of every circle into one
+/// grid, a few rows each. That is not a size anyone chose, and every pane
+/// would tell the daemon it. A launch painted exactly this for a frame or two
+/// and left all of Brian's terminals about 25 columns by 5 rows.
+pub(super) fn hold_resizes(selected: Option<&str>, circles: usize) -> bool {
+    selected.is_none() && circles > 1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hold_resizes;
+
+    #[test]
+    fn a_grid_of_every_circle_does_not_resize_panes() {
+        assert!(hold_resizes(None, 24));
+        // A picked circle, or a lone one, is a size someone chose.
+        assert!(!hold_resizes(Some("a"), 24));
+        assert!(!hold_resizes(None, 1));
+        assert!(!hold_resizes(None, 0));
     }
 }

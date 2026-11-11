@@ -728,6 +728,10 @@ fn is_bare_seance(cmdline: &str) -> bool {
 }
 
 fn other_gui_running() -> bool {
+    // A test window is its own GUI, whatever else runs on this machine.
+    if cfg!(test) {
+        return false;
+    }
     // One `ps` for pid, uid and command of everything; the command is the
     // rest of the line, so it can hold spaces ("Application Support").
     let Ok(out) = std::process::Command::new("ps")
