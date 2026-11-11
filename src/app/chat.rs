@@ -2954,6 +2954,17 @@ impl SeanceApp {
                                         .rounded_full()
                                         .bg(SeancePalette::flame().opacity(pulse)),
                                 )
+                            })
+                            // Waiting on background work: a dim hint, no dot.
+                            .when(self.chat_row_waits(c), |d| {
+                                d.child(
+                                    div()
+                                        .flex_none()
+                                        .italic()
+                                        .text_size(px(10.))
+                                        .text_color(SeancePalette::text_faint())
+                                        .child("brewing"),
+                                )
                             }),
                     )
                     .child(

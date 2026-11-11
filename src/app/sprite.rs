@@ -261,7 +261,7 @@ pub(super) fn render_move(
 
 /// A circle waiting on background work (Brian's pick, as in Invoke): the
 /// creature stands still, a candle glow pulses under its feet over
-/// [`EMBER_MS`], and three dim dots above its head fill in one by one, a step
+/// [`EMBER_MS`], and three dim dots above its head fill in one by one (one, two, three), a step
 /// each [`DOT_STEP_MS`].
 pub(super) const EMBER_MS: u64 = 3600;
 pub(super) const DOT_STEP_MS: u64 = 600;
@@ -275,9 +275,9 @@ pub(super) fn ember_opacity(now: u64) -> f32 {
     EMBER_LOW + (EMBER_HIGH - EMBER_LOW) * wave
 }
 
-/// How many of the three dots show: 0, 1, 2, 3, then round again.
+/// How many of the three dots show: never none, 1, 2, 3, then round again.
 pub(super) fn dots_shown(now: u64) -> usize {
-    (now / DOT_STEP_MS % 4) as usize
+    1 + (now / DOT_STEP_MS % 3) as usize
 }
 
 /// Whether a circle wears the waiting look: Invoke says its lead's task is
@@ -307,8 +307,9 @@ pub(super) fn render_waiting(sprite: &Sprite, cell: f32, now: u64, dim: gpui::Hs
                 a: glow * 0.3,
             })
     };
-    let dot = cell * 1.2;
-    let gap = cell;
+    // 4 points a dot, 6 apart.
+    let dot = 4.;
+    let gap = 2.;
     let row_w = dot * 3. + gap * 2.;
     let shown = dots_shown(now);
     div()
@@ -321,7 +322,7 @@ pub(super) fn render_waiting(sprite: &Sprite, cell: f32, now: u64, dim: gpui::Hs
         .child(
             div()
                 .absolute()
-                .top(px(-dot - cell))
+                .top(px(-dot - 2.))
                 .left(px((side - row_w) / 2.))
                 .w(px(row_w))
                 .flex()
@@ -1444,8 +1445,8 @@ mod tests {
         assert!((ember_opacity(EMBER_MS / 2) - 0.6).abs() < 1e-4);
         assert!((ember_opacity(EMBER_MS) - 0.12).abs() < 1e-4);
         let shown: Vec<usize> = (0..5).map(|i| dots_shown(i * DOT_STEP_MS)).collect();
-        assert_eq!(shown, [0, 1, 2, 3, 0]);
-        assert_eq!(dots_shown(DOT_STEP_MS - 1), 0);
+        assert_eq!(shown, [1, 2, 3, 1, 2]);
+        assert_eq!(dots_shown(DOT_STEP_MS - 1), 1);
     }
 
     #[test]
