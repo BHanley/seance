@@ -40,6 +40,7 @@ mod menus;
 mod pads;
 mod palette;
 mod quicklaunch;
+mod redraw;
 mod sidebar;
 mod sprite;
 mod stage;
@@ -723,7 +724,10 @@ impl SeanceApp {
                         let now = std::time::Instant::now();
                         let mut g = LAST_KICK.lock().unwrap();
                         let due = crate::term_shared::typing_hot()
-                            || g.is_none_or(|t| now.duration_since(t).as_millis() >= 33);
+                            || g.is_none_or(|t| {
+                                now.duration_since(t).as_millis()
+                                    >= redraw::kick_gap_ms(redraw::draw_ms()) as u128
+                            });
                         if due {
                             *g = Some(now);
                             // Frame-scheduling gauge: root notify → render()
@@ -741,7 +745,9 @@ impl SeanceApp {
                             if !KICK_ARMED.swap(true, Ordering::Relaxed) {
                                 cx.spawn(async move |this, cx| {
                                     cx.background_executor()
-                                        .timer(Duration::from_millis(33))
+                                        .timer(Duration::from_millis(redraw::kick_gap_ms(
+                                            redraw::draw_ms(),
+                                        )))
                                         .await;
                                     KICK_ARMED.store(false, Ordering::Relaxed);
                                     if let Some(this) = this.upgrade() {
@@ -798,22 +804,29 @@ impl SeanceApp {
         // and the skin's wall torches while any is on screen.
         // NOT cheap: each notify re-renders the whole window (~55ms at 24
         // circles) — 240ms keeps the glyph alive without eating the thread.
-        cx.spawn(async move |this, cx| loop {
-            cx.background_executor()
-                .timer(Duration::from_millis(crate::torch::TICK_MS))
-                .await;
-            let Some(this) = this.upgrade() else { break };
-            this.update(cx, |app: &mut SeanceApp, cx| {
-                let spinner = !app.workspace_was_working.is_empty()
-                    || (app.view.mode == views::ViewMode::Chat && app.chat.any_working());
-                let (advance, render) = torches::spinner_tick(spinner, app.torches_on_screen(cx));
-                if advance {
-                    app.torch_frame = app.torch_frame.wrapping_add(1);
-                }
-                if render {
-                    cx.notify();
-                }
-            });
+        cx.spawn(async move |this, cx| {
+            let mut wait = redraw::SPINNER_MS;
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(wait))
+                    .await;
+                let Some(this) = this.upgrade() else { break };
+                wait = this.update(cx, |app: &mut SeanceApp, cx| {
+                    let spinner = !app.workspace_was_working.is_empty()
+                        || (app.view.mode == views::ViewMode::Chat && app.chat.any_working());
+                    let (advance, render) =
+                        torches::spinner_tick(spinner, app.torches_on_screen(cx));
+                    if advance {
+                        app.torch_frame = app.torch_frame.wrapping_add(1);
+                    }
+                    if render {
+                        cx.notify();
+                    }
+                    // A heavy window, or one behind another app, ticks slower
+                    // (see redraw.rs); a light one keeps its beat.
+                    redraw::spinner_delay_ms(app.window_active, redraw::draw_ms())
+                });
+            }
         })
         .detach();
 
@@ -845,12 +858,35 @@ impl SeanceApp {
         // probes can't see. Cheap ring buffer; drained every 5s.
         gpui::profiler::set_frame_trace_enabled(true);
         let mut frame_collector = gpui::profiler::FrameTimingCollector::new();
-        cx.spawn(async move |_this, cx| loop {
-            cx.background_executor()
-                .timer(Duration::from_millis(5000))
-                .await;
-            for t in frame_collector.collect_unseen() {
-                crate::latency_probe::record("gpui draw", t.draw_duration().as_micros() as u64);
+        cx.spawn(async move |_this, cx| {
+            // Every 2 s: the average draw cost feeds the redraw cadence; every
+            // 10 s a line says how much of a core the redraws took.
+            let (mut draws, mut total_us, mut rounds) = (0u64, 0u64, 0u32);
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(2000))
+                    .await;
+                let (mut n, mut us) = (0u64, 0u64);
+                for t in frame_collector.collect_unseen() {
+                    let d = t.draw_duration().as_micros() as u64;
+                    crate::latency_probe::record("gpui draw", d);
+                    n += 1;
+                    us += d;
+                }
+                redraw::note_draw_avg_us(if n > 0 { us / n } else { 0 });
+                draws += n;
+                total_us += us;
+                rounds += 1;
+                if rounds == 5 {
+                    if draws > 0 {
+                        eprintln!(
+                            "[seance redraw] {draws} draws in 10s, avg {}ms, about {}% of a core",
+                            total_us / draws / 1000,
+                            total_us / 100_000
+                        );
+                    }
+                    (draws, total_us, rounds) = (0, 0, 0);
+                }
             }
         })
         .detach();
