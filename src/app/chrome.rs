@@ -1183,6 +1183,10 @@ pub(super) fn render_help() -> gpui::AnyElement {
         .child(section("global"))
         .child(row("ctrl+shift+n", "summon a new shell pane in the current workspace"))
         .child(row(
+            "cmd+n / cmd+option+n",
+            "new circle / new space (ctrl+alt+n / ctrl+alt+shift+n off a mac)",
+        ))
+        .child(row(
             "ctrl+shift+w",
             "kill active pane (last pane also banishes the workspace)",
         ))

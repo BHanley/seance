@@ -34,6 +34,7 @@ mod alerts;
 pub(crate) mod chat;
 mod chrome;
 mod dock;
+mod header;
 mod layout;
 mod lead_tasks;
 mod menus;
@@ -371,6 +372,8 @@ pub struct SeanceApp {
     host_menu_token: u64,
     /// The mark's popover: census of the GUI windows attached to this daemon.
     gui_menu_open: bool,
+    /// Where the "+" menu (New circle / New space) was opened; None when closed.
+    new_menu: Option<gpui::Point<gpui::Pixels>>,
     /// Render-safe cache of daemon-side files (pad sidecars, phone binds,
     /// prompt library) — refreshed by a ~2s background loop.
     remote_cache: Arc<crate::remote_cache::RemoteCache>,
@@ -605,6 +608,7 @@ impl SeanceApp {
             host_menu: None,
             host_menu_token: 0,
             gui_menu_open: false,
+            new_menu: None,
             remote_cache,
             daemon_error: None,
             render_probe: RenderProbe::default(),
@@ -1919,6 +1923,12 @@ impl SeanceApp {
                 cx.stop_propagation();
                 return;
             }
+            if self.new_menu.is_some() {
+                self.new_menu = None;
+                cx.notify();
+                cx.stop_propagation();
+                return;
+            }
             if self.gui_menu_open {
                 self.gui_menu_open = false;
                 cx.notify();
@@ -1972,6 +1982,20 @@ impl SeanceApp {
         // Every chrome chord below spells its modifier as ctrl, and as cmd too
         // on macOS — see `chord_modifier_held`.
         let chord_mod = chord_modifier_held(&ks.modifiers, cfg!(target_os = "macos"));
+
+        // New circle / New space (the "+" menu's chords). Not while a name is
+        // being typed, where they would leave that field behind.
+        if self.renaming.is_none() {
+            if let Some(kind) =
+                header::new_kind_for_chord(key, &ks.modifiers, cfg!(target_os = "macos"))
+            {
+                if header::new_flow(self.view.mode, kind).is_some() {
+                    self.run_new(kind, window, cx);
+                    cx.stop_propagation();
+                    return;
+                }
+            }
+        }
 
         // Chat shows no pane. Chords that move between panes, close, rename or
         // pop one out would act on something unseen, and cmd+shift+arrows is
@@ -3446,6 +3470,7 @@ impl Render for SeanceApp {
             .children(self.render_quicklaunch_editor(cx))
             .children(self.render_gui_menu(cx))
             .children(self.render_tasks_popover(window, cx))
+            .children(self.render_new_menu(cx))
             .children(match &self.drawer {
                 // The Wall fills the window, as the overview always did.
                 _ if walled => None,
