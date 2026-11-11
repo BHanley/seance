@@ -542,6 +542,7 @@ pub(crate) fn set_app_menu(cx: &mut gpui::App) {
     // Grouped with separators: ask for things, set the app up, then leave.
     let mut seance_items = vec![
         MenuItem::action("Suggest a Change…", app::actions::ActSuggestChange),
+        MenuItem::separator(),
         MenuItem::action("Check for Updates…", app::actions::ActCheckUpdates),
         MenuItem::separator(),
         MenuItem::action("Use Seance on Your Phone…", app::actions::ActPhoneGuide),
