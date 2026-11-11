@@ -103,3 +103,47 @@ fn spinner_tick_draw_cost(cx: &mut gpui::TestAppContext) {
         worst.as_secs_f64() * 1000.0
     );
 }
+
+/// The launch bug: a window that starts in Chat paints no terminal, and one in
+/// Classic with no circle picked shows every pane a few rows tall. Neither may
+/// tell the daemon a pane's size. Run through the throwaway
+/// daemon with `SEANCE_BENCH_MODE=chat` (the script writes view.json).
+#[gpui::test]
+#[ignore = "needs a throwaway daemon: SEANCE_BENCH_MODE=chat|classic scripts/redraw-bench.sh"]
+fn a_launch_sends_no_resize(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        crate::theme::init(cx);
+    });
+    let win = cx.add_window(SeanceApp::new);
+    let app = win.root(cx).unwrap();
+    cx.executor().allow_parking();
+    for _ in 0..60 {
+        cx.run_until_parked();
+        cx.update_window(win.into(), |_, w, cx| w.draw(cx).clear())
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let mode = app.read_with(cx, |a, _| a.view.mode);
+    let sent: Vec<(String, (u16, u16))> = app.read_with(cx, |a, cx| {
+        a.panes
+            .iter()
+            .filter_map(|p| {
+                p.remote_terminal()
+                    .map(|t| (p.slug.clone(), t.read(cx).sent_size()))
+            })
+            .filter(|(_, s)| *s != (0, 0))
+            .collect()
+    });
+    eprintln!(
+        "[redraw-bench] launched in {mode:?}: {} panes were resized: {:?}",
+        sent.len(),
+        &sent[..sent.len().min(5)]
+    );
+    // The one circle that is picked fills the window: that size is real.
+    let tiny: Vec<_> = sent.iter().filter(|(_, s)| s.0 < 40 || s.1 < 10).collect();
+    assert!(
+        tiny.is_empty(),
+        "panes told the daemon a tiny size: {tiny:?}"
+    );
+}

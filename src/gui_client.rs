@@ -629,6 +629,10 @@ pub fn fs_not_found(e: &anyhow::Error) -> bool {
 /// `ev_tx` feeds the GUI event bridge.
 /// True if another non-daemon seance process is already running.
 fn other_gui_running() -> bool {
+    // A test window is its own GUI, whatever else runs on this machine.
+    if cfg!(test) {
+        return false;
+    }
     let self_pid = std::process::id();
     let Ok(out) = std::process::Command::new("pgrep")
         .args(["-x", "seance"])
