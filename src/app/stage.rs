@@ -23,6 +23,7 @@ use crate::runtime::snapshot::GridSnapshot;
 use crate::theme::SeancePalette;
 
 use super::actions::{ActDeleteSpace, ActRenameSpace, ActSpaceDefault};
+use super::header::{NewKind, PlusAction, PLUS_SIZE};
 use super::stage_parse::{
     circle_folder, compacted_while_idle, crew_order, done_chips, ellipsize, filed_label, fit_pills,
     is_bare_shell, jump_ring, last_output_lines, latest_finish, latest_finish_at, lead_log_path,
@@ -817,7 +818,8 @@ impl SeanceApp {
 
         let head = self.render_stage_head(cx);
         let tabs = self.render_space_tabs("stage", cx);
-        let top = self.render_stage_top(width, cx);
+        // The pills row sits right of the brand block, which is the rail's width.
+        let top = self.render_stage_top(width - self.sidebar_width, cx);
         let (chips, snoozed) = self.waiting_list();
         // A peek card whose chip went (seen, its pane closed, its circle
         // gone or selected) closes with it.
@@ -870,9 +872,22 @@ impl SeanceApp {
             .flex_col()
             .bg(SeancePalette::bg())
             .child(self.render_daemon_error_bar(cx))
-            .child(head)
-            .children(tabs)
-            .child(top)
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .bg(SeancePalette::bg_elevated())
+                    .child(head)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .children(tabs)
+                            .child(top),
+                    ),
+            )
             .children(needs)
             .child(
                 div()
@@ -891,32 +906,25 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    /// Stage's top row: the gold mark, the layout switch beside it and the AFK
-    /// chip at the right. Drawn with one space or many.
+    /// Stage's left block: the brand block (mark, AFK chip, view switch) at
+    /// the rail's width, as tall as the space tabs and the circle pills beside it.
     fn render_stage_head(&self, cx: &Context<Self>) -> AnyElement {
         div()
             .flex_none()
-            .h(px(SPACE_ROW_H))
-            .px(px(14.))
+            .w(px(self.sidebar_width))
+            .h(px(SPACE_ROW_H + STRIP_H))
+            .p_2()
             .flex()
-            .items_center()
-            .gap(px(14.))
-            .bg(SeancePalette::bg_elevated())
+            .flex_col()
+            .justify_center()
+            .border_r_1()
             .border_b_1()
             .border_color(SeancePalette::border())
-            .child(self.render_seance_mark("stage", cx))
-            .child(
-                div()
-                    .flex_none()
-                    .w(px(SWITCH_W))
-                    .child(self.render_view_switch("strip", cx)),
-            )
-            .child(div().flex_1())
-            .children(self.render_afk_chip("stage", cx))
+            .child(self.render_brand_block("stage", "strip", cx))
             .into_any_element()
     }
 
-    /// Circle pills, "+ circle" and the jump box. With "+N more" open, the
+    /// Circle pills, the "+" that adds a circle and the jump box. With "+N more" open, the
     /// circles that don't fit get a row of their own underneath.
     fn render_stage_top(&mut self, width: f32, cx: &Context<Self>) -> AnyElement {
         let rename = self.render_rename_field();
@@ -926,9 +934,9 @@ impl SeanceApp {
         let circles = self.subs_pref.spaces.circles_in(&space, &self.workspaces());
         let roomy = width >= 900.;
         let jump_w = jump_box_w(roomy);
-        let add_w = 76.;
-        // Strip padding, the jump box, "+ circle" and the gaps.
-        let avail = width - 28. - jump_w - 14. * 2. - (add_w + 6.) * 2.;
+        let add_w = PLUS_SIZE;
+        // Strip padding, the jump box, the "+" and the gaps.
+        let avail = width - 28. - jump_w - 14. * 2. - (add_w + 6.);
         let labels: Vec<String> = circles.iter().map(|c| self.workspace_label(c)).collect();
         let widths: Vec<f32> = labels.iter().map(|l| pill_width(l)).collect();
         let sel_idx = selected
@@ -1055,50 +1063,12 @@ impl SeanceApp {
                     format!("+{} more", hidden.len())
                 })
         });
-        let add = div()
-            .id("stage-add-circle")
-            .flex_none()
-            .w(px(add_w))
-            .flex()
-            .justify_center()
-            .py(px(5.))
-            .rounded_full()
-            .border_1()
-            .border_dashed()
-            .border_color(SeancePalette::border())
-            .text_xs()
-            .text_color(SeancePalette::text_faint())
-            .cursor_pointer()
-            .hover(|s| s.text_color(SeancePalette::text()))
-            .tooltip(tip("new circle in this space"))
-            .on_click(cx.listener(|this, _, window, cx| {
-                // New circles land in the rail's space; make that this one.
-                this.rail_space = Some(this.shown_space());
-                let name = this.create_workspace(window, cx);
-                this.stage.new_circle = Some(name);
-            }))
-            .child("+ circle");
-        let add_space = div()
-            .id("stage-add-space")
-            .flex_none()
-            .w(px(add_w))
-            .flex()
-            .justify_center()
-            .py(px(5.))
-            .rounded_full()
-            .border_1()
-            .border_dashed()
-            .border_color(SeancePalette::border())
-            .text_xs()
-            .text_color(SeancePalette::text_faint())
-            .cursor_pointer()
-            .hover(|s| s.text_color(SeancePalette::text()))
-            .tooltip(tip("new space (name it immediately)"))
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.create_space(window, cx);
-                cx.notify();
-            }))
-            .child("+ space");
+        let add = self.render_plus_button(
+            "stage-add-circle",
+            "new circle in this space",
+            PlusAction::Direct(NewKind::Circle),
+            cx,
+        );
         // Over the top of what's below, so the lead terminal keeps its size
         // (a resize would reflow the PTY on every click).
         let row = open.then(|| {
@@ -1140,9 +1110,7 @@ impl SeanceApp {
                     .items_center()
                     .gap(px(6.))
                     .children(rename)
-                    .when(!renaming, |d| {
-                        d.children(pills).children(more).child(add).child(add_space)
-                    }),
+                    .when(!renaming, |d| d.children(pills).children(more).child(add)),
             )
             .child(render_jump_box("stage-jump", roomy, cx));
         div()
@@ -1178,11 +1146,15 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    /// Stage and Wall draw their row of space tabs when it would hold two
+    /// Stage always draws its row of space tabs, Wall when it would hold two
     /// or more: a tab per space with circles, plus the one on show even if
     /// empty, so an empty space always has a way out. Classic's rail lists
     /// every space.
     pub(super) fn space_tabs_shown(&self) -> bool {
+        // Stage's tabs row holds the "+" that adds a space, so it always shows.
+        if self.view.mode == ViewMode::Stage {
+            return true;
+        }
         if self.view.mode == ViewMode::Classic {
             return false;
         }
@@ -1378,6 +1350,14 @@ impl SeanceApp {
                         .children(tabs),
                 )
                 .when(wall_ends, |d| d.children(self.render_afk_chip(key, cx)))
+                .when(key == "stage", |d| {
+                    d.child(self.render_plus_button(
+                        "stage-add-space",
+                        "new space (name it immediately)",
+                        PlusAction::Direct(NewKind::Space),
+                        cx,
+                    ))
+                })
                 .into_any_element(),
         )
     }
@@ -2622,9 +2602,6 @@ fn bottom_rows(snap: &GridSnapshot, n: usize) -> Vec<String> {
         .map(|cells| cells.iter().map(|c| c.c).collect())
         .collect()
 }
-
-/// The classic | stage | chat switch, which sits after the mark.
-const SWITCH_W: f32 = 190.;
 
 /// Stage's strip height; the jump palette drops below it.
 pub(super) const STRIP_H: f32 = 50.;

@@ -245,6 +245,7 @@ attention routing free.
 | key | action |
 |-----|--------|
 | ctrl+shift+n | new pane (shell by default) |
+| cmd+n / cmd+option+n | new circle / new space (ctrl+alt+n / ctrl+alt+shift+n off a mac) |
 | ctrl+shift+w | banish (kill) active pane |
 | ctrl+shift+s | flip notes ↔ face |
 | ctrl+shift+p | pin / unpin selected circle (shows under the pins chip) |

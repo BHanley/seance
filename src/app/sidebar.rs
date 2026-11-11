@@ -3,7 +3,7 @@
 //! the host-bridge widget strip (claude accounts) above the summon footer.
 
 use gpui::{div, prelude::*, px, Context, SharedString, Window};
-use gpui_component::{input::Input, menu::ContextMenuExt as _, StyledExt as _, WindowExt as _};
+use gpui_component::{input::Input, menu::ContextMenuExt as _, WindowExt as _};
 
 use crate::control::ControlRequest;
 use crate::pane::PaneBody;
@@ -49,20 +49,8 @@ impl ThemeGroup {
 const PANE_ROW_H: f32 = 22.;
 /// Time / count column, right-aligned.
 const TIME_W: f32 = 34.;
-/// The view switch's narrowest width with "classic" whole: three equal
-/// segments of the label (38.5 px at 12 px) plus padding, gaps and border.
-const SWITCH_MIN_W: f32 = 162.;
-/// The rail header's row around the switch: its padding and border, the
-/// mark, "seance" and the gaps.
-const RAIL_MARK_W: f32 = 112.;
-
-/// The view switch fits beside the mark and name on a rail this wide; narrower,
-/// it takes its own row under the header.
-fn rail_switch_inline(rail_w: f32) -> bool {
-    rail_w - RAIL_MARK_W >= SWITCH_MIN_W
-}
-
 use super::actions::*;
+use super::header::PlusAction;
 use super::util::{
     needs_dot_color, pane_menu, selected_row_fill, sidebar_press_no_select, tip, tip_s, ui_debug,
     working_spinner_glyph, DragPill, DraggedCircle, DraggedPane, DraggedSpace,
@@ -81,12 +69,13 @@ impl SeanceApp {
             return None;
         }
         let self_id = self.window_id.clone();
-        // Stage's top row and Wall's space row (when it shows) hold the mark;
-        // Chat's mark sits at the top of its circle list, Classic's on the rail.
+        // Wall's space row (when it shows) holds the mark; Chat, Classic and
+        // Stage have it at the top of their header block.
         let mark_row = match self.view.mode {
-            super::views::ViewMode::Stage => true,
             super::views::ViewMode::Wall => self.space_tabs_shown(),
-            super::views::ViewMode::Classic | super::views::ViewMode::Chat => false,
+            super::views::ViewMode::Stage
+            | super::views::ViewMode::Classic
+            | super::views::ViewMode::Chat => false,
         };
         let top = if mark_row {
             super::stage::SPACE_ROW_H + 2.
@@ -623,20 +612,32 @@ impl SeanceApp {
                 })
             })
             .collect();
-        // "all" alone filters nothing; give the rail its row back.
-        if els.len() <= 1 {
-            return div().into_any_element();
-        }
+        // "all" alone filters nothing, so its chip is left out; the "+" stays.
+        let els = if els.len() <= 1 { Vec::new() } else { els };
         div()
             .flex_none()
             .px_2()
             .py_1p5()
             .flex()
-            .flex_wrap()
+            .items_start()
             .gap_1()
             .border_b_1()
             .border_color(SeancePalette::border())
-            .children(els)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_wrap()
+                    .gap_1()
+                    .children(els),
+            )
+            .child(self.render_plus_button(
+                "rail-plus",
+                "new circle or space",
+                PlusAction::Menu,
+                cx,
+            ))
             .into_any_element()
     }
 
@@ -1459,8 +1460,6 @@ impl SeanceApp {
         rail_rows.extend(self.render_circle_list(cx));
 
         let _ = window_active; // focus chrome reserved for future empty-window dimming
-        let switch_inline = rail_switch_inline(self.sidebar_width);
-
         div()
             .id("sidebar")
             .flex_none()
@@ -1474,110 +1473,14 @@ impl SeanceApp {
             .border_color(SeancePalette::border())
             .children(crate::skin::backdrop(crate::skin::RAIL))
             .child(
-                // Brand header: the name on top, the new-space/circle buttons
-                // tucked under it so a narrow rail never squeezes either.
+                // Brand header, the one Chat and Stage share: the mark and AFK
+                // chip, then the view switch at full width.
                 div()
                     .flex_none()
-                    .px_3()
-                    .pt_2()
-                    .pb_1p5()
-                    .flex()
-                    .flex_col()
-                    .gap_0p5()
+                    .p_2()
                     .border_b_1()
                     .border_color(SeancePalette::border())
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .id("gui-census")
-                                    // The button the ✦ glyph used to fill, so the
-                                    // row and the click area keep their size.
-                                    .w(px(22.))
-                                    .h(px(29.))
-                                    .rounded_md()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(SeancePalette::surface()))
-                                    .tooltip(tip("connected guis · theme"))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.gui_menu_open = !this.gui_menu_open;
-                                        cx.notify();
-                                    }))
-                                    .child(crate::mark::element()),
-                            )
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .text_color(SeancePalette::text())
-                                    .text_sm()
-                                    .font_semibold()
-                                    .child("seance"),
-                            )
-                            .when(switch_inline, |d| {
-                                d.child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .child(self.render_view_switch("rail", cx)),
-                                )
-                            }),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .id("new-space")
-                                    .flex_none()
-                                    .px_1p5()
-                                    .rounded_md()
-                                    .text_xs()
-                                    .text_color(SeancePalette::violet_dim())
-                                    .hover(|s| {
-                                        s.text_color(SeancePalette::violet())
-                                            .bg(SeancePalette::surface())
-                                    })
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.create_space(window, cx);
-                                        cx.notify();
-                                    }))
-                                    .tooltip(tip("new space (name it immediately)"))
-                                    .child("+ space"),
-                            )
-                            .child(
-                                div()
-                                    .id("new-workspace")
-                                    .flex_none()
-                                    .px_1p5()
-                                    .rounded_md()
-                                    .text_xs()
-                                    .text_color(SeancePalette::violet_dim())
-                                    .hover(|s| {
-                                        s.text_color(SeancePalette::violet())
-                                            .bg(SeancePalette::surface())
-                                    })
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.create_workspace(window, cx);
-                                    }))
-                                    .tooltip(tip(
-                                        "new empty circle in this space (name it immediately)",
-                                    ))
-                                    .child("+ circle"),
-                            ),
-                    )
-                    .when(!switch_inline, |d| {
-                        d.child(div().pt_1().child(self.render_view_switch("rail", cx)))
-                    }),
+                    .child(self.render_brand_block("rail", "rail", cx)),
             )
             .child(self.render_rail_chips(cx))
             .child({
@@ -1724,13 +1627,4 @@ mod tests {
     }
 
     use super::*;
-
-    #[test]
-    fn the_switch_joins_the_mark_once_the_rail_fits_it() {
-        assert!(!rail_switch_inline(160.));
-        assert!(!rail_switch_inline(232.));
-        assert!(!rail_switch_inline(273.));
-        assert!(rail_switch_inline(274.));
-        assert!(rail_switch_inline(520.));
-    }
 }

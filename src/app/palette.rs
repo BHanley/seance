@@ -248,13 +248,8 @@ impl SeanceApp {
             ViewMode::Classic | ViewMode::Chat => None,
         }
         .filter(|_| matches!(self.palette, PaletteMode::Jump { .. }));
-        // Stage's mark row sits above its space tabs.
-        let head = self.space_tabs_h()
-            + if self.view.mode == ViewMode::Stage {
-                super::stage::SPACE_ROW_H
-            } else {
-                0.
-            };
+        // Stage's tabs row (always drawn) sits above its circle strip.
+        let head = self.space_tabs_h();
         let top = match header {
             Some(h) => head + h + 4.,
             None => 48. + head,

@@ -31,6 +31,7 @@ use crate::chat_local;
 use crate::events;
 use crate::theme::SeancePalette;
 
+use super::header::PlusAction;
 use super::lead_tasks::clock;
 use super::util::{now_ms, tip, tip_s};
 use super::views::ViewMode;
@@ -847,7 +848,7 @@ pub(super) struct ChatState {
 
 impl ChatState {
     /// A circle just made in Chat is the one open, whatever was open before.
-    fn open_new_circle(&mut self, ws: &str) {
+    pub(super) fn open_new_circle(&mut self, ws: &str) {
         self.selected = Some(ws.to_string());
         self.arrive();
         self.notice = None;
@@ -2665,58 +2666,6 @@ impl SeanceApp {
         rows
     }
 
-    /// "+ space" and "+ circle" under the search box: Classic's actions, and
-    /// a new circle opens its chat and gets its first pane once it is named.
-    fn render_chat_add_chips(&self, cx: &Context<Self>) -> AnyElement {
-        let chip = |id: &'static str, label: &'static str, tip_text: &'static str| {
-            div()
-                .id(id)
-                .flex_none()
-                .px_1p5()
-                .rounded_md()
-                .text_xs()
-                .text_color(SeancePalette::violet_dim())
-                .hover(|s| {
-                    s.text_color(SeancePalette::violet())
-                        .bg(SeancePalette::surface())
-                })
-                .cursor_pointer()
-                .tooltip(tip(tip_text))
-                .child(label)
-        };
-        div()
-            .flex()
-            .items_center()
-            .gap_1()
-            .child(
-                chip(
-                    "chat-new-space",
-                    "+ space",
-                    "new space (name it immediately)",
-                )
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.create_space(window, cx);
-                    cx.notify();
-                })),
-            )
-            .child(
-                chip(
-                    "chat-new-circle",
-                    "+ circle",
-                    "new circle in this space (name it immediately)",
-                )
-                .on_click(cx.listener(|this, _, window, cx| {
-                    // New circles land in the space shown, and open here.
-                    this.rail_space = Some(this.shown_space());
-                    let name = this.create_workspace(window, cx);
-                    this.stage.new_circle = Some(name.clone());
-                    this.chat.open_new_circle(&name);
-                    cx.notify();
-                })),
-            )
-            .into_any_element()
-    }
-
     /// The circle list's children in order: none while search results stand
     /// in for the circles.
     fn chat_list_items(&self) -> Vec<ListItem> {
@@ -2807,27 +2756,31 @@ impl SeanceApp {
                     .flex()
                     .flex_col()
                     .gap_2()
+                    .child(self.render_brand_block("chat", "chat", cx))
                     .child(
                         div()
                             .flex()
                             .items_center()
-                            .justify_between()
-                            // The mark opens the same menu as in Classic and Stage:
-                            // the connected guis and the theme list.
-                            .child(self.render_seance_mark("chat", cx))
-                            // The AFK chip as Stage and Wall draw it; nothing
-                            // where the script is not installed.
-                            .children(self.render_afk_chip("chat", cx)),
+                            .gap_1()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .children(
+                                        self.chat
+                                            .search
+                                            .as_ref()
+                                            .filter(|_| !chat_local::is_local())
+                                            .map(|s| Input::new(s)),
+                                    ),
+                            )
+                            .child(self.render_plus_button(
+                                "chat-plus",
+                                "new circle or space",
+                                PlusAction::Menu,
+                                cx,
+                            )),
                     )
-                    .child(self.render_view_switch("chat", cx))
-                    .children(
-                        self.chat
-                            .search
-                            .as_ref()
-                            .filter(|_| !chat_local::is_local())
-                            .map(|s| Input::new(s)),
-                    )
-                    .child(self.render_chat_add_chips(cx))
                     .children(self.render_rename_field())
                     .children(self.chat.search_note.as_ref().map(|n| {
                         div()
