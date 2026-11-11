@@ -627,38 +627,56 @@ pub fn fs_not_found(e: &anyhow::Error) -> bool {
 /// Owns the socket lifecycle: connect → hello → attach → pump requests +
 /// events → on drop, backoff and retry. `req_rx` is the app's outbound queue;
 /// `ev_tx` feeds the GUI event bridge.
-/// True if another non-daemon seance process is already running.
+/// True if another Seance GUI of this user is already running.
 fn other_gui_running() -> bool {
     // A test window is its own GUI, whatever else runs on this machine.
     if cfg!(test) {
         return false;
     }
     let self_pid = std::process::id();
+    let my_uid = crate::control::current_uid();
     let Ok(out) = std::process::Command::new("pgrep")
         .args(["-x", "seance"])
         .output()
     else {
         return false;
     };
-    for pid_s in String::from_utf8_lossy(&out.stdout).split_whitespace() {
-        let Ok(pid) = pid_s.parse::<u32>() else {
-            continue;
-        };
-        if pid == self_pid {
-            continue;
-        }
-        // Only a bare `seance` invocation is a GUI. Anything with a
-        // subcommand (`daemon`, `web`, `restart-gui`, `ctl`, …) is not —
-        // under the 0.11 ownership model miscounting was masked by the
-        // daemon's sole-window vacuum, but with subscriptions an Attach as
-        // "second window" means a blank sidebar, so the check must be exact.
-        let cmdline = crate::sysopen::process_cmdline(pid);
-        if cmdline.split_whitespace().nth(1).is_some() {
-            continue;
-        }
-        return true;
-    }
-    false
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .filter_map(|p| p.parse::<u32>().ok())
+        .any(|pid| {
+            let (uid, cmdline) = process_owner_and_cmdline(pid);
+            counts_as_other_gui(pid, self_pid, uid, my_uid, &cmdline)
+        })
+}
+
+/// Whether one running `seance` process is a second GUI of ours. Another
+/// user's GUI on the same machine (a test account, a coworker on a shared Mac)
+/// is not: it has its own daemon, and treating it as ours opened every launch
+/// as a blank Classic window. Only a bare `seance` is a GUI; anything with a
+/// subcommand (`daemon`, `web`, `restart-gui`, `ctl`, …) is not. Under the 0.11
+/// ownership model miscounting was masked by the daemon's sole-window vacuum,
+/// but with subscriptions an Attach as "second window" means a blank sidebar,
+/// so the check must be exact.
+fn counts_as_other_gui(
+    pid: u32,
+    self_pid: u32,
+    uid: Option<u32>,
+    my_uid: u32,
+    cmdline: &str,
+) -> bool {
+    pid != self_pid && uid == Some(my_uid) && cmdline.split_whitespace().nth(1).is_none()
+}
+
+/// A process's owner and command line, via `ps` (`None` when it is gone).
+fn process_owner_and_cmdline(pid: u32) -> (Option<u32>, String) {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "uid=,command=", "-p", &pid.to_string()])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    let (uid, cmd) = out.split_once(char::is_whitespace).unwrap_or((&out, ""));
+    (uid.parse().ok(), cmd.trim().to_string())
 }
 
 /// Paces reconnects while the daemon can't be reached: the wait doubles from
@@ -967,6 +985,29 @@ fn write_request(writer: &mut UnixStream, req: &GuiRequest) -> std::io::Result<(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_our_own_bare_seance_counts_as_another_gui() {
+        let gui = "/Applications/Seance.app/Contents/MacOS/seance";
+        // Our own second GUI.
+        assert!(counts_as_other_gui(10, 99, Some(501), 501, gui));
+        // Ourselves.
+        assert!(!counts_as_other_gui(99, 99, Some(501), 501, gui));
+        // Another user's GUI (a test account, a coworker on a shared Mac).
+        assert!(!counts_as_other_gui(10, 99, Some(502), 501, gui));
+        // A process that vanished before `ps` read it.
+        assert!(!counts_as_other_gui(10, 99, None, 501, ""));
+        // Subcommands are never a GUI.
+        for sub in ["daemon", "web", "ctl list", "restart-gui"] {
+            assert!(!counts_as_other_gui(
+                10,
+                99,
+                Some(501),
+                501,
+                &format!("{gui} {sub}")
+            ));
+        }
+    }
+
     use super::*;
     use std::os::unix::net::UnixListener;
 

@@ -14,8 +14,11 @@ unset SEANCE_SOCKET SEANCE_SESSION SEANCE_PANE_ID SEANCE_WORKSPACE SEANCE_REMOTE
 BIN=$PWD/target/debug/seance
 "$BIN" daemon >"$T/daemon.log" 2>&1 &
 D=$!
-trap 'kill -9 $D 2>/dev/null; pkill -f "$T/home" 2>/dev/null; rm -rf "$T"' EXIT
+DP=
+trap 'kill -9 $D $DP 2>/dev/null; for p in $(pgrep -f "$T/home"); do pkill -P $p; done; pkill -f "$T/home" 2>/dev/null; rm -rf "$T"' EXIT
 for _ in $(seq 50); do [ -S "$XDG_RUNTIME_DIR/seance.sock" ] && break; sleep 0.2; done
+# The daemon forks: the process holding the socket is the one to stop.
+DP=$(lsof -t "$XDG_RUNTIME_DIR/seance.sock" 2>/dev/null | head -1 || true)
 echo "throwaway socket: $XDG_RUNTIME_DIR/seance.sock"
 for i in $(seq "$N"); do
   for j in 1 2; do
@@ -24,4 +27,4 @@ for i in $(seq "$N"); do
 done
 export SEANCE_BENCH_PANES=$((N * 2))
 
-exec cargo test --bin seance redraw_bench::${SEANCE_BENCH_TEST:-spinner} -- --ignored --nocapture
+cargo test --bin seance redraw_bench::${SEANCE_BENCH_TEST:-spinner} -- --ignored --nocapture

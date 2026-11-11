@@ -58,7 +58,7 @@ pub fn bind_socket_path() -> PathBuf {
 /// Real UID for the `/tmp` fallback socket name — portable (macOS has no
 /// procfs), and a per-user token is all we need (the socket file's own
 /// permissions are the security boundary).
-fn current_uid() -> u32 {
+pub(crate) fn current_uid() -> u32 {
     // SAFETY: getuid is always safe to call.
     unsafe { libc::getuid() }
 }
