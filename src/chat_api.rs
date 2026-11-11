@@ -35,6 +35,10 @@ pub struct CircleRow {
     pub unread: u32,
     #[serde(default)]
     pub working: bool,
+    /// No pane mid-turn, but its lead's task is open: handed-off or background
+    /// work is running. Drawn as an ember and thinking dots, not a dance.
+    #[serde(default)]
+    pub waiting: bool,
     /// Its crew, as [`Thread::crew`]: two or more dance in its list row.
     #[serde(default)]
     pub crew: Vec<u32>,
@@ -147,6 +151,9 @@ pub struct Thread {
     /// dance as a crew in the header.
     #[serde(default)]
     pub crew: Vec<u32>,
+    /// As [`CircleRow::waiting`].
+    #[serde(default)]
+    pub waiting: bool,
 }
 
 /// One `/api/search` result: a message, and the circle it is in.

@@ -259,6 +259,85 @@ pub(super) fn render_move(
         .into_any_element()
 }
 
+/// A circle waiting on background work (Brian's pick, as in Invoke): the
+/// creature stands still, a candle glow pulses under its feet over
+/// [`EMBER_MS`], and three dim dots above its head fill in one by one, a step
+/// each [`DOT_STEP_MS`].
+pub(super) const EMBER_MS: u64 = 3600;
+pub(super) const DOT_STEP_MS: u64 = 600;
+const EMBER_LOW: f32 = 0.12;
+const EMBER_HIGH: f32 = 0.6;
+
+/// The glow's opacity `now` ms in: 0.12 up to 0.6 and back, a loop of [`EMBER_MS`].
+pub(super) fn ember_opacity(now: u64) -> f32 {
+    let t = (now % EMBER_MS) as f32 / EMBER_MS as f32;
+    let wave = 0.5 - 0.5 * (t * std::f32::consts::TAU).cos();
+    EMBER_LOW + (EMBER_HIGH - EMBER_LOW) * wave
+}
+
+/// How many of the three dots show: 0, 1, 2, 3, then round again.
+pub(super) fn dots_shown(now: u64) -> usize {
+    (now / DOT_STEP_MS % 4) as usize
+}
+
+/// Whether a circle wears the waiting look: Invoke says its lead's task is
+/// open, and it is not dancing (a pane mid-turn) or asking for the human.
+pub(super) fn wears_wait(server_waiting: bool, dancing: bool, needs_human: bool) -> bool {
+    server_waiting && !dancing && !needs_human
+}
+
+/// [`render_move`] standing still, with the ember under its feet and the
+/// dots over its head, as they stand `now`. `dim` is the dots' color.
+pub(super) fn render_waiting(sprite: &Sprite, cell: f32, now: u64, dim: gpui::Hsla) -> AnyElement {
+    let side = SIZE as f32 * cell;
+    let glow = ember_opacity(now);
+    // Three nested ellipses stand in for a soft radial gradient.
+    let layer = |w: f32, h: f32| {
+        div()
+            .absolute()
+            .bottom(px(-h * 0.45))
+            .left(px((side - w) / 2.))
+            .w(px(w))
+            .h(px(h))
+            .rounded_full()
+            .bg(gpui::Rgba {
+                r: 232. / 255.,
+                g: 150. / 255.,
+                b: 70. / 255.,
+                a: glow * 0.3,
+            })
+    };
+    let dot = cell * 1.2;
+    let gap = cell;
+    let row_w = dot * 3. + gap * 2.;
+    let shown = dots_shown(now);
+    div()
+        .flex_none()
+        .relative()
+        .child(layer(side * 1.15, side * 0.34))
+        .child(layer(side * 0.8, side * 0.24))
+        .child(layer(side * 0.45, side * 0.14))
+        .child(render_move(sprite, cell, false, None))
+        .child(
+            div()
+                .absolute()
+                .top(px(-dot - cell))
+                .left(px((side - row_w) / 2.))
+                .w(px(row_w))
+                .flex()
+                .gap(px(gap))
+                .children((0..3).map(|i| {
+                    let d = div().flex_none().size(px(dot)).rounded_full();
+                    if i < shown {
+                        d.bg(dim)
+                    } else {
+                        d
+                    }
+                })),
+        )
+        .into_any_element()
+}
+
 /// Two or more panes working dance as a crew (Brian's ask): one paper cutout
 /// per pane, the same creature in its own shade, running through a random
 /// string of moves. gpui has no 3D, so this fakes the web Chat's CSS ring with
@@ -1357,6 +1436,24 @@ mod tests {
         assert_eq!(a.iter().filter(|(s, _)| *s == home).count(), 1);
         assert_eq!(a, pick(1));
         assert!((2..20).any(|seed| pick(seed) != a));
+    }
+
+    #[test]
+    fn the_ember_pulses_between_its_bounds_and_the_dots_count_round() {
+        assert!((ember_opacity(0) - 0.12).abs() < 1e-4);
+        assert!((ember_opacity(EMBER_MS / 2) - 0.6).abs() < 1e-4);
+        assert!((ember_opacity(EMBER_MS) - 0.12).abs() < 1e-4);
+        let shown: Vec<usize> = (0..5).map(|i| dots_shown(i * DOT_STEP_MS)).collect();
+        assert_eq!(shown, [0, 1, 2, 3, 0]);
+        assert_eq!(dots_shown(DOT_STEP_MS - 1), 0);
+    }
+
+    #[test]
+    fn waiting_yields_to_dancing_and_to_needs_you() {
+        assert!(wears_wait(true, false, false));
+        assert!(!wears_wait(false, false, false));
+        assert!(!wears_wait(true, true, false));
+        assert!(!wears_wait(true, false, true));
     }
 
     #[test]
