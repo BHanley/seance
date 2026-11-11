@@ -27,6 +27,7 @@
 //! | `seance-done-sound`, `seance-done-sound-volume` | sound when a circle lead finishes out of sight |
 //! | `seance-lead-sprite.<circle-slug>` | a seed that swaps that circle's lead creature (GUI) |
 //! | `seance-new-circle-command` | the first pane of a circle made with Stage's "+ circle" (GUI; runs on the daemon's machine) |
+//! | `seance-custom-command` | what the lead of the built-in "Seance Custom" helper circle runs, default `claude` (GUI; read when the circle is created) |
 //! | `seance-desktop-notifications` (`true`/`false`, also `off`/`0`) | `false` posts no macOS/Linux banners at all; sounds and clearing stale banners are unaffected (read at launch) |
 //! | `seance-origin-gutter` (`true`/`false`, also `off`/`0`) | the 2px input-origin stripe at a terminal's left edge (GUI) |
 //!
@@ -105,6 +106,9 @@ pub struct TermConfig {
     /// `seance-new-circle-command`: what the first pane of a circle made with
     /// Stage's "+ circle" runs. None is a plain shell.
     pub seance_new_circle_command: Option<String>,
+    /// `seance-custom-command`: what the "Seance Custom" helper lead runs.
+    /// None means `claude`.
+    pub seance_custom_command: Option<String>,
     /// `seance-desktop-notifications = false` posts no banners.
     pub seance_desktop_notifications: bool,
     /// `seance-origin-gutter = false` hides the input-origin stripe.
@@ -137,6 +141,7 @@ impl Default for TermConfig {
             seance_auto_sleep_idle_ms: None,
             seance_auto_sleep_skip: Vec::new(),
             seance_new_circle_command: None,
+            seance_custom_command: None,
             seance_desktop_notifications: true,
             seance_origin_gutter: true,
             lead_sprites: Default::default(),
@@ -281,6 +286,7 @@ fn apply(cfg: &mut TermConfig, key: &str, value: &str) {
         "seance-usage-file" => cfg.seance_usage_file = non_empty(value),
         "seance-needs-sound" => cfg.seance_needs_sound = non_empty(value),
         "seance-new-circle-command" => cfg.seance_new_circle_command = non_empty(value),
+        "seance-custom-command" => cfg.seance_custom_command = non_empty(value),
         "seance-desktop-notifications" => {
             cfg.seance_desktop_notifications = !matches!(value, "false" | "off" | "0")
         }
@@ -481,6 +487,21 @@ mod tests {
             Some("claude-mac")
         );
         assert_eq!(TermConfig::default().seance_new_circle_command, None);
+    }
+
+    #[test]
+    fn reads_custom_command() {
+        let dir = test_dir("customcmd");
+        let p = write(
+            &dir,
+            "terminal.conf",
+            "seance-custom-command = CLAUDE_MAC_DIR=~/x claude-mac\n",
+        );
+        assert_eq!(
+            load(&p).seance_custom_command.as_deref(),
+            Some("CLAUDE_MAC_DIR=~/x claude-mac")
+        );
+        assert_eq!(TermConfig::default().seance_custom_command, None);
     }
 
     #[test]

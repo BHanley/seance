@@ -1097,6 +1097,98 @@ impl SeanceApp {
         name
     }
 
+    /// Once per install, make the "Seance Custom" helper circle (see
+    /// `seance_custom`). Runs after the first daemon state of this process.
+    /// The flag is written before the circle is made, so a second window
+    /// starting at the same moment does not make it twice.
+    pub(super) fn ensure_custom_circle(
+        &mut self,
+        known: &std::collections::BTreeSet<String>,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::seance_custom::{self as custom, Step};
+        if self.empty_window || self.custom_checked {
+            return;
+        }
+        self.custom_checked = true;
+        custom::install_guide();
+        match custom::decide(custom::load_created(), known.contains(custom::SLUG)) {
+            Step::Nothing => return,
+            Step::MarkCreated => {
+                custom::save_created();
+                return;
+            }
+            Step::Create => {
+                // On a remote daemon a bare `claude` would start on the hub's
+                // machine, not this one. Wait until `seance-custom-command`
+                // says where the helper runs; nothing is marked, so it is made
+                // on the first launch after that.
+                let remote = crate::ACTIVE_TUNNEL.get().is_some();
+                if remote && crate::term_config::get().seance_custom_command.is_none() {
+                    return;
+                }
+                custom::save_created();
+            }
+        }
+        let slug = custom::SLUG;
+        self.claim_new_circle_for_current_space(slug);
+        let _ = self.client.create_workspace(slug);
+        self.subs_pref.mark_seen(slug);
+        self.save_arrangement_local();
+        if !self.extra_workspaces.iter().any(|w| w == slug) {
+            self.extra_workspaces.push(slug.to_string());
+        }
+        self.ensure_workspace_at_bottom(slug);
+        self.workspace_names
+            .insert(slug.to_string(), custom::LABEL.to_string());
+        let _ = self.client.rename_workspace(slug, custom::LABEL);
+        // The helper folder is on this machine; a remote daemon cannot see it.
+        let cwd = (crate::ACTIVE_TUNNEL.get().is_none())
+            .then(|| custom::helper_dir().to_string_lossy().into_owned());
+        let command = Some(
+            crate::term_config::get()
+                .seance_custom_command
+                .clone()
+                .unwrap_or_else(|| "claude".to_string()),
+        );
+        self.spawn_internal(
+            crate::pane::SpawnRequest {
+                name: "helper".to_string(),
+                cwd,
+                command,
+                workspace: Some(slug.to_string()),
+                file: None,
+            },
+            cx,
+        );
+    }
+
+    /// "Lead Reply Sound > Custom…": open the helper circle in Chat and send
+    /// its first message. With the circle gone (deleted by the user) it is not
+    /// re-made; the old file picker opens instead.
+    pub(super) fn open_custom_helper(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::seance_custom::{self as custom, MenuRoute};
+        let exists = self.known_workspace_names().contains(custom::SLUG)
+            || self.workspace_order.iter().any(|w| w == custom::SLUG);
+        match custom::route(exists) {
+            MenuRoute::FilePicker => crate::pick_custom_file(cx),
+            MenuRoute::OpenHelper => {
+                // Defer so we don't switch views mid-render.
+                cx.defer_in(window, |this, window, cx| {
+                    this.set_view(super::views::ViewMode::Chat, cx);
+                    this.chat_select(custom::SLUG, window, cx);
+                    this.chat_post(
+                        custom::SLUG.to_string(),
+                        custom::FIRST_MESSAGE.to_string(),
+                        None,
+                        false,
+                        cx,
+                    );
+                });
+            }
+        }
+    }
+
     pub(super) fn select_workspace(
         &mut self,
         workspace: &str,

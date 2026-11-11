@@ -32,6 +32,7 @@ mod remote_term_view;
 mod replayexport;
 mod runtime;
 mod scratchpad;
+mod seance_custom;
 mod skin;
 mod state;
 mod subscriptions_pref;
@@ -115,6 +116,11 @@ fn main() {
                 std::process::exit(1);
             }
         }
+    }
+
+    // `seance feature-request --title T --body B` — prefilled issue page.
+    if args.get(1).map(String::as_str) == Some("feature-request") {
+        std::process::exit(seance_custom::run_feature_request(&args[2..]));
     }
 
     // `seance web` — websocket bridge + static server for the web client.
@@ -394,28 +400,38 @@ fn install_app_menu(cx: &mut gpui::App) {
         };
         pick_lead_sound(choice, cx);
     });
+    // "Custom…": the Seance Custom helper. The handler has no app handle, so
+    // it raises a flag and the next render opens the circle (or falls back to
+    // the file picker when the circle is gone).
     cx.on_action(|_: &app::actions::ActLeadSoundCustom, cx| {
-        let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: None,
-        });
-        cx.spawn(async move |cx| {
-            let Ok(Ok(Some(paths))) = picked.await else {
-                return;
-            };
-            let Some(path) = paths.into_iter().next() else {
-                return;
-            };
-            if !lead_sound::is_sound_file(&path) {
-                return;
-            }
-            let _ = cx.update(|cx| pick_lead_sound(lead_sound::Choice::Custom(path), cx));
-        })
-        .detach();
+        seance_custom::request_open();
+        cx.refresh_windows();
     });
+    cx.on_action(|_: &app::actions::ActLeadSoundFile, cx| pick_custom_file(cx));
     set_app_menu(cx);
+}
+
+/// The file picker behind "Custom file…".
+pub(crate) fn pick_custom_file(cx: &mut gpui::App) {
+    let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
+        files: true,
+        directories: false,
+        multiple: false,
+        prompt: None,
+    });
+    cx.spawn(async move |cx| {
+        let Ok(Ok(Some(paths))) = picked.await else {
+            return;
+        };
+        let Some(path) = paths.into_iter().next() else {
+            return;
+        };
+        if !lead_sound::is_sound_file(&path) {
+            return;
+        }
+        let _ = cx.update(|cx| pick_lead_sound(lead_sound::Choice::Custom(path), cx));
+    })
+    .detach();
 }
 
 /// A menu pick: save it, tick it, and play it once so you hear what you chose.
@@ -431,11 +447,13 @@ fn pick_lead_sound(choice: lead_sound::Choice, cx: &mut gpui::App) {
 fn set_app_menu(cx: &mut gpui::App) {
     use gpui::{Menu, MenuItem};
     let saved = lead_sound::load();
-    let tags = ["thump", "gloop", "glass", "pop", "", "none"];
+    let tags = ["thump", "gloop", "glass", "pop", "", "", "none"];
     let rows = lead_sound::ROWS.iter().enumerate().map(|(i, (label, _))| {
         let ticked = lead_sound::ticked(saved.as_ref(), i);
-        if tags[i].is_empty() {
+        if i == 4 {
             MenuItem::action(*label, app::actions::ActLeadSoundCustom).checked(ticked)
+        } else if i == 5 {
+            MenuItem::action(*label, app::actions::ActLeadSoundFile).checked(ticked)
         } else {
             MenuItem::action(*label, app::actions::ActLeadSound(tags[i].into())).checked(ticked)
         }
@@ -712,7 +730,7 @@ fn wants_top_help(args: &[String]) -> bool {
     if matches!(first, Some("--help" | "-h" | "help")) {
         return true;
     }
-    !matches!(first, Some("ctl" | "web" | "replay"))
+    !matches!(first, Some("ctl" | "web" | "replay" | "feature-request"))
         && args[1..].iter().any(|a| a == "--help" || a == "-h")
 }
 
@@ -726,6 +744,7 @@ USAGE:
     seance ctl <command> …      control plane (`seance ctl help`, `seance ctl skill`)
     seance web [--help]         websocket bridge + web client
     seance replay [--help]      export / list / edit session recordings
+    seance feature-request --title T --body B   open a prefilled feature request
     seance upgrade              hot-swap the daemon binary; sessions survive
     seance restart-gui          restart only the GUI; daemon + sessions stay up
     seance daemon               run the session daemon in the foreground

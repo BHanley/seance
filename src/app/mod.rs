@@ -348,6 +348,8 @@ pub struct SeanceApp {
     wall: wall::WallState,
     /// This window attached with an empty subscription set (second process).
     empty_window: bool,
+    /// The first-run "Seance Custom" check already ran in this process.
+    custom_checked: bool,
     /// Quicklaunch strip entries (~/.config/seance/quicklaunch.json).
     quicklaunch: Vec<QuickLaunchEntry>,
     /// Daemon-side mtime_ms of the config at last load — reload only on
@@ -592,6 +594,7 @@ impl SeanceApp {
             stage: stage::StageState::default(),
             wall: wall::WallState::default(),
             empty_window: empty,
+            custom_checked: false,
             quicklaunch: Vec::new(),
             quicklaunch_mtime: None,
             quicklaunch_checked: None,
@@ -965,6 +968,7 @@ impl SeanceApp {
                     .chain(selected_workspace.iter().cloned())
                     .collect();
                 self.reconcile_subscriptions(&known);
+                self.ensure_custom_circle(&known, cx);
 
                 // Re-seed busy from the daemon's verdict — a full state push is
                 // the resync point for panes whose flips we may have missed
@@ -3119,6 +3123,10 @@ impl Render for SeanceApp {
         // the selection is the only way to catch every mover (see the method).
         self.sync_nav_history();
 
+        // "Lead Reply Sound > Custom…" raised a flag; one window picks it up.
+        if !self.empty_window && crate::seance_custom::take_open_request() {
+            self.open_custom_helper(window, cx);
+        }
         // Summon arrives without a Window on the event path; open rename here.
         if self.pending_rename.is_some() {
             self.flush_pending_rename(window, cx);
