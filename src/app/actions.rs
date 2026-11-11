@@ -19,6 +19,11 @@ pub struct ActQuit;
 #[action(namespace = seance, no_json)]
 pub struct ActRestart;
 
+/// "Suggest a Change…" in the Seance menu: a new feature request in the browser.
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActSuggestChange;
+
 /// "Lead Reply Sound" submenu rows in the Seance menu.
 #[derive(Action, Clone, PartialEq, Deserialize)]
 #[action(namespace = seance, no_json)]
