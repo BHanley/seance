@@ -1723,7 +1723,7 @@ impl SeanceApp {
         .detach();
     }
 
-    fn chat_select(&mut self, ws: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn chat_select(&mut self, ws: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.chat.selected.as_deref() != Some(ws) {
             self.chat.selected = Some(ws.to_string());
             self.tasks_popover = None;
@@ -2225,7 +2225,7 @@ impl SeanceApp {
     /// Send a note to `ws`'s lead, with a file if there is one. Shown at once;
     /// the next thread answer replaces it with the real one. `typed` says the
     /// words came from the composer, so a failed send puts them back there.
-    fn chat_post(
+    pub(super) fn chat_post(
         &mut self,
         ws: String,
         text: String,

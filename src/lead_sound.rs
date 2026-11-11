@@ -132,14 +132,16 @@ pub fn for_choice(choice: &Choice) -> Option<PathBuf> {
     )
 }
 
-/// Menu rows: label and the choice it sets. Custom… is handled apart (it
-/// opens a file picker), so its row carries no choice here.
-pub const ROWS: [(&str, Option<Choice>); 6] = [
+/// Menu rows: label and the choice it sets. Custom… (the Seance Custom
+/// helper) and Custom file… (a file picker) are handled apart, so their rows
+/// carry no choice here.
+pub const ROWS: [(&str, Option<Choice>); 7] = [
     ("Thump", Some(Choice::Thump)),
     ("Gloop", Some(Choice::Gloop)),
     ("Glass", Some(Choice::Glass)),
     ("Pop", Some(Choice::Pop)),
     ("Custom…", None),
+    ("Custom file…", None),
     ("None", Some(Choice::None)),
 ];
 
@@ -151,7 +153,7 @@ pub fn ticked(saved: Option<&Choice>, row: usize) -> bool {
         Choice::Glass => row == 2,
         Choice::Pop => row == 3,
         Choice::Custom(_) => row == 4,
-        Choice::None => row == 5,
+        Choice::None => row == 6,
     }
 }
 

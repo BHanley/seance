@@ -49,10 +49,15 @@ pub struct ActSuggestChange;
 #[action(namespace = seance, no_json)]
 pub struct ActLeadSound(pub String);
 
-/// "Lead Reply Sound > Custom…": pick any sound file.
+/// "Lead Reply Sound > Custom…": opens the Seance Custom helper to pick a sound.
 #[derive(Action, Clone, PartialEq, Deserialize)]
 #[action(namespace = seance, no_json)]
 pub struct ActLeadSoundCustom;
+
+/// "Lead Reply Sound > Custom file…": pick any sound file.
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActLeadSoundFile;
 
 // Sidebar context-menu actions (menu items dispatch gpui actions).
 #[derive(Action, Clone, PartialEq, Deserialize)]
