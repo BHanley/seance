@@ -580,6 +580,50 @@ enum Frames {
     Smooth,
 }
 
+/// The line under the open thread's last message, as Invoke shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StatusLine {
+    /// Brian's latest note is picked up and unanswered, or a pane is mid-turn.
+    LeadWorking,
+    /// No pane mid-turn, but the lead's task is open.
+    Background,
+}
+
+impl StatusLine {
+    fn text(self) -> &'static str {
+        match self {
+            StatusLine::LeadWorking => "Lead is working",
+            StatusLine::Background => "Running in the background",
+        }
+    }
+}
+
+/// Which line shows: waiting wins over a picked-up note (as in Invoke), else
+/// a picked-up note ("got") or a mid-turn circle, else none.
+fn status_line(latest_mine: Option<&str>, working: bool, waiting: bool) -> Option<StatusLine> {
+    if waiting && !working {
+        Some(StatusLine::Background)
+    } else if working || latest_mine == Some("got") {
+        Some(StatusLine::LeadWorking)
+    } else {
+        None
+    }
+}
+
+/// Dot `i`'s opacity `now` ms in: Invoke's `blink`, 1.4 s a loop, each dot
+/// 0.2 s behind the one before (.2 at rest, up to 1 at 40%, back by 80%).
+fn blink_opacity(now: u64, i: u64) -> f32 {
+    const LOOP: u64 = 1400;
+    let t = ((now + LOOP - i * 200 % LOOP) % LOOP) as f32 / LOOP as f32;
+    if t < 0.4 {
+        0.2 + 0.8 * (t / 0.4)
+    } else if t < 0.8 {
+        1.0 - 0.8 * ((t - 0.4) / 0.4)
+    } else {
+        0.2
+    }
+}
+
 /// Frames for this render. Nothing at all in a window nobody is looking at.
 /// `waiting`: a circle in view wears the ember and dots, which ride the
 /// dance timer too.
@@ -2632,14 +2676,13 @@ impl SeanceApp {
         let party = self.chat.party.is_some();
         // A circle waiting on background work, in a row in view or open in
         // the header, wears the ember and dots: the dance timer redraws it.
-        let waiting = items.iter().enumerate().any(|(i, item)| match item {
-            ListItem::Circle(c) => seen.contains(&i) && self.chat_row_waits(c),
-            _ => false,
-        }) || self
-            .chat
-            .selected
-            .as_deref()
-            .is_some_and(|ws| self.chat_header_waits(ws));
+        let waiting =
+            items.iter().enumerate().any(|(i, item)| match item {
+                ListItem::Circle(c) => seen.contains(&i) && self.chat_row_waits(c),
+                _ => false,
+            }) || self.chat.selected.as_deref().is_some_and(|ws| {
+                self.chat_header_waits(ws) || self.chat_status_line(ws).is_some()
+            });
         self.chat.frames = chat_frames(
             crew,
             party,
@@ -3079,6 +3122,28 @@ impl SeanceApp {
         )
     }
 
+    /// The open thread's status line, if one shows.
+    fn chat_status_line(&self, ws: &str) -> Option<StatusLine> {
+        let latest_mine = self.chat.threads.get(ws).and_then(|t| {
+            t.messages
+                .iter()
+                .rev()
+                .find(|m| m.from == "me")
+                .map(|m| m.status.as_str())
+        });
+        let circle_working = self
+            .chat
+            .circles
+            .iter()
+            .find(|c| c.ws == ws)
+            .is_some_and(|c| c.working);
+        status_line(
+            latest_mine,
+            self.circle_dancing(ws, circle_working),
+            self.chat_header_waits(ws),
+        )
+    }
+
     /// Whether the open thread's header creature wears the waiting look.
     fn chat_header_waits(&self, ws: &str) -> bool {
         let circle = self.chat.circles.iter().find(|c| c.ws == ws);
@@ -3482,6 +3547,22 @@ impl SeanceApp {
                 thread = thread.child(earlier_marker(below, gap));
             }
             thread = thread.child(self.chat_bubble(m, read, cx));
+        }
+        if let Some(line) = self.chat_status_line(&ws) {
+            let now = now_ms();
+            thread = thread.child(
+                div()
+                    .flex_none()
+                    .self_start()
+                    .px_1p5()
+                    .py_1()
+                    .flex()
+                    .gap_1()
+                    .text_sm()
+                    .text_color(SeancePalette::text_faint())
+                    .child(line.text())
+                    .children((0..3u64).map(|i| div().child("●").opacity(blink_opacity(now, i)))),
+            );
         }
         if messages.is_some_and(<[Msg]>::is_empty) {
             let no_claude = chat_local::is_local() && !chat_local::has_claude(&ws);
@@ -4917,6 +4998,32 @@ mod tests {
             ThreadWindow::new(2000, chat.shown).start,
             2000 - THREAD_WINDOW
         );
+    }
+
+    #[test]
+    fn the_status_line_follows_invoke() {
+        use StatusLine::*;
+        assert_eq!(status_line(Some("got"), false, false), Some(LeadWorking));
+        assert_eq!(
+            status_line(Some("answered"), true, false),
+            Some(LeadWorking)
+        );
+        assert_eq!(status_line(Some("answered"), false, true), Some(Background));
+        // Waiting wins over a picked-up note; a mid-turn circle is not waiting.
+        assert_eq!(status_line(Some("got"), false, true), Some(Background));
+        assert_eq!(status_line(Some("got"), true, true), Some(LeadWorking));
+        assert_eq!(status_line(Some("answered"), false, false), None);
+        assert_eq!(status_line(None, false, false), None);
+    }
+
+    #[test]
+    fn the_status_dots_blink_in_turn() {
+        assert!((blink_opacity(0, 0) - 0.2).abs() < 1e-4);
+        assert!((blink_opacity(560, 0) - 1.0).abs() < 1e-4);
+        // Dot 1 peaks 0.2 s after dot 0, dot 2 0.4 s after.
+        assert!((blink_opacity(760, 1) - 1.0).abs() < 1e-4);
+        assert!((blink_opacity(960, 2) - 1.0).abs() < 1e-4);
+        assert!((blink_opacity(1400 + 560, 0) - 1.0).abs() < 1e-4);
     }
 
     #[test]
