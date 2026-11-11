@@ -460,7 +460,9 @@ fn set_app_menu(cx: &mut gpui::App) {
     });
     cx.set_menus([Menu::new("Seance").items([
         MenuItem::action("Suggest a Change…", app::actions::ActSuggestChange),
+        MenuItem::separator(),
         MenuItem::submenu(Menu::new("Lead Reply Sound").items(rows)),
+        MenuItem::separator(),
         MenuItem::action("Restart Seance", app::actions::ActRestart),
         MenuItem::action("Quit Seance", app::actions::ActQuit),
     ])]);
