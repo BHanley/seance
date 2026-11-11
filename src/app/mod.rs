@@ -41,6 +41,8 @@ mod pads;
 mod palette;
 mod quicklaunch;
 mod redraw;
+#[cfg(test)]
+mod redraw_bench;
 mod sidebar;
 mod sprite;
 mod stage;
@@ -820,7 +822,7 @@ impl SeanceApp {
                         app.torch_frame = app.torch_frame.wrapping_add(1);
                     }
                     if render {
-                        cx.notify();
+                        app.spinner_repaint(cx);
                     }
                     // A heavy window, or one behind another app, ticks slower
                     // (see redraw.rs); a light one keeps its beat.
