@@ -52,10 +52,34 @@ pub(super) fn dance_gap_ms(draw_ms: u64) -> u64 {
     DANCE_MS.max(draw_ms * 4).min(DANCE_MAX_MS)
 }
 
+/// What a spinner tick has to redraw.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Repaint {
+    Rail,
+    Window,
+}
+
+/// The rail alone shows the spinner in Classic, unless a torch burns in a
+/// pane's title strip. Chat, Stage and the Wall draw it elsewhere.
+pub(super) fn spinner_target(mode: super::views::ViewMode, torches_on_screen: bool) -> Repaint {
+    if mode == super::views::ViewMode::Classic && !torches_on_screen {
+        Repaint::Rail
+    } else {
+        Repaint::Window
+    }
+}
+
 impl super::SeanceApp {
     /// What a spinner tick asks the window to redraw.
+    ///
+    /// In Classic with no torch burning, only the rail shows the spinner and
+    /// the circles' dance, so only the rail is notified; the grid keeps its
+    /// last layout. Anywhere else the whole window redraws, as before.
     pub(super) fn spinner_repaint(&mut self, cx: &mut gpui::Context<Self>) {
-        cx.notify();
+        match spinner_target(self.view.mode, self.torches_on_screen(cx)) {
+            Repaint::Rail => self.rail.update(cx, |_, cx| cx.notify()),
+            Repaint::Window => cx.notify(),
+        }
     }
 }
 
@@ -100,6 +124,17 @@ mod tests {
         let n = frames(60, || Some(spinner_delay_ms(true, 55)));
         let duty = n * 55 / 600;
         assert!(duty <= 17, "{duty}% of a core with {n} frames");
+    }
+
+    #[test]
+    fn a_spinner_tick_redraws_only_the_rail_in_classic() {
+        use super::super::views::ViewMode;
+        assert_eq!(spinner_target(ViewMode::Classic, false), Repaint::Rail);
+        // A burning torch lives in a pane strip: the grid must redraw too.
+        assert_eq!(spinner_target(ViewMode::Classic, true), Repaint::Window);
+        assert_eq!(spinner_target(ViewMode::Chat, false), Repaint::Window);
+        assert_eq!(spinner_target(ViewMode::Stage, false), Repaint::Window);
+        assert_eq!(spinner_target(ViewMode::Wall, false), Repaint::Window);
     }
 
     /// A light window keeps the beat it always had: it looks the same.

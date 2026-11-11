@@ -42,6 +42,7 @@ mod lead_tasks;
 mod menus;
 mod pads;
 mod palette;
+mod panels;
 mod phone;
 mod quicklaunch;
 mod redraw;
@@ -389,6 +390,10 @@ pub struct SeanceApp {
     /// indistinguishable from an idle window: same empty rail, same silence.
     daemon_error: Option<String>,
     render_probe: RenderProbe,
+    /// The rail and the main column draw as their own cached views, so a
+    /// tick that only moves the rail leaves the rest of the window alone.
+    rail: Entity<panels::RailView>,
+    main_col: Entity<panels::MainView>,
 }
 
 /// Active sash drag state.
@@ -523,6 +528,7 @@ impl SeanceApp {
         let remote_cache = Arc::new(crate::remote_cache::RemoteCache::new(Arc::clone(&client)));
         let view = views::ViewState::restore(empty);
 
+        let app_handle = cx.entity();
         let mut app = SeanceApp {
             panes: Vec::new(),
             acked_grid_seq: 0,
@@ -622,6 +628,8 @@ impl SeanceApp {
             remote_cache,
             daemon_error: None,
             render_probe: RenderProbe::default(),
+            rail: cx.new(|c| panels::RailView::new(&app_handle, c)),
+            main_col: cx.new(|c| panels::MainView::new(&app_handle, c)),
             nav: workspaces::NavHistory::default(),
         };
         app.announce_view();
@@ -3178,49 +3186,24 @@ impl Render for SeanceApp {
         } else if walled {
             vec![self.render_wall(window, cx)]
         } else {
-            // Timed section construction (SEANCE_DEBUG_RENDER=1 reports per-section
-            // avg/max ms — pinpoints which surface makes frames expensive).
-            let active = window.is_window_active();
-            let t0 = std::time::Instant::now();
-            let sidebar_el = self.render_sidebar(active, cx).into_any_element();
-            let t1 = std::time::Instant::now();
-            let asks_el: Vec<gpui::AnyElement> = self
-                .render_asks(cx)
-                .into_iter()
-                .map(|e| e.into_any_element())
-                .collect();
-            let shelf_el = self.render_minimize_shelf(active, cx).into_any_element();
-            let stage_el = self.render_stage_strip(active, cx).into_any_element();
-            let awaken_el = self.render_awaken_bar(cx);
-            let daemon_err_el = self.render_daemon_error_bar(cx);
-            let t2 = std::time::Instant::now();
-            let tiles_el = self.render_tiles(active, cx).into_any_element();
-            let t3 = std::time::Instant::now();
-            self.render_probe.add("sidebar", t1 - t0);
-            self.render_probe.add("strips", t2 - t1);
-            self.render_probe.add("tiles", t3 - t2);
-
+            // Both panels are cached views: each redraws when the app
+            // notifies, or when it is notified alone (see `spinner_repaint`).
+            let sidebar_style = gpui::StyleRefinement::default()
+                .flex_none()
+                .w(px(self.sidebar_width))
+                .h_full();
+            let main_style = gpui::StyleRefinement::default()
+                .flex_1()
+                .h_full()
+                .min_w_0()
+                .min_h_0()
+                .overflow_hidden();
             vec![
-                sidebar_el,
-                // min_w_0 is load-bearing: without it the main column's
-                // min-content width (sum of tile mins) blocks window shrink
-                // and the right edge of the last pane goes off-screen.
-                div()
-                    .flex_1()
-                    .h_full()
-                    .min_w_0()
-                    .min_h_0()
-                    .overflow_hidden()
-                    .flex()
-                    .flex_col()
-                    // Above everything: if the daemon won't have us, nothing
-                    // below this line is going to explain itself.
-                    .child(daemon_err_el)
-                    .children(asks_el)
-                    .child(shelf_el)
-                    .child(stage_el)
-                    .child(awaken_el)
-                    .child(tiles_el)
+                gpui::AnyView::from(self.rail.clone())
+                    .cached(sidebar_style)
+                    .into_any_element(),
+                gpui::AnyView::from(self.main_col.clone())
+                    .cached(main_style)
                     .into_any_element(),
             ]
         };
