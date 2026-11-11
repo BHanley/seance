@@ -52,6 +52,13 @@ pub(super) fn dance_gap_ms(draw_ms: u64) -> u64 {
     DANCE_MS.max(draw_ms * 4).min(DANCE_MAX_MS)
 }
 
+impl super::SeanceApp {
+    /// What a spinner tick asks the window to redraw.
+    pub(super) fn spinner_repaint(&mut self, cx: &mut gpui::Context<Self>) {
+        cx.notify();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
