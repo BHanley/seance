@@ -928,7 +928,7 @@ impl SeanceApp {
         let jump_w = jump_box_w(roomy);
         let add_w = 76.;
         // Strip padding, the jump box, "+ circle" and the gaps.
-        let avail = width - 28. - jump_w - 14. * 2. - add_w - 6.;
+        let avail = width - 28. - jump_w - 14. * 2. - (add_w + 6.) * 2.;
         let labels: Vec<String> = circles.iter().map(|c| self.workspace_label(c)).collect();
         let widths: Vec<f32> = labels.iter().map(|l| pill_width(l)).collect();
         let sel_idx = selected
@@ -1078,6 +1078,27 @@ impl SeanceApp {
                 this.stage.new_circle = Some(name);
             }))
             .child("+ circle");
+        let add_space = div()
+            .id("stage-add-space")
+            .flex_none()
+            .w(px(add_w))
+            .flex()
+            .justify_center()
+            .py(px(5.))
+            .rounded_full()
+            .border_1()
+            .border_dashed()
+            .border_color(SeancePalette::border())
+            .text_xs()
+            .text_color(SeancePalette::text_faint())
+            .cursor_pointer()
+            .hover(|s| s.text_color(SeancePalette::text()))
+            .tooltip(tip("new space (name it immediately)"))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.create_space(window, cx);
+                cx.notify();
+            }))
+            .child("+ space");
         // Over the top of what's below, so the lead terminal keeps its size
         // (a resize would reflow the PTY on every click).
         let row = open.then(|| {
@@ -1119,7 +1140,9 @@ impl SeanceApp {
                     .items_center()
                     .gap(px(6.))
                     .children(rename)
-                    .when(!renaming, |d| d.children(pills).children(more).child(add)),
+                    .when(!renaming, |d| {
+                        d.children(pills).children(more).child(add).child(add_space)
+                    }),
             )
             .child(render_jump_box("stage-jump", roomy, cx));
         div()

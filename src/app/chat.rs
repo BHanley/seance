@@ -839,6 +839,13 @@ pub(super) struct ChatState {
 }
 
 impl ChatState {
+    /// A circle just made in Chat is the one open, whatever was open before.
+    fn open_new_circle(&mut self, ws: &str) {
+        self.selected = Some(ws.to_string());
+        self.arrive();
+        self.notice = None;
+    }
+
     /// Newest message Invoke has given us for `ws`: a refresh asks only for
     /// what comes after it.
     fn last_id(&self, ws: &str) -> Option<i64> {
@@ -1224,10 +1231,37 @@ fn tick_for(m: &Msg, read: i64) -> Option<(&'static str, bool, &'static str)> {
 /// One child of the circle list.
 enum ListItem {
     Label(String),
+    /// A space's heading: a circle dropped on it moves there.
+    Space {
+        id: String,
+        name: String,
+    },
     Circle(CircleRow),
 }
 
 /// A list heading: a space's name, or Active.
+/// The spaces that have no circle in the list, in rail order.
+fn empty_spaces<'a>(
+    spaces: impl Iterator<Item = (&'a str, &'a str)>,
+    shown: &std::collections::HashSet<String>,
+) -> Vec<(String, String)> {
+    spaces
+        .filter(|(id, _)| !shown.contains(*id))
+        .map(|(id, name)| (id.to_string(), name.to_string()))
+        .collect()
+}
+
+/// The spaces a circle can move to: every one but where it is.
+fn move_targets<'a>(
+    spaces: impl Iterator<Item = (&'a str, &'a str)>,
+    here: &str,
+) -> Vec<(String, String)> {
+    spaces
+        .filter(|(id, _)| *id != here)
+        .map(|(id, name)| (id.to_string(), name.to_string()))
+        .collect()
+}
+
 fn list_label(text: String) -> gpui::Div {
     div()
         .px_3()
@@ -2498,6 +2532,58 @@ impl SeanceApp {
         rows
     }
 
+    /// "+ space" and "+ circle" under the search box: Classic's actions, and
+    /// a new circle opens its chat and gets its first pane once it is named.
+    fn render_chat_add_chips(&self, cx: &Context<Self>) -> AnyElement {
+        let chip = |id: &'static str, label: &'static str, tip_text: &'static str| {
+            div()
+                .id(id)
+                .flex_none()
+                .px_1p5()
+                .rounded_md()
+                .text_xs()
+                .text_color(SeancePalette::violet_dim())
+                .hover(|s| {
+                    s.text_color(SeancePalette::violet())
+                        .bg(SeancePalette::surface())
+                })
+                .cursor_pointer()
+                .tooltip(tip(tip_text))
+                .child(label)
+        };
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(
+                chip(
+                    "chat-new-space",
+                    "+ space",
+                    "new space (name it immediately)",
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.create_space(window, cx);
+                    cx.notify();
+                })),
+            )
+            .child(
+                chip(
+                    "chat-new-circle",
+                    "+ circle",
+                    "new circle in this space (name it immediately)",
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    // New circles land in the space shown, and open here.
+                    this.rail_space = Some(this.shown_space());
+                    let name = this.create_workspace(window, cx);
+                    this.stage.new_circle = Some(name.clone());
+                    this.chat.open_new_circle(&name);
+                    cx.notify();
+                })),
+            )
+            .into_any_element()
+    }
+
     /// The circle list's children in order: none while search results stand
     /// in for the circles.
     fn chat_list_items(&self) -> Vec<ListItem> {
@@ -2520,12 +2606,28 @@ impl SeanceApp {
             let id = spaces.space_of(&c.ws).to_string();
             if id != space {
                 if let Some(s) = spaces.list.iter().find(|s| s.id == id) {
-                    items.push(ListItem::Label(s.name.to_uppercase()));
+                    items.push(ListItem::Space {
+                        id: s.id.clone(),
+                        name: s.name.clone(),
+                    });
                 }
                 space = id;
             }
             items.push(ListItem::Circle(c));
         }
+        // A new space has no circle yet: its label still shows, so it is there
+        // to be named and filled.
+        let shown: std::collections::HashSet<String> = self
+            .chat_circles_in_order()
+            .iter()
+            .map(|c| spaces.space_of(&c.ws).to_string())
+            .collect();
+        let names = spaces.list.iter().map(|s| (s.id.as_str(), s.name.as_str()));
+        items.extend(
+            empty_spaces(names, &shown)
+                .into_iter()
+                .map(|(id, name)| ListItem::Space { id, name }),
+        );
         items
     }
 
@@ -2550,6 +2652,7 @@ impl SeanceApp {
         for item in items {
             col = col.child(match item {
                 ListItem::Label(text) => list_label(text).into_any_element(),
+                ListItem::Space { id, name } => self.chat_space_heading(id, name, cx),
                 ListItem::Circle(c) => self.chat_circle_row(&c, cx),
             });
         }
@@ -2585,6 +2688,8 @@ impl SeanceApp {
                     )
                     .child(self.render_view_switch("chat", cx))
                     .children(self.chat.search.as_ref().map(|s| Input::new(s)))
+                    .child(self.render_chat_add_chips(cx))
+                    .children(self.render_rename_field())
                     .children(self.chat.search_note.as_ref().map(|n| {
                         div()
                             .text_xs()
@@ -2638,7 +2743,33 @@ impl SeanceApp {
             .into_any_element()
     }
 
+    /// A space's heading. A circle row dropped here moves into the space.
+    fn chat_space_heading(&self, id: String, name: String, cx: &Context<Self>) -> AnyElement {
+        list_label(name.to_uppercase())
+            .id(SharedString::from(format!("chat-space-{id}")))
+            .drag_over::<super::util::DraggedCircle>(|style, _, _, _| {
+                style.bg(SeancePalette::flame_dim().opacity(0.35))
+            })
+            .on_drop(
+                cx.listener(move |this, drag: &super::util::DraggedCircle, _, cx| {
+                    this.move_circle_to_space(&drag.slug, &id);
+                    cx.notify();
+                }),
+            )
+            .into_any_element()
+    }
+
     fn chat_circle_row(&self, c: &CircleRow, cx: &Context<Self>) -> AnyElement {
+        let targets = move_targets(
+            self.subs_pref
+                .spaces
+                .list
+                .iter()
+                .map(|s| (s.id.as_str(), s.name.as_str())),
+            self.subs_pref.spaces.space_of(&c.ws),
+        );
+        let drag_slug = c.ws.clone();
+        let drag_label = self.workspace_label(&c.ws);
         let on = self.chat.selected.as_deref() == Some(c.ws.as_str());
         let ws = c.ws.clone();
         let (menu_ws, weak) = (c.ws.clone(), cx.weak_entity());
@@ -2661,12 +2792,32 @@ impl SeanceApp {
             })
             .hover(|s| s.bg(SeancePalette::surface()))
             .on_click(cx.listener(move |this, _, window, cx| this.chat_select(&ws, window, cx)))
-            .context_menu(move |menu, _, _| {
+            .on_drag(
+                super::util::DraggedCircle { slug: drag_slug },
+                move |_, _, _, cx| {
+                    let label = format!("◈ {drag_label}");
+                    cx.new(|_| super::util::DragPill { label })
+                },
+            )
+            .context_menu(move |menu, window, cx| {
                 let (ws, weak) = (menu_ws.clone(), weak.clone());
+                let (move_ws, move_weak, targets) = (ws.clone(), weak.clone(), targets.clone());
                 menu.item(PopupMenuItem::new("Mark unread").on_click(move |_, _, cx| {
                     let ws = ws.clone();
                     let _ = weak.update(cx, |a, cx| a.chat_unread(ws, cx));
                 }))
+                .submenu("Move to space", window, cx, move |sub, _, _| {
+                    targets.iter().fold(sub, |sub, (id, name)| {
+                        let (ws, id, weak) = (move_ws.clone(), id.clone(), move_weak.clone());
+                        sub.item(PopupMenuItem::new(name.clone()).on_click(move |_, _, cx| {
+                            let (ws, id) = (ws.clone(), id.clone());
+                            let _ = weak.update(cx, |a, cx| {
+                                a.move_circle_to_space(&ws, &id);
+                                cx.notify();
+                            });
+                        }))
+                    })
+                })
             })
             .child(self.chat_row_creature(c))
             .child(
@@ -3817,6 +3968,54 @@ impl SeanceApp {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn move_to_space_lists_every_other_space_and_moves_the_circle() {
+        let mut spaces = seance_core::spaces::Spaces::default();
+        let circles: Vec<(String, String)> = ["a", "b", "c"]
+            .map(|c| (c.to_string(), c.to_string()))
+            .into();
+        spaces.reconcile(&circles, None);
+        let work = spaces.default_id().to_string();
+        let home = spaces.create("Home");
+        let all: Vec<(String, String)> = spaces
+            .list
+            .iter()
+            .map(|x| (x.id.clone(), x.name.clone()))
+            .collect();
+        let targets = move_targets(all.iter().map(|(i, n)| (i.as_str(), n.as_str())), &work);
+        assert_eq!(targets, [(home.clone(), "Home".to_string())]);
+        // The menu item's action: the circle is in Home, the others stay.
+        let order: Vec<String> = ["a", "b", "c"].map(String::from).into();
+        assert!(spaces.move_circle("b", &home));
+        assert_eq!(spaces.space_of("b"), home);
+        assert_eq!(spaces.circles_in(&work, &order), ["a", "c"]);
+        // Order is the circles' own, so a move keeps each one's place.
+        assert!(spaces.move_circle("a", &home));
+        assert_eq!(spaces.circles_in(&home, &order), ["a", "b"]);
+    }
+
+    #[test]
+    fn a_new_circle_opens_its_chat() {
+        let mut chat = ChatState::default();
+        chat.selected = Some("old".to_string());
+        chat.notice = Some("a note".to_string());
+        chat.open_new_circle("circle-7");
+        assert_eq!(chat.selected.as_deref(), Some("circle-7"));
+        assert_eq!(chat.notice, None);
+    }
+
+    #[test]
+    fn a_space_with_no_circle_still_gets_a_heading() {
+        let shown: std::collections::HashSet<String> = ["a".to_string()].into();
+        let spaces = [("a", "Work"), ("b", "new space"), ("c", "Home")];
+        let names: Vec<_> = empty_spaces(spaces.into_iter(), &shown)
+            .into_iter()
+            .map(|(_, n)| n)
+            .collect();
+        assert_eq!(names, ["new space", "Home"]);
+        assert!(empty_spaces(std::iter::empty(), &shown).is_empty());
+    }
+
     use super::*;
 
     #[test]
