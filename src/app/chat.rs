@@ -1941,7 +1941,11 @@ impl SeanceApp {
         }
         self.chat.dance_ticking = true;
         cx.spawn(async move |this, cx| loop {
-            cx.background_executor().timer(DANCE_TICK).await;
+            cx.background_executor()
+                .timer(Duration::from_millis(super::redraw::dance_gap_ms(
+                    super::redraw::draw_ms(),
+                )))
+                .await;
             let Some(this) = this.upgrade() else { break };
             let go = this.update(cx, |app: &mut SeanceApp, cx| {
                 let go = app.view.mode == ViewMode::Chat && app.chat.frames == Frames::Dance;
