@@ -539,9 +539,11 @@ pub(crate) fn set_app_menu(cx: &mut gpui::App) {
             MenuItem::action(*label, app::actions::ActLeadSound(tags[i].into())).checked(ticked)
         }
     });
+    // Grouped with separators: ask for things, set the app up, then leave.
     let mut seance_items = vec![
         MenuItem::action("Suggest a Change…", app::actions::ActSuggestChange),
         MenuItem::action("Check for Updates…", app::actions::ActCheckUpdates),
+        MenuItem::separator(),
         MenuItem::action("Use Seance on Your Phone…", app::actions::ActPhoneGuide),
         MenuItem::submenu(Menu::new("Lead Reply Sound").items(rows)),
     ];
@@ -552,6 +554,7 @@ pub(crate) fn set_app_menu(cx: &mut gpui::App) {
                 .checked(app::AFK_ON.load(std::sync::atomic::Ordering::Relaxed)),
         );
     }
+    seance_items.push(MenuItem::separator());
     seance_items.push(MenuItem::action("Restart Seance", app::actions::ActRestart));
     seance_items.push(MenuItem::action("Quit Seance", app::actions::ActQuit));
     cx.set_menus([
