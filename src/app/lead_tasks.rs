@@ -20,8 +20,21 @@ use crate::theme::SeancePalette;
 use super::util::{now_ms, tip};
 use super::SeanceApp;
 
-/// How often the selected circle's lead is asked for its tasks.
+/// How often the selected circle's lead is asked for its tasks while someone
+/// can see them: the task card is open, or Stage shows the chip, in a window
+/// that is in front.
 const POLL_EVERY: Duration = Duration::from_millis(2000);
+/// The rest of the time (each ask makes Invoke run several `ctl` calls).
+const POLL_SLOW: Duration = Duration::from_secs(30);
+
+/// How long to wait before the next ask.
+fn poll_wait(card_open: bool, chip_shown: bool, window_active: bool) -> Duration {
+    if (card_open || chip_shown) && window_active {
+        POLL_EVERY
+    } else {
+        POLL_SLOW
+    }
+}
 /// A row's full text stops here, like the pad inspector's task body.
 const FULL_TEXT_CAP: usize = 2500;
 /// After the daemon fails to answer, ask again this rarely.
@@ -269,10 +282,26 @@ fn span(ms: u64) -> String {
 impl SeanceApp {
     /// Poll for the selected circle's lead tasks.
     pub(super) fn start_lead_tasks_poll(cx: &mut Context<Self>) {
+        // Set by each pass for the next one: 2 s while the card or Stage's chip
+        // can be seen in a window in front, 30 s otherwise.
+        let wait_ms = std::sync::atomic::AtomicU64::new(POLL_EVERY.as_millis() as u64);
         cx.spawn(async move |this, cx| loop {
-            cx.background_executor().timer(POLL_EVERY).await;
+            cx.background_executor()
+                .timer(Duration::from_millis(
+                    wait_ms.load(std::sync::atomic::Ordering::Relaxed),
+                ))
+                .await;
             let Some(this) = this.upgrade() else { break };
             let ask = this.update(cx, |app: &mut SeanceApp, cx| {
+                wait_ms.store(
+                    poll_wait(
+                        app.tasks_popover.is_some() || app.tasks_row_open.is_some(),
+                        app.view.mode == super::views::ViewMode::Stage,
+                        app.window_active,
+                    )
+                    .as_millis() as u64,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
                 // The card goes when its lead, pane or layout does.
                 if app.tasks_popover.is_some() && !app.tasks_popover_valid() {
                     app.close_tasks_popover(cx);
@@ -1077,5 +1106,18 @@ mod tests {
         assert!(LeadTasks::from_invoke(chat_api::Tasks::default()).invoke);
         let daemon: LeadTasks = serde_json::from_str(r#"{"tasks":[],"helpers":[]}"#).unwrap();
         assert!(!daemon.normalized().invoke);
+    }
+
+    #[test]
+    fn the_task_list_is_polled_fast_only_where_someone_can_see_it() {
+        let fast = Duration::from_millis(2000);
+        let slow = Duration::from_secs(30);
+        assert_eq!(poll_wait(true, false, true), fast);
+        assert_eq!(poll_wait(false, true, true), fast);
+        // Card or chip, but another app in front.
+        assert_eq!(poll_wait(true, true, false), slow);
+        // In front, nothing showing it.
+        assert_eq!(poll_wait(false, false, true), slow);
+        assert_eq!(poll_wait(false, false, false), slow);
     }
 }

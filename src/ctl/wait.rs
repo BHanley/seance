@@ -172,6 +172,11 @@ pub(crate) fn run_wait(
         });
     }
     let mut last_rows: Vec<serde_json::Value> = Vec::new();
+    // Scope for the Brief once the waited panes' circle is known; dropped for
+    // good if a pane stops showing up in it (it moved circle).
+    let mut brief_ws: Option<String> = None;
+    let mut scope_off = false;
+    let mut watch_alive = true;
 
     loop {
         if started.elapsed().as_secs() > timeout_secs {
@@ -206,7 +211,7 @@ pub(crate) fn run_wait(
         // One dense brief for all panes (token-cheap).
         let brief_req = with_identity(
             ControlRequest::Brief {
-                scope: None,
+                scope: brief_ws.clone(),
                 from: None,
             },
             scope.clone(),
@@ -233,6 +238,19 @@ pub(crate) fn run_wait(
             .and_then(|p| p.as_array())
             .cloned()
             .unwrap_or_default();
+        // A scoped Brief that lost a pane: back to the full roster, once.
+        if brief_ws.is_some()
+            && panes
+                .iter()
+                .any(|w| !rows.iter().any(|p| super::pane_row_matches(p, w)))
+        {
+            brief_ws = None;
+            scope_off = true;
+            continue;
+        }
+        if brief_ws.is_none() && !scope_off {
+            brief_ws = brief_scope(&rows, &panes);
+        }
         // Keep a filtered diagnostic snapshot of panes we care about.
         last_rows = rows
             .iter()
@@ -546,14 +564,16 @@ pub(crate) fn run_wait(
 
         // Event-driven: wake on bus activity, with a short poll ceiling so we
         // still make progress if watch is unavailable.
-        match wake_rx.recv_timeout(std::time::Duration::from_millis(400)) {
+        match wake_rx.recv_timeout(std::time::Duration::from_millis(wake_wait_ms(watch_alive))) {
             Ok(()) => {
                 // Drain extra wakes so we don't thrash.
                 while wake_rx.try_recv().is_ok() {}
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                std::thread::sleep(std::time::Duration::from_millis(400));
+                // No watch, no events: poll the old way.
+                watch_alive = false;
+                std::thread::sleep(std::time::Duration::from_millis(wake_wait_ms(false)));
             }
         }
     }
@@ -705,6 +725,39 @@ pub(crate) fn run_watch(request: &ControlRequest, json_out: bool) -> i32 {
 }
 
 /// Pull exactly one positional (a pane name) or explain what was wrong.
+
+/// Slowest the wait loop re-checks while its event watch is alive: events
+/// wake it when something about the waited pane changes, so the poll is only
+/// a safety net.
+pub(crate) const WAKE_CEILING_MS: u64 = 2000;
+/// With the watch gone there are no events, so it polls the old way.
+const POLL_FALLBACK_MS: u64 = 400;
+
+pub(crate) fn wake_wait_ms(watch_alive: bool) -> u64 {
+    if watch_alive {
+        WAKE_CEILING_MS
+    } else {
+        POLL_FALLBACK_MS
+    }
+}
+
+/// The circle to scope the next Brief to: the one workspace every waited
+/// pane lives in, known only once a full Brief showed them all. Anything else
+/// (a pane missing, panes in two circles) keeps the full roster. A Brief
+/// renders every awake pane's screen, so scoping it to one circle is what
+/// keeps a pile of waiters cheap.
+pub(crate) fn brief_scope(rows: &[serde_json::Value], panes: &[String]) -> Option<String> {
+    let mut found: Option<&str> = None;
+    for want in panes {
+        let row = rows.iter().find(|p| super::pane_row_matches(p, want))?;
+        let ws = row.get("workspace").and_then(|v| v.as_str())?;
+        if ws.is_empty() || found.is_some_and(|f| f != ws) {
+            return None;
+        }
+        found = Some(ws);
+    }
+    found.map(str::to_string)
+}
 
 pub(crate) fn watch_wake_loop(panes: Vec<String>, tx: std::sync::mpsc::Sender<()>) {
     use std::io::{BufRead, BufReader, Write};
@@ -883,5 +936,36 @@ mod tests {
             "a file older than the task is stale"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_wait_scopes_its_brief_to_the_one_circle_its_panes_live_in() {
+        let rows = vec![
+            serde_json::json!({"slug": "lead-1", "workspace": "seance"}),
+            serde_json::json!({"slug": "mac-1", "workspace": "seance"}),
+            serde_json::json!({"slug": "other", "workspace": "rudle"}),
+        ];
+        let want = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            brief_scope(&rows, &want(&["lead-1"])).as_deref(),
+            Some("seance")
+        );
+        assert_eq!(
+            brief_scope(&rows, &want(&["lead-1", "mac-1"])).as_deref(),
+            Some("seance")
+        );
+        // Two circles, or a pane the roster does not show: the full roster.
+        assert_eq!(brief_scope(&rows, &want(&["lead-1", "other"])), None);
+        assert_eq!(brief_scope(&rows, &want(&["ghost"])), None);
+        assert_eq!(
+            brief_scope(&[serde_json::json!({"slug": "x"})], &want(&["x"])),
+            None
+        );
+    }
+
+    #[test]
+    fn the_poll_ceiling_is_two_seconds_with_a_watch_and_the_old_one_without() {
+        assert_eq!(wake_wait_ms(true), 2000);
+        assert_eq!(wake_wait_ms(false), 400);
     }
 }
