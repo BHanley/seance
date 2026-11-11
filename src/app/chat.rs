@@ -2963,7 +2963,7 @@ impl SeanceApp {
                                         .italic()
                                         .text_size(px(10.))
                                         .text_color(SeancePalette::text_faint())
-                                        .child("brewing"),
+                                        .child("simmering"),
                                 )
                             }),
                     )
