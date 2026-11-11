@@ -579,12 +579,20 @@ enum Frames {
 }
 
 /// Frames for this render. Nothing at all in a window nobody is looking at.
-fn chat_frames(crew: bool, party: bool, list_dancing: bool, window_active: bool) -> Frames {
+/// `waiting`: a circle in view wears the ember and dots, which ride the
+/// dance timer too.
+fn chat_frames(
+    crew: bool,
+    party: bool,
+    list_dancing: bool,
+    waiting: bool,
+    window_active: bool,
+) -> Frames {
     if !window_active {
         Frames::Idle
     } else if party {
         Frames::Smooth
-    } else if crew || list_dancing {
+    } else if crew || list_dancing || waiting {
         Frames::Dance
     } else {
         Frames::Idle
@@ -2489,10 +2497,21 @@ impl SeanceApp {
             party.advance(now, &mut rand::thread_rng());
         }
         let party = self.chat.party.is_some();
+        // A circle waiting on background work, in a row in view or open in
+        // the header, wears the ember and dots: the dance timer redraws it.
+        let waiting = items.iter().enumerate().any(|(i, item)| match item {
+            ListItem::Circle(c) => seen.contains(&i) && self.chat_row_waits(c),
+            _ => false,
+        }) || self
+            .chat
+            .selected
+            .as_deref()
+            .is_some_and(|ws| self.chat_header_waits(ws));
         self.chat.frames = chat_frames(
             crew,
             party,
             !self.chat.list_dancing.is_empty(),
+            waiting,
             self.chat.window_active,
         );
         match self.chat.frames {
@@ -2904,6 +2923,25 @@ impl SeanceApp {
         cx.notify();
     }
 
+    /// Whether a list row wears the waiting look.
+    fn chat_row_waits(&self, c: &CircleRow) -> bool {
+        super::sprite::wears_wait(
+            c.waiting,
+            self.circle_dancing(&c.ws, c.working) || !c.crew.is_empty(),
+            self.workspace_needs_human(&c.ws),
+        )
+    }
+
+    /// Whether the open thread's header creature wears the waiting look.
+    fn chat_header_waits(&self, ws: &str) -> bool {
+        let circle = self.chat.circles.iter().find(|c| c.ws == ws);
+        let thread = self.chat.threads.get(ws);
+        let waiting = thread.map_or_else(|| circle.is_some_and(|c| c.waiting), |t| t.waiting);
+        let dancing = self.circle_dancing(ws, circle.is_some_and(|c| c.working))
+            || thread.is_some_and(|t| !t.crew.is_empty());
+        super::sprite::wears_wait(waiting, dancing, self.workspace_needs_human(ws))
+    }
+
     /// A list row's creature, or its crew while two or more dance in view.
     fn chat_row_creature(&self, c: &CircleRow) -> AnyElement {
         let sprite = super::sprite::for_circle(&c.ws);
@@ -2916,6 +2954,16 @@ impl SeanceApp {
             .get(&c.ws)
             .filter(|_| self.chat.list_dancing.contains(&c.ws) && !needs);
         let Some(dance) = dance else {
+            if self.chat_row_waits(c) {
+                return slot
+                    .child(super::sprite::render_waiting(
+                        &sprite,
+                        2.,
+                        now_ms(),
+                        SeancePalette::text_faint(),
+                    ))
+                    .into_any_element();
+            }
             return slot
                 .child(super::sprite::render(
                     &sprite,
@@ -2979,11 +3027,15 @@ impl SeanceApp {
                     .absolute()
                     .size_full()
             })
-            .child(if cuts.is_empty() {
-                super::sprite::render_move(&sprite, 2.5, working, moving)
-            } else {
-                super::sprite::render_crew(&sprite, &cuts, moving, 1.)
-            })
+            .child(
+                if cuts.is_empty() && moving.is_none() && self.chat_header_waits(ws) {
+                    super::sprite::render_waiting(&sprite, 2.5, now, SeancePalette::text_faint())
+                } else if cuts.is_empty() {
+                    super::sprite::render_move(&sprite, 2.5, working, moving)
+                } else {
+                    super::sprite::render_crew(&sprite, &cuts, moving, 1.)
+                },
+            )
             .children(say.map(|line| {
                 // Deferred, so the thread below cannot paint over it.
                 gpui::deferred(
@@ -4557,14 +4609,17 @@ mod tests {
 
     #[test]
     fn nothing_redraws_on_its_own_while_chat_is_idle() {
-        assert_eq!(chat_frames(false, false, false, true), Frames::Idle);
+        assert_eq!(chat_frames(false, false, false, false, true), Frames::Idle);
         // Dances go by the timer, never every frame.
-        assert_eq!(chat_frames(true, false, false, true), Frames::Dance);
-        assert_eq!(chat_frames(false, false, true, true), Frames::Dance);
+        assert_eq!(chat_frames(true, false, false, false, true), Frames::Dance);
+        assert_eq!(chat_frames(false, false, true, false, true), Frames::Dance);
+        // A waiting circle's ember and dots ride the same timer.
+        assert_eq!(chat_frames(false, false, false, true, true), Frames::Dance);
         // Only the party gets every frame.
-        assert_eq!(chat_frames(true, true, true, true), Frames::Smooth);
-        // Nobody looking: nothing at all.
-        assert_eq!(chat_frames(true, true, true, false), Frames::Idle);
+        assert_eq!(chat_frames(true, true, true, true, true), Frames::Smooth);
+        // Nobody looking: nothing at all, waiting or not.
+        assert_eq!(chat_frames(true, true, true, true, false), Frames::Idle);
+        assert_eq!(chat_frames(false, false, false, true, false), Frames::Idle);
         assert!(DANCE_TICK >= Duration::from_millis(80) && DANCE_TICK <= Duration::from_millis(90));
     }
 
