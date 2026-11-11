@@ -40,6 +40,7 @@ mod selfupdate;
 mod skin;
 mod state;
 mod subscriptions_pref;
+mod suggest;
 mod sysopen;
 mod term_config;
 mod term_font;
@@ -480,6 +481,7 @@ fn install_app_menu(cx: &mut gpui::App) {
     cx.bind_keys([gpui::KeyBinding::new("cmd-q", app::actions::ActQuit, None)]);
     // gpui's restart: waits for this process to exit, then `open`s the bundle.
     cx.on_action(|_: &app::actions::ActRestart, cx| cx.restart());
+    cx.on_action(|_: &app::actions::ActSuggestChange, _| suggest::open());
     cx.on_action(|act: &app::actions::ActLeadSound, cx| {
         let choice = match act.0.as_str() {
             "thump" => lead_sound::Choice::Thump,
@@ -538,6 +540,7 @@ pub(crate) fn set_app_menu(cx: &mut gpui::App) {
         }
     });
     let mut seance_items = vec![
+        MenuItem::action("Suggest a Change…", app::actions::ActSuggestChange),
         MenuItem::action("Check for Updates…", app::actions::ActCheckUpdates),
         MenuItem::action("Use Seance on Your Phone…", app::actions::ActPhoneGuide),
         MenuItem::submenu(Menu::new("Lead Reply Sound").items(rows)),
