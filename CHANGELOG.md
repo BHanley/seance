@@ -17,6 +17,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.16] — 2026-11-10
+
+### Fixed
+- Seance no longer burns CPU redrawing while you are in another app. The spinner, the circle icons' dance and a streaming pane each end in a whole-window redraw, which can cost about 55 ms with many circles. Their cadence now stretches with what a draw really costs (never more than about a sixth of a core) and drops to one tick a second while another app is in front. A light window keeps its beat, so it looks the same. Every 10 s the log gets a "[seance redraw]" line with the draws and the share of a core.
+
 ## [0.28.15] — 2026-11-10
 
 ### Added
