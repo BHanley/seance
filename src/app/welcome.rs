@@ -103,8 +103,17 @@ impl SeanceApp {
 
     fn welcome_press(&mut self, press: Press, cx: &mut Context<Self>) {
         let (next, seen) = after(self.welcome.card, press);
+        // The very first time through, the setup kit's tiles come after the
+        // welcome (not after Show Welcome Again, and not when the phone guide
+        // opens). `kit::first_run` keeps it to once.
+        let first_time = seen
+            && press != Press::SetUpPhone
+            && crate::state::state_dir().is_ok_and(|d| !seen_in(&d));
         if seen {
             mark_seen();
+        }
+        if first_time && crate::kit::first_run(&crate::kit::Env::real(), false) {
+            self.kit_open(super::kit_ui::KitView::Tiles, cx);
         }
         match next {
             Some(card) => self.welcome.card = card,

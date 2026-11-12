@@ -86,18 +86,6 @@ impl SeanceApp {
         cx.notify();
     }
 
-    /// First run on a fresh install shows the tiles. An install that upgrades
-    /// into this version never does (see `kit::first_run`). Runs once.
-    pub(super) fn start_kit_first_run(&mut self, cx: &mut Context<Self>) {
-        if self.kit_checked || self.empty_window {
-            return;
-        }
-        self.kit_checked = true;
-        if kit::first_run(&kit::Env::real(), crate::seance_custom::load_created()) {
-            self.kit_open(KitView::Tiles, cx);
-        }
-    }
-
     /// Menu requests, picked up by one window.
     pub(super) fn poll_kit_request(&mut self, cx: &mut Context<Self>) {
         if self.empty_window {
@@ -116,9 +104,15 @@ impl SeanceApp {
             _ => return,
         };
         self.kit.error = result.as_ref().err().cloned();
-        // This build does not run Invoke, so it cannot restart it.
-        self.kit.note = (item == Item::DesignSheets && result.is_ok())
-            .then(|| "Takes effect the next time Invoke starts.".to_string());
+        // Invoke reads the sheets flag when it starts: restart the one this
+        // app runs, so the switch takes effect now.
+        self.kit.note = (item == Item::DesignSheets && result.is_ok()).then(|| {
+            if crate::invoke::restart_running() {
+                "Restarting Invoke so it picks this up.".to_string()
+            } else {
+                "Takes effect the next time Invoke starts.".to_string()
+            }
+        });
         self.kit_refresh();
         cx.notify();
     }

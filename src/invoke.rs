@@ -549,6 +549,31 @@ fn stop_stale(rec: &Value) {
     }
 }
 
+/// Whether a `ps` command line is our Invoke.
+fn is_invoke_command(cmd: &str) -> bool {
+    cmd.contains("seance-chat")
+}
+
+/// Stop the Invoke this app runs so the supervisor starts it again (it reads
+/// its config at start). False when none of ours is running.
+pub fn restart_running() -> bool {
+    let rec = read_record();
+    let Some(pid) = rec["pid"].as_i64().filter(|p| *p > 1) else {
+        return false;
+    };
+    let cmd = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "command="])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+    if !is_invoke_command(&cmd) {
+        return false;
+    }
+    // SAFETY: plain signal to a pid just confirmed to be our Invoke.
+    unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+    true
+}
+
 fn spawn_invoke(dir: &Path, port: u16) -> Option<std::process::Child> {
     let support = support_dir()?;
     let log = std::fs::OpenOptions::new()

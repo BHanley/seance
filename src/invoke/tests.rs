@@ -196,3 +196,12 @@ fn subscriptions_are_counted_from_invokes_file() {
         2
     );
 }
+
+#[test]
+fn only_our_invoke_is_restarted() {
+    assert!(is_invoke_command(
+        "/x/python/bin/python3 /x/seance-chat run"
+    ));
+    assert!(!is_invoke_command("/usr/bin/vim notes.txt"));
+    assert!(!is_invoke_command(""));
+}

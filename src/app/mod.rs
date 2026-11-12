@@ -357,7 +357,6 @@ pub struct SeanceApp {
     /// This window attached with an empty subscription set (second process).
     empty_window: bool,
     kit: kit_ui::KitUi,
-    kit_checked: bool,
     /// The first-run "Seance Custom" check already ran in this process.
     custom_checked: bool,
     /// Quicklaunch strip entries (~/.config/seance/quicklaunch.json).
@@ -619,7 +618,6 @@ impl SeanceApp {
             wall: wall::WallState::default(),
             empty_window: empty,
             kit: Default::default(),
-            kit_checked: false,
             custom_checked: false,
             quicklaunch: Vec::new(),
             quicklaunch_mtime: None,
@@ -1006,9 +1004,6 @@ impl SeanceApp {
                     .chain(selected_workspace.iter().cloned())
                     .collect();
                 self.reconcile_subscriptions(&known);
-                // Before the helper circle is made: a fresh install is the one
-                // whose Seance Custom has not been made yet.
-                self.start_kit_first_run(cx);
                 self.ensure_custom_circle(&known, cx);
 
                 // Re-seed busy from the daemon's verdict — a full state push is
