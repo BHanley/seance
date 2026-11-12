@@ -324,12 +324,15 @@ fn render_task_list(
                 .gap_1p5()
                 .child(prefix)
                 .child(
-                    div().flex_1().min_w_0().child(
-                        TextView::markdown(SharedString::from(id), item.body.clone())
-                            .markdown_extensions(nested.clone())
-                            .style(style.clone())
-                            .selectable(true),
-                    ),
+                    crate::linkguard::guard_links(div())
+                        .flex_1()
+                        .min_w_0()
+                        .child(
+                            TextView::markdown(SharedString::from(id), item.body.clone())
+                                .markdown_extensions(nested.clone())
+                                .style(style.clone())
+                                .selectable(true),
+                        ),
                 )
         }))
 }
@@ -1649,8 +1652,7 @@ impl FileView {
                 .text_color(SeancePalette::text());
 
             // Fixed-height parent required by scrollable TextView (list + scrollbar).
-            div()
-                .id("fileview-md")
+            crate::linkguard::guard_links(div().id("fileview-md"))
                 .flex_1()
                 .min_h_0()
                 .min_w_0()

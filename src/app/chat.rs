@@ -3831,6 +3831,10 @@ impl SeanceApp {
                     // the selection itself lands after, hence the defer.
                     .capture_any_mouse_up(cx.listener(
                         move |_, ev: &gpui::MouseUpEvent, window, cx| {
+                            // A right or middle click must not open a link.
+                            if crate::linkguard::blocks_link_click(ev.button) {
+                                cx.stop_propagation();
+                            }
                             if ev.button == gpui::MouseButton::Left && ev.click_count == 2 {
                                 let text = text.clone();
                                 cx.defer_in(window, move |_, window, cx| {
