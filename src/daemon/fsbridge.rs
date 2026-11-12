@@ -175,6 +175,10 @@ fn run_inner(op: FsOp, engine: &SharedEngine) -> Result<Value, String> {
             let eng = engine.lock().map_err(|_| "engine busy".to_string())?;
             Ok(json!({ "pane": eng.local_lead(&workspace) }))
         }
+        FsOp::CircleStates => {
+            let eng = engine.lock().map_err(|_| "engine busy".to_string())?;
+            Ok(eng.circle_states())
+        }
         FsOp::StartClaude { workspace } => {
             // Looking for Claude runs a login shell: not under the engine lock.
             let claude = crate::claude_check::find_claude();

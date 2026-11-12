@@ -617,6 +617,20 @@ impl GuiClient {
         )
     }
 
+    /// Every circle's (working, waiting), by slug (see `FsOp::CircleStates`).
+    /// Background threads only.
+    pub fn circle_states(&self) -> Result<std::collections::HashMap<String, (bool, bool)>> {
+        let v = self.fs_call(crate::runtime::protocol::FsOp::CircleStates, FS_TIMEOUT)?;
+        Ok(v["circles"]
+            .as_object()
+            .map(|m| {
+                m.iter()
+                    .map(|(ws, s)| (ws.clone(), (s["working"] == true, s["waiting"] == true)))
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
     /// Open `workspace`'s first pane on the daemon: Claude as its lead, or a
     /// plain shell when Claude isn't installed. Returns (pane, is Claude).
     pub fn start_claude(&self, workspace: &str) -> Result<(String, bool)> {

@@ -268,6 +268,9 @@ struct WsState {
 
 static STATE: Mutex<Option<HashMap<String, WsState>>> = Mutex::new(None);
 static CIRCLES_SIG: Mutex<u64> = Mutex::new(0);
+/// The daemon's last answer to `circle_states`.
+static LAST_STATES: Mutex<Option<std::collections::HashMap<String, (bool, bool)>>> =
+    Mutex::new(None);
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -286,19 +289,33 @@ fn hash_of(parts: &[&dyn Fn(&mut DefaultHasher)]) -> u64 {
 /// Read the open circle's conversation and screen, release any note that can
 /// go, and list the circles.
 pub fn round(ask: LocalAsk) -> Result<LocalRound> {
+    // Working and waiting for every circle come from the daemon, by the rule
+    // Invoke's list uses (`seance_core::circle_state`). A round that can't
+    // ask keeps the last answer, so the rows don't flicker.
+    let states = {
+        let mut last = LAST_STATES.lock().unwrap();
+        if let Ok(s) = ask.client.circle_states() {
+            *last = Some(s);
+        }
+        last.clone().unwrap_or_default()
+    };
     let rows: Vec<CircleRow> = ask
         .circles
         .iter()
-        .map(|(ws, name, _, working)| CircleRow {
-            ws: ws.clone(),
-            name: name.clone(),
-            working: *working,
-            ..Default::default()
+        .map(|(ws, name, _, working)| {
+            let (w, waiting) = states.get(ws).copied().unwrap_or((*working, false));
+            CircleRow {
+                ws: ws.clone(),
+                name: name.clone(),
+                working: w,
+                waiting,
+                ..Default::default()
+            }
         })
         .collect();
     let circles_sig = hash_of(&[&|h| {
         for r in &rows {
-            (&r.ws, &r.name, r.working).hash(h);
+            (&r.ws, &r.name, r.working, r.waiting).hash(h);
         }
     }]);
     let circles_moved = {
@@ -415,7 +432,18 @@ pub fn round(ask: LocalAsk) -> Result<LocalRound> {
         row.working = busy;
         row.last = messages.last().cloned();
     }
-    let sig = hash_of(&[&|h| (messages.len(), newest, &activity, busy, &st.prompt_key).hash(h)]);
+    let waiting = states.get(&ws).is_some_and(|s| s.1);
+    let sig = hash_of(&[&|h| {
+        (
+            messages.len(),
+            newest,
+            &activity,
+            busy,
+            &st.prompt_key,
+            waiting,
+        )
+            .hash(h)
+    }]);
     let quiet = sig == st.sig && !circles_moved;
     st.sig = sig;
     Ok(LocalRound {
@@ -426,6 +454,7 @@ pub fn round(ask: LocalAsk) -> Result<LocalRound> {
                 messages,
                 read: newest,
                 lead_busy: busy,
+                waiting,
                 ..Default::default()
             },
         )),

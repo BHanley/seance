@@ -65,6 +65,54 @@ impl Engine {
         told
     }
 
+    /// Every circle's `working` and `waiting`, by `seance_core::circle_state`
+    /// (the rule Invoke's list uses), from the same pane rows `ctl list` shows.
+    pub(crate) fn circle_states(&self) -> serde_json::Value {
+        use seance_core::circle_state::{self as rule, PaneFact};
+        let mut circles: Vec<&str> = self.panes.iter().map(|p| p.workspace.as_str()).collect();
+        circles.sort();
+        circles.dedup();
+        let mut out = serde_json::Map::new();
+        for ws in circles {
+            // (slug, activity, task_status) of every pane but file panes.
+            let rows: Vec<(String, String, Option<String>)> = self
+                .panes
+                .iter()
+                .filter(|p| p.workspace == ws && p.kind != "file")
+                .map(|p| {
+                    let r = self.pane_summary_json(p);
+                    (
+                        p.slug.clone(),
+                        r["activity"].as_str().unwrap_or("unknown").to_string(),
+                        r["task_status"].as_str().map(str::to_string),
+                    )
+                })
+                .collect();
+            let facts: Vec<PaneFact> = rows
+                .iter()
+                .map(|(slug, activity, task)| PaneFact {
+                    slug,
+                    activity,
+                    task_status: task.as_deref(),
+                })
+                .collect();
+            // Who the lead is costs a screen read per pane: only ask when
+            // some pane could be waiting.
+            let maybe = facts
+                .iter()
+                .any(|p| p.task_status == Some("open") && p.activity == "idle");
+            let lead = maybe.then(|| self.local_lead(ws)).flatten();
+            out.insert(
+                ws.to_string(),
+                json!({
+                    "working": rule::working(&facts),
+                    "waiting": rule::waiting(lead.as_deref(), &facts),
+                }),
+            );
+        }
+        json!({ "circles": out })
+    }
+
     /// The pane Chat uses for `circle` (see [`pick_local_lead`]).
     pub(crate) fn local_lead(&self, circle: &str) -> Option<String> {
         let set = self.comms.leads.get(circle).filter(|l| {

@@ -459,6 +459,11 @@ pub enum FsOp {
     LocalLead {
         workspace: String,
     },
+    /// Every circle's `working` and `waiting` (see `circle_state`), computed
+    /// from the daemon's pane rows the way Invoke's list does. Local Chat
+    /// fills its rows and open thread from this. → `{circles: {slug:
+    /// {working, waiting}}}`.
+    CircleStates,
     /// Open a circle's first pane: Claude as its lead when Claude is
     /// installed, else a plain shell. `workspace` empty means the circle on
     /// show. → `{pane, claude}`.

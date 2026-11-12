@@ -3148,15 +3148,7 @@ impl SeanceApp {
     fn chat_header_waits(&self, ws: &str) -> bool {
         let circle = self.chat.circles.iter().find(|c| c.ws == ws);
         let thread = self.chat.threads.get(ws);
-        // Local Chat has no Invoke to say "waiting": the lead's open tasks, the
-        // ones its task chip counts, stand in for the open circle.
-        let waiting = if chat_local::is_local() {
-            self.stage_lead(ws)
-                .and_then(|l| self.lead_tasks.get(&l))
-                .is_some_and(|d| d.open_count() > 0)
-        } else {
-            thread.map_or_else(|| circle.is_some_and(|c| c.waiting), |t| t.waiting)
-        };
+        let waiting = thread.map_or_else(|| circle.is_some_and(|c| c.waiting), |t| t.waiting);
         let dancing = self.circle_dancing(ws, circle.is_some_and(|c| c.working))
             || thread.is_some_and(|t| !t.crew.is_empty());
         super::sprite::wears_wait(waiting, dancing, self.workspace_needs_human(ws))
