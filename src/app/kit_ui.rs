@@ -53,6 +53,10 @@ pub(super) struct KitUi {
     error: Option<String>,
     note: Option<String>,
     picker: Option<Picker>,
+    /// The open picker's list: its scroll, and which picker it was last
+    /// scrolled to the ticked row for.
+    opts_scroll: gpui::ScrollHandle,
+    opts_for: std::cell::Cell<Option<Picker>>,
 }
 
 /// The four ask-Claude chips in the hub.
@@ -83,6 +87,7 @@ impl SeanceApp {
         self.kit.error = None;
         self.kit.note = None;
         self.kit.picker = None;
+        self.kit.opts_for.set(None);
         cx.notify();
     }
 
@@ -128,12 +133,12 @@ impl SeanceApp {
         cx.notify();
     }
 
-    pub(super) fn render_kit(&self, cx: &Context<Self>) -> Option<AnyElement> {
+    pub(super) fn render_kit(&self, window: &Window, cx: &Context<Self>) -> Option<AnyElement> {
         let body = match self.kit.view {
             KitView::Off => return None,
             KitView::Tiles => self.kit_tiles(cx),
             KitView::Checklist => self.kit_checklist(cx),
-            KitView::Hub => self.kit_hub(cx),
+            KitView::Hub => self.kit_hub(window, cx),
         };
         Some(
             div()
@@ -395,7 +400,7 @@ impl SeanceApp {
     }
 
     /// The options under an open picker row.
-    fn hub_options(&self, which: Picker, cx: &Context<Self>) -> AnyElement {
+    fn hub_options(&self, which: Picker, window: &Window, cx: &Context<Self>) -> AnyElement {
         let opt = |id: (&'static str, usize), label: String, ticked: bool| {
             div()
                 .id(id)
@@ -413,7 +418,7 @@ impl SeanceApp {
                 .child(format!("{}{label}", if ticked { "● " } else { "   " }))
         };
         let col = div().flex().flex_col().pb_2();
-        match which {
+        let list = match which {
             Picker::Theme => col.children(seance_core::schemes::SCHEMES.iter().enumerate().map(
                 |(i, s)| {
                     let id = s.id;
@@ -475,11 +480,49 @@ impl SeanceApp {
                         }),
                 )
             }
+        };
+        // The list takes what the window has left after the card's other
+        // rows, scrolls inside that, and opens with the ticked row in view.
+        let list_h = super::util::list_max_height(f32::from(window.viewport_size().height), 420.);
+        if self.kit.opts_for.replace(Some(which)) != Some(which) {
+            if let Some(ix) = self.picked_row(which) {
+                self.kit.opts_scroll.scroll_to_item(ix);
+            }
         }
-        .into_any_element()
+        div()
+            .id("kit-opts")
+            .max_h(px(list_h))
+            .overflow_y_scroll()
+            .track_scroll(&self.kit.opts_scroll)
+            .child(list)
+            .into_any_element()
     }
 
-    fn kit_hub(&self, cx: &Context<Self>) -> AnyElement {
+    /// The row of a picker's list that is ticked now.
+    fn picked_row(&self, which: Picker) -> Option<usize> {
+        match which {
+            Picker::Theme => seance_core::schemes::SCHEMES
+                .iter()
+                .position(|s| s.id == crate::theme::active().id),
+            Picker::Font => {
+                let saved = crate::ui_font::load();
+                crate::ui_font::FONTS
+                    .iter()
+                    .position(|f| crate::ui_font::ticked(saved, f.id))
+            }
+            Picker::Sound => {
+                let saved = crate::lead_sound::load();
+                (0..crate::lead_sound::ROWS.len())
+                    .find(|i| crate::lead_sound::ticked(saved.as_ref(), *i))
+            }
+        }
+    }
+
+    fn kit_hub(&self, window: &Window, cx: &Context<Self>) -> AnyElement {
+        // A closed picker opens scrolled to its ticked row again next time.
+        if self.kit.picker.is_none() {
+            self.kit.opts_for.set(None);
+        }
         let font_label = {
             let saved = crate::ui_font::load();
             crate::ui_font::FONTS
@@ -531,7 +574,7 @@ impl SeanceApp {
         ] {
             look = look.child(self.hub_row(id, label, value, pick(which), cx));
             if self.kit.picker == Some(which) {
-                look = look.child(self.hub_options(which, cx));
+                look = look.child(self.hub_options(which, window, cx));
             }
         }
         let left = self

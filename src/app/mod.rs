@@ -375,6 +375,10 @@ pub struct SeanceApp {
     host_menu_token: u64,
     /// The mark's popover: census of the GUI windows attached to this daemon.
     gui_menu_open: bool,
+    /// The mark menu's theme list: its scroll, and whether it has been
+    /// scrolled to the active theme since the menu opened.
+    gui_menu_scroll: gpui::ScrollHandle,
+    gui_menu_scrolled: std::cell::Cell<bool>,
     /// Where the "+" menu (New circle / New space) was opened; None when closed.
     new_menu: Option<gpui::Point<gpui::Pixels>>,
     /// Render-safe cache of daemon-side files (pad sidecars, phone binds,
@@ -613,6 +617,8 @@ impl SeanceApp {
             host_menu: None,
             host_menu_token: 0,
             gui_menu_open: false,
+            gui_menu_scroll: gpui::ScrollHandle::new(),
+            gui_menu_scrolled: std::cell::Cell::new(false),
             new_menu: None,
             remote_cache,
             daemon_error: None,
@@ -3477,9 +3483,9 @@ impl Render for SeanceApp {
             .children(self.render_host_menu_scrim(window, cx))
             .children(self.render_palette(cx))
             .children(self.render_quicklaunch_editor(cx))
-            .children(self.render_gui_menu(cx))
+            .children(self.render_gui_menu(window, cx))
             .children(self.render_tasks_popover(window, cx))
-            .children(self.render_kit(cx))
+            .children(self.render_kit(window, cx))
             .children(self.render_new_menu(cx))
             .children(match &self.drawer {
                 // The Wall fills the window, as the overview always did.
