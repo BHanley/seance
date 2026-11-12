@@ -15,6 +15,7 @@
 
 pub mod agent_state;
 pub mod auth;
+pub mod circle_state;
 pub mod control;
 pub mod input;
 pub mod links;
