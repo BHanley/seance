@@ -270,23 +270,37 @@ struct WsState {
     /// The dialog the last round showed as a card, so a tap can be checked
     /// against what the screen says now.
     dialog: Option<DialogPrompt>,
-    /// Polls in a row the lead has read idle (a turn that just ended needs two
-    /// before a note counts as answered, so one stray idle read can't).
-    idle_rounds: u8,
+    /// The last time a note was typed into the lead (ms), 0 if never.
+    last_typed_ms: u64,
+    /// Where the latest note's turn starts (ms): when it was typed, or first
+    /// seen. 0 means it was already there when the thread was first read.
+    note_since: u64,
+    /// How many of your lines the transcript held at the last round.
+    users_seen: usize,
 }
 
-/// Invoke's ticks for the notes in the thread, from what the pane shows.
-/// Invoke: sending until the lead's task opens, got until it finishes,
-/// answered after. Here the note is "got" from the moment it is typed into
-/// the lead (see [`SendQueue`]) until its turn is over: the lead has replied
-/// after it, or has read idle for two polls running. A lead stopped on a
-/// question (`awaiting-input`) is mid-task, so the note stays "got".
-pub fn mark_notes(msgs: &mut [Msg], activity: &str, idle_rounds: u8) {
+/// How long after typing a note its transcript line still counts as that note.
+const TYPED_FRESH_MS: u64 = 60_000;
+
+/// Whether the lead's turn on the latest note is over, read off the daemon's
+/// busy edge: it is not busy now, it is not stopped on a question (that task
+/// is still open), and it flipped after the note began (`busy_at > since`; a
+/// note already there at first read, `since == 0`, is judged by now alone).
+/// An edge, not a count of idle reads: no delay, and a stray idle read cannot
+/// end a turn that is still running.
+pub fn turn_over(busy: bool, busy_at: u64, awaiting: bool, since: u64) -> bool {
+    !busy && !awaiting && (since == 0 || busy_at > since)
+}
+
+/// Invoke's ticks for the notes in the thread. Invoke: sending until the
+/// lead's task opens, got until it finishes, answered after. Here the note is
+/// "got" from the moment it is typed into the lead (see [`SendQueue`]) until
+/// its turn is over: the lead replied after it, or `over` (see [`turn_over`]).
+pub fn mark_notes(msgs: &mut [Msg], over: bool) {
     let Some(last) = msgs.iter().rposition(|m| m.from == "me") else {
         return;
     };
-    let replied = msgs[last + 1..].iter().any(|m| m.from == "lead");
-    let over = replied || (activity == "idle" && idle_rounds >= 2);
+    let over = over || msgs[last + 1..].iter().any(|m| m.from == "lead");
     for (i, m) in msgs.iter_mut().enumerate() {
         if m.from == "me" && m.status != "failed" {
             m.status = if i < last || over { "answered" } else { "got" }.into();
@@ -404,15 +418,31 @@ pub fn round(ask: LocalAsk) -> Result<LocalRound> {
         );
     }
     let activity = v["activity"].as_str().unwrap_or("unknown").to_string();
-    st.idle_rounds = if activity == "idle" {
-        st.idle_rounds.saturating_add(1)
-    } else {
-        0
-    };
+    let busy_now = v["busy"] == true;
+    let busy_at = v["busy_at"].as_u64().unwrap_or(0);
+    if st.thread.users < st.users_seen {
+        st.users_seen = 0; // the transcript started over
+    }
+    if st.thread.users > st.users_seen {
+        // A new line of yours: its turn began when you typed it here, else
+        // when it first showed up (0 at the first read of an old thread).
+        let typed =
+            st.last_typed_ms > 0 && now_ms().saturating_sub(st.last_typed_ms) <= TYPED_FRESH_MS;
+        st.note_since = if typed {
+            st.last_typed_ms
+        } else if st.users_seen == 0 {
+            0
+        } else {
+            now_ms()
+        };
+        st.users_seen = st.thread.users;
+    }
     if let Some(text) = st.queue.tick(&activity, st.thread.users, now_ms()) {
         // Same path as typing in the pane: pasted, then Enter.
         if ask.client.inject(&lead, &text, true).is_err() {
             st.queue.waiting_front(text);
+        } else {
+            st.last_typed_ms = now_ms();
         }
     }
     // A dialog waiting on the pane's screen (first-launch pickers, the trust
@@ -435,7 +465,13 @@ pub fn round(ask: LocalAsk) -> Result<LocalRound> {
     st.prompt_key = key;
     st.dialog = dialog;
     let mut messages = st.thread.msgs.clone();
-    mark_notes(&mut messages, &activity, st.idle_rounds);
+    let over = turn_over(
+        busy_now,
+        busy_at,
+        activity == "awaiting-input",
+        st.note_since,
+    );
+    mark_notes(&mut messages, over);
     let typed = st.queue.first_is_typed();
     for (i, text) in st.queue.pending().into_iter().enumerate() {
         messages.push(Msg {
@@ -774,32 +810,93 @@ mod tests {
         };
         // The lead is on it: got; the older note is answered.
         let mut m = thread(None);
-        mark_notes(&mut m, "busy", 0);
+        mark_notes(&mut m, false);
         assert_eq!(ticks(&m), ["answered", "", "got"]);
-        // Stopped on a question: still its task, still got.
+        // The turn is over (the busy edge): answered, even with no reply text.
         let mut m = thread(None);
-        mark_notes(&mut m, "awaiting-input", 0);
-        assert_eq!(ticks(&m)[2], "got");
-        // One idle read is not the end (a stray read between two spinners).
-        let mut m = thread(None);
-        mark_notes(&mut m, "idle", 1);
-        assert_eq!(ticks(&m)[2], "got");
-        // Idle two polls running: the turn is over, answered (even with no text).
-        let mut m = thread(None);
-        mark_notes(&mut m, "idle", 2);
+        mark_notes(&mut m, true);
         assert_eq!(ticks(&m)[2], "answered");
         // A reply after it answers it, whatever the pane reads.
         let mut m = thread(Some(note("lead", "done")));
-        mark_notes(&mut m, "busy", 0);
+        mark_notes(&mut m, false);
         assert_eq!(ticks(&m)[2], "answered");
         // A failed note stays failed; no notes, nothing to mark.
         let mut m = vec![Msg {
             status: "failed".into(),
             ..note("me", "x")
         }];
-        mark_notes(&mut m, "busy", 0);
+        mark_notes(&mut m, true);
         assert_eq!(ticks(&m), ["failed"]);
-        mark_notes(&mut [], "busy", 0);
+        mark_notes(&mut [], true);
+    }
+
+    /// The edge: answered exactly when the lead flips busy to idle after the
+    /// note began, with no polls to wait out.
+    #[test]
+    fn the_turn_ends_at_the_busy_to_idle_edge() {
+        // (busy now, last flip ms, stopped on a question, note began ms, over, why)
+        let cases = [
+            (true, 5_000, false, 4_000, false, "still busy"),
+            (
+                false,
+                3_000,
+                false,
+                4_000,
+                false,
+                "idle but no flip since the note: not started",
+            ),
+            (
+                false,
+                4_000,
+                false,
+                4_000,
+                false,
+                "a flip at the same instant is the old one",
+            ),
+            (
+                false,
+                4_001,
+                false,
+                4_000,
+                true,
+                "flipped to idle after the note: over, at once",
+            ),
+            (
+                false,
+                9_000,
+                true,
+                4_000,
+                false,
+                "stopped on a question: its task is still open",
+            ),
+            (
+                false,
+                0,
+                false,
+                0,
+                true,
+                "already there at first read, idle: answered",
+            ),
+            (
+                true,
+                0,
+                false,
+                0,
+                false,
+                "already there at first read, busy: got",
+            ),
+            (
+                false,
+                5_000,
+                false,
+                4_000,
+                true,
+                "a short turn whose edge fell between two polls",
+            ),
+        ];
+        for (busy, at, asking, since, want, why) in cases {
+            assert_eq!(turn_over(busy, at, asking, since), want, "{why}");
+        }
     }
 
     /// Typed into the lead: got. Still waiting for an idle moment: sending.

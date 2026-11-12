@@ -25,6 +25,11 @@ pub(crate) struct LocalChatLook {
     pub activity: String,
     pub evidence: Option<String>,
     pub prompt: Option<seance_core::agent_state::DialogPrompt>,
+    /// The daemon's own busy flag for the pane (the title spinner, flipped
+    /// only on an edge) and when it last flipped, in ms. Chat reads a
+    /// finished turn off this edge, not off polled screen reads.
+    pub busy: bool,
+    pub busy_at: u64,
 }
 
 /// Who Chat talks to in a circle: a lead that was set wins (Brian's own
@@ -142,6 +147,8 @@ impl Engine {
             activity: "unknown".into(),
             evidence: None,
             prompt: None,
+            busy: self.pane_busy.contains(pane),
+            busy_at: self.pane_busy_at.get(pane).copied().unwrap_or(0),
         };
         let Some(p) = self.panes.iter().find(|p| p.slug == pane) else {
             return none;
@@ -188,6 +195,7 @@ impl Engine {
             // A dialog that is not in the transcript: a first-launch picker, the
             // trust question, a permission prompt.
             prompt: seance_core::agent_state::dialog_prompt(&screen, awaiting),
+            ..none
         }
     }
 }
@@ -204,6 +212,8 @@ pub(crate) fn local_chat_reply(
         "activity": look.activity,
         "evidence": look.evidence,
         "prompt": look.prompt,
+        "busy": look.busy,
+        "busy_at": look.busy_at,
         "session": "",
         "size": 0, "from": 0, "to": 0, "reset": false, "b64": "",
     });
@@ -311,7 +321,19 @@ mod tests {
             activity: "idle".into(),
             evidence: None,
             prompt: None,
+            busy: false,
+            busy_at: 0,
         }
+    }
+
+    #[test]
+    fn the_reply_carries_the_busy_edge() {
+        let mut l = look(PathBuf::from("/nonexistent"));
+        l.busy = true;
+        l.busy_at = 1234;
+        let v = local_chat_reply(l, 0, "");
+        assert_eq!(v["busy"], true);
+        assert_eq!(v["busy_at"], 1234);
     }
 
     fn decode(v: &serde_json::Value) -> String {
