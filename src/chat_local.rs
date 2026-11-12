@@ -220,6 +220,12 @@ impl SendQueue {
         Some(text)
     }
 
+    /// Whether the first of [`Self::pending`] has been typed into the pane
+    /// (the lead has it) rather than still waiting for an idle moment.
+    pub fn first_is_typed(&self) -> bool {
+        self.in_flight.is_some()
+    }
+
     /// Notes not in the transcript yet, in the order they were typed.
     pub fn pending(&self) -> Vec<&str> {
         self.in_flight
@@ -264,6 +270,28 @@ struct WsState {
     /// The dialog the last round showed as a card, so a tap can be checked
     /// against what the screen says now.
     dialog: Option<DialogPrompt>,
+    /// Polls in a row the lead has read idle (a turn that just ended needs two
+    /// before a note counts as answered, so one stray idle read can't).
+    idle_rounds: u8,
+}
+
+/// Invoke's ticks for the notes in the thread, from what the pane shows.
+/// Invoke: sending until the lead's task opens, got until it finishes,
+/// answered after. Here the note is "got" from the moment it is typed into
+/// the lead (see [`SendQueue`]) until its turn is over: the lead has replied
+/// after it, or has read idle for two polls running. A lead stopped on a
+/// question (`awaiting-input`) is mid-task, so the note stays "got".
+pub fn mark_notes(msgs: &mut [Msg], activity: &str, idle_rounds: u8) {
+    let Some(last) = msgs.iter().rposition(|m| m.from == "me") else {
+        return;
+    };
+    let replied = msgs[last + 1..].iter().any(|m| m.from == "lead");
+    let over = replied || (activity == "idle" && idle_rounds >= 2);
+    for (i, m) in msgs.iter_mut().enumerate() {
+        if m.from == "me" && m.status != "failed" {
+            m.status = if i < last || over { "answered" } else { "got" }.into();
+        }
+    }
 }
 
 static STATE: Mutex<Option<HashMap<String, WsState>>> = Mutex::new(None);
@@ -376,6 +404,11 @@ pub fn round(ask: LocalAsk) -> Result<LocalRound> {
         );
     }
     let activity = v["activity"].as_str().unwrap_or("unknown").to_string();
+    st.idle_rounds = if activity == "idle" {
+        st.idle_rounds.saturating_add(1)
+    } else {
+        0
+    };
     if let Some(text) = st.queue.tick(&activity, st.thread.users, now_ms()) {
         // Same path as typing in the pane: pasted, then Enter.
         if ask.client.inject(&lead, &text, true).is_err() {
@@ -402,13 +435,16 @@ pub fn round(ask: LocalAsk) -> Result<LocalRound> {
     st.prompt_key = key;
     st.dialog = dialog;
     let mut messages = st.thread.msgs.clone();
+    mark_notes(&mut messages, &activity, st.idle_rounds);
+    let typed = st.queue.first_is_typed();
     for (i, text) in st.queue.pending().into_iter().enumerate() {
         messages.push(Msg {
             id: PENDING_BASE + i as i64,
             from: "me".into(),
             text: text.to_string(),
             ts: now_ms(),
-            status: "sending".into(),
+            // The first one, once typed into the pane, is the lead's to read.
+            status: if i == 0 && typed { "got" } else { "sending" }.into(),
             ..Default::default()
         });
     }
@@ -433,6 +469,11 @@ pub fn round(ask: LocalAsk) -> Result<LocalRound> {
         row.last = messages.last().cloned();
     }
     let waiting = states.get(&ws).is_some_and(|s| s.1);
+    let ticks: Vec<&str> = messages
+        .iter()
+        .filter(|m| m.from == "me")
+        .map(|m| m.status.as_str())
+        .collect();
     let sig = hash_of(&[&|h| {
         (
             messages.len(),
@@ -441,6 +482,7 @@ pub fn round(ask: LocalAsk) -> Result<LocalRound> {
             busy,
             &st.prompt_key,
             waiting,
+            &ticks,
         )
             .hash(h)
     }]);
@@ -709,6 +751,68 @@ mod tests {
     }
 
     use super::*;
+
+    fn note(from: &str, text: &str) -> Msg {
+        Msg {
+            from: from.into(),
+            text: text.into(),
+            ..Default::default()
+        }
+    }
+
+    fn ticks(msgs: &[Msg]) -> Vec<&str> {
+        msgs.iter().map(|m| m.status.as_str()).collect()
+    }
+
+    /// Invoke's life of a note: got while the lead is on it, answered after.
+    #[test]
+    fn a_note_is_got_until_its_turn_is_over() {
+        let thread = |extra: Option<Msg>| {
+            let mut v = vec![note("me", "old"), note("lead", "ok"), note("me", "new")];
+            v.extend(extra);
+            v
+        };
+        // The lead is on it: got; the older note is answered.
+        let mut m = thread(None);
+        mark_notes(&mut m, "busy", 0);
+        assert_eq!(ticks(&m), ["answered", "", "got"]);
+        // Stopped on a question: still its task, still got.
+        let mut m = thread(None);
+        mark_notes(&mut m, "awaiting-input", 0);
+        assert_eq!(ticks(&m)[2], "got");
+        // One idle read is not the end (a stray read between two spinners).
+        let mut m = thread(None);
+        mark_notes(&mut m, "idle", 1);
+        assert_eq!(ticks(&m)[2], "got");
+        // Idle two polls running: the turn is over, answered (even with no text).
+        let mut m = thread(None);
+        mark_notes(&mut m, "idle", 2);
+        assert_eq!(ticks(&m)[2], "answered");
+        // A reply after it answers it, whatever the pane reads.
+        let mut m = thread(Some(note("lead", "done")));
+        mark_notes(&mut m, "busy", 0);
+        assert_eq!(ticks(&m)[2], "answered");
+        // A failed note stays failed; no notes, nothing to mark.
+        let mut m = vec![Msg {
+            status: "failed".into(),
+            ..note("me", "x")
+        }];
+        mark_notes(&mut m, "busy", 0);
+        assert_eq!(ticks(&m), ["failed"]);
+        mark_notes(&mut [], "busy", 0);
+    }
+
+    /// Typed into the lead: got. Still waiting for an idle moment: sending.
+    #[test]
+    fn a_typed_note_is_got_and_a_queued_one_is_sending() {
+        let mut q = SendQueue::default();
+        q.push("a".into());
+        q.push("b".into());
+        assert!(!q.first_is_typed());
+        assert_eq!(q.tick("idle", 0, 0), Some("a".to_string()));
+        assert!(q.first_is_typed());
+        assert_eq!(q.pending(), ["a", "b"]);
+    }
 
     fn line(kind: &str, content: &str, extra: &str) -> String {
         format!(
