@@ -5885,7 +5885,7 @@ dependencies = [
 
 [[package]]
 name = "seance-web"
-version = "0.28.24"
+version = "0.28.25"
 dependencies = [
  "base64",
  "flate2",
