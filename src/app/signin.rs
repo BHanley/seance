@@ -343,8 +343,9 @@ impl SeanceApp {
                 signin::hold_new_claude(false);
                 self.land_after_login(cx);
             }
-            _ => self.signin.notice = None,
+            _ => {}
         }
+        self.signin.notice = None;
     }
 
     /// Signed in: put the user in the circle where they were, on its lead.
@@ -437,11 +438,17 @@ impl SeanceApp {
         let exited = f.login.as_mut().is_none_or(|l| l.exited());
         let capped = f.login.as_ref().is_some_and(|l| l.over_cap());
         if let Some(next) = step_for_poll(&f.step, status.as_ref(), exited, capped) {
-            if matches!(next, Step::Done { .. }) && f.origin == Origin::FirstRun {
+            let done = matches!(next, Step::Done { .. });
+            if done && f.origin == Origin::FirstRun {
                 signin::mark_passed();
             }
             f.login = None;
             f.step = next;
+            if done {
+                // Whatever the last check said is out of date now; without
+                // this "has expired" shows the moment Continue closes the card.
+                self.signin.notice = None;
+            }
         }
         cx.notify();
     }
@@ -449,10 +456,11 @@ impl SeanceApp {
     // ---- the corner card's check ----
 
     /// Look at the sign-in on launch and every 30 minutes, off the UI thread.
-    /// macOS, local only: with a hub the panes' Claude isn't this one.
+    /// macOS only.
     pub(super) fn start_relogin_watch(&mut self, cx: &mut Context<Self>) {
-        let local = cfg!(target_os = "macos") && crate::ACTIVE_TUNNEL.get().is_none();
-        if !local || self.signin.watching {
+        // Asks this Mac's own Claude, so a thin client (whose `claude-mac`
+        // panes run here) gets the card too; no local Claude, no card.
+        if !cfg!(target_os = "macos") || self.signin.watching {
             return;
         }
         self.signin.watching = true;
@@ -759,6 +767,8 @@ impl SeanceApp {
         // "Not now" on first run lets the held Claude starts go.
         if self.signin.first_run_up() {
             signin::hold_new_claude(false);
+            // They just said not now: no second card in the corner right away.
+            self.signin.dismissed = true;
         }
         self.signin_close(cx);
     }

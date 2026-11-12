@@ -389,7 +389,15 @@ fn install_inner(progress: &SharedProgress, cancel: &AtomicBool) -> Result<PathB
         return Err("Cancelled.".into());
     }
 
-    let dir = std::env::temp_dir().join(format!("seance-claude-install-{}", std::process::id()));
+    // One folder per attempt, so a cancelled attempt's cleanup can't delete
+    // the next one's download.
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let dir = std::env::temp_dir().join(format!(
+        "seance-claude-install-{}-{stamp}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).map_err(|e| format!("Couldn't make a download folder: {e}"))?;
     let file = dir.join(format!("claude-{version}-{platform}"));
     let cleanup = |dir: &Path| {
