@@ -57,14 +57,6 @@ impl SeanceApp {
         }
         cx.notify();
     }
-
-    /// Signed in: put the user in the circle where they were, on its lead.
-    pub(super) fn land_after_login(&mut self, cx: &mut Context<Self>) {
-        if let Some(ws) = self.selected_workspace.clone() {
-            let _ = self.client.set_focus(None, Some(ws));
-        }
-        cx.notify();
-    }
 }
 
 #[cfg(test)]
