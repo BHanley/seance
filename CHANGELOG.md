@@ -17,6 +17,12 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.21] — 2026-11-12
+
+### Added
+- **Chat status line:** under the open thread, "Lead is working" while your message is picked up and "Running in the background" while the lead waits on handed-off work, in the same faint small text as the other Chat lines.
+- A circle waiting on background work wears an ember and thinking dots (the dots cycle one to three), and the hint says "simmering".
+
 ## [0.28.20] — 2026-11-12
 
 ### Added
