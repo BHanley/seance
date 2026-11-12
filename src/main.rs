@@ -19,6 +19,7 @@ mod fileview;
 mod gui_client;
 mod host;
 mod invoke;
+mod kit;
 mod latency_probe;
 mod launch;
 mod lead_sound;
@@ -491,23 +492,16 @@ fn install_app_menu(cx: &mut gpui::App) {
     // gpui's restart: waits for this process to exit, then `open`s the bundle.
     cx.on_action(|_: &app::actions::ActRestart, cx| cx.restart());
     cx.on_action(|_: &app::actions::ActSuggestChange, _| suggest::open());
-    cx.on_action(|act: &app::actions::ActUiFont, cx| {
-        ui_font::save(&act.0);
-        theme::init(cx);
-        set_app_menu(cx);
+    cx.on_action(|_: &app::actions::ActKitSetup, cx| {
+        app::kit_ui::request(app::kit_ui::KitView::Checklist);
         cx.refresh_windows();
     });
-    cx.on_action(|act: &app::actions::ActLeadSound, cx| {
-        let choice = match act.0.as_str() {
-            "thump" => lead_sound::Choice::Thump,
-            "gloop" => lead_sound::Choice::Gloop,
-            "glass" => lead_sound::Choice::Glass,
-            "pop" => lead_sound::Choice::Pop,
-            "none" => lead_sound::Choice::None,
-            _ => return,
-        };
-        pick_lead_sound(choice, cx);
+    cx.on_action(|_: &app::actions::ActKitHub, cx| {
+        app::kit_ui::request(app::kit_ui::KitView::Hub);
+        cx.refresh_windows();
     });
+    cx.on_action(|act: &app::actions::ActUiFont, cx| pick_ui_font(&act.0, cx));
+    cx.on_action(|act: &app::actions::ActLeadSound, cx| pick_lead_sound_tag(&act.0, cx));
     // "Custom…": the Seance Custom helper. The handler has no app handle, so
     // it raises a flag and the next render opens the circle (or falls back to
     // the file picker when the circle is gone).
@@ -542,6 +536,31 @@ pub(crate) fn pick_custom_file(cx: &mut gpui::App) {
     .detach();
 }
 
+/// Menu tags of the Lead Reply Sound rows, in `lead_sound::ROWS` order. The
+/// two Custom rows have no tag.
+pub(crate) const SOUND_TAGS: [&str; 7] = ["thump", "gloop", "glass", "pop", "", "", "none"];
+
+/// A Lead Reply Sound pick by tag, from the menu or the Make it yours hub.
+pub(crate) fn pick_lead_sound_tag(tag: &str, cx: &mut gpui::App) {
+    let choice = match tag {
+        "thump" => lead_sound::Choice::Thump,
+        "gloop" => lead_sound::Choice::Gloop,
+        "glass" => lead_sound::Choice::Glass,
+        "pop" => lead_sound::Choice::Pop,
+        "none" => lead_sound::Choice::None,
+        _ => return,
+    };
+    pick_lead_sound(choice, cx);
+}
+
+/// A Font pick, from the menu or the hub: save it, apply it, redraw.
+pub(crate) fn pick_ui_font(id: &str, cx: &mut gpui::App) {
+    ui_font::save(id);
+    theme::init(cx);
+    set_app_menu(cx);
+    cx.refresh_windows();
+}
+
 /// A menu pick: save it, tick it, and play it once so you hear what you chose.
 /// Takes effect at once, the next lead finish reads the file again.
 fn pick_lead_sound(choice: lead_sound::Choice, cx: &mut gpui::App) {
@@ -555,7 +574,7 @@ fn pick_lead_sound(choice: lead_sound::Choice, cx: &mut gpui::App) {
 pub(crate) fn set_app_menu(cx: &mut gpui::App) {
     use gpui::{Menu, MenuItem};
     let saved = lead_sound::load();
-    let tags = ["thump", "gloop", "glass", "pop", "", "", "none"];
+    let tags = SOUND_TAGS;
     let rows = lead_sound::ROWS.iter().enumerate().map(|(i, (label, _))| {
         let ticked = lead_sound::ticked(saved.as_ref(), i);
         if i == 4 {
@@ -578,6 +597,9 @@ pub(crate) fn set_app_menu(cx: &mut gpui::App) {
         MenuItem::action("Check for Updates…", app::actions::ActCheckUpdates),
         MenuItem::separator(),
         MenuItem::action("Use Seance on Your Phone…", app::actions::ActPhoneGuide),
+        MenuItem::action("Set up your Claude…", app::actions::ActKitSetup),
+        MenuItem::action("Make it yours…", app::actions::ActKitHub),
+        MenuItem::separator(),
         MenuItem::submenu(Menu::new("Font").items(font_rows)),
         MenuItem::submenu(Menu::new("Lead Reply Sound").items(rows)),
     ];

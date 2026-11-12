@@ -44,6 +44,16 @@ pub struct ActAfkToggle;
 #[action(namespace = seance, no_json)]
 pub struct ActSuggestChange;
 
+/// "Set up your Claude…" in the Seance menu: the setup kit's checklist.
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActKitSetup;
+
+/// "Make it yours…" in the Seance menu: the hub.
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActKitHub;
+
 /// "Font" submenu rows in the Seance menu: the UI font, by `ui_font` id.
 #[derive(Action, Clone, PartialEq, Deserialize)]
 #[action(namespace = seance, no_json)]
