@@ -3558,7 +3558,7 @@ impl SeanceApp {
                     .py_1()
                     .flex()
                     .gap_1()
-                    .text_sm()
+                    .text_xs()
                     .text_color(SeancePalette::text_faint())
                     .child(line.text())
                     .children((0..3u64).map(|i| div().child("●").opacity(blink_opacity(now, i)))),
