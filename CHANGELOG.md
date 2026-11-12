@@ -17,6 +17,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.24] — 2026-11-12
+
+### Changed
+- Chat without a server now ticks your notes the way Chat on Invoke does: one tick while a note waits for the lead to be free, two once it is typed into the lead (the lead has it, and "Lead is working" shows), and Answered when the lead has replied or finished. A lead stopped on a question keeps the note at two ticks.
+
 ## [0.28.23] — 2026-11-12
 
 ### Fixed
