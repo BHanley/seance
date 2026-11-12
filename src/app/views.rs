@@ -34,8 +34,8 @@ pub(super) struct ViewState {
 }
 
 impl ViewState {
-    /// This machine's last pick; Classic when there is none, and always
-    /// for a blank window.
+    /// This machine's last pick; Chat when there is none (a fresh install),
+    /// and Classic for a blank window.
     pub(super) fn restore(empty: bool) -> Self {
         let text = if empty {
             String::new()
@@ -43,7 +43,11 @@ impl ViewState {
             std::fs::read_to_string(config_path()).unwrap_or_default()
         };
         ViewState {
-            mode: decode(&text),
+            mode: if empty {
+                ViewMode::Classic
+            } else {
+                decode(&text)
+            },
             before_wall: ViewMode::Classic,
             wall_all: wall_all_of(&text),
             persist: !empty,
@@ -70,13 +74,16 @@ fn put(text: &str, key: &str, value: impl Into<serde_json::Value>) -> String {
     v.to_string()
 }
 
-/// Anything unreadable or unknown is Classic, so a bad file never strands a
-/// window on a layout it cannot show.
+/// What a window opens on when nothing usable is saved: Chat.
+const FIRST_VIEW: ViewMode = ViewMode::Chat;
+
+/// Anything unreadable or unknown is the first view, so a bad file never
+/// strands a window on a layout it cannot show. A saved pick always wins.
 fn decode(text: &str) -> ViewMode {
     serde_json::from_str::<serde_json::Value>(text)
         .ok()
         .and_then(|v| v.get("layout")?.as_str().and_then(ViewMode::parse))
-        .unwrap_or_default()
+        .unwrap_or(FIRST_VIEW)
 }
 
 fn wall_all_of(text: &str) -> bool {
@@ -328,7 +335,7 @@ mod tests {
     }
 
     #[test]
-    fn bad_or_unknown_files_read_as_classic() {
+    fn bad_or_unknown_files_read_as_the_first_view() {
         for text in [
             "",
             "stage",
@@ -337,8 +344,11 @@ mod tests {
             r#"{"layout":"grid"}"#,
             r#"{"layout":3}"#,
         ] {
-            assert_eq!(decode(text), ViewMode::Classic, "{text}");
+            assert_eq!(decode(text), ViewMode::Chat, "{text}");
         }
+        // A saved pick is never overridden by the default.
+        assert_eq!(decode(r#"{"layout":"classic"}"#), ViewMode::Classic);
+        assert_eq!(decode(r#"{"layout":"stage"}"#), ViewMode::Stage);
         // A layout saved as "wall" before Chat took its place opens as Chat.
         assert_eq!(decode(r#"{"layout":"Wall","later":1}"#), ViewMode::Chat);
     }
