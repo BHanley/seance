@@ -340,7 +340,7 @@ impl SeanceApp {
         self.signin_close(cx);
         match origin {
             Some(Origin::FirstRun) => {
-                crate::claude_check::hold_new_claude(false);
+                signin::hold_new_claude(false);
                 self.land_after_login(cx);
             }
             _ => self.signin.notice = None,
@@ -438,7 +438,7 @@ impl SeanceApp {
         let capped = f.login.as_ref().is_some_and(|l| l.over_cap());
         if let Some(next) = step_for_poll(&f.step, status.as_ref(), exited, capped) {
             if matches!(next, Step::Done { .. }) && f.origin == Origin::FirstRun {
-                crate::claude_check::mark_passed();
+                signin::mark_passed();
             }
             f.login = None;
             f.step = next;
@@ -758,7 +758,7 @@ impl SeanceApp {
     fn signin_dismiss(&mut self, cx: &mut Context<Self>) {
         // "Not now" on first run lets the held Claude starts go.
         if self.signin.first_run_up() {
-            crate::claude_check::hold_new_claude(false);
+            signin::hold_new_claude(false);
         }
         self.signin_close(cx);
     }

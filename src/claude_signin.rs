@@ -595,6 +595,7 @@ fn marker_path() -> Option<PathBuf> {
 }
 
 /// Has the check passed on this machine before?
+#[allow(dead_code)] // the standalone's first-run check
 pub fn already_passed() -> bool {
     marker_path().is_some_and(|p| p.exists())
 }
