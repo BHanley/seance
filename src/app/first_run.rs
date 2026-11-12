@@ -9,6 +9,7 @@ use crate::claude_check::{self, Verdict};
 use crate::pane::SpawnRequest;
 use crate::theme::SeancePalette;
 
+use super::views::ViewMode;
 use super::SeanceApp;
 
 pub(super) enum FirstRun {
@@ -145,6 +146,7 @@ impl SeanceApp {
             self.selected_workspace = Some(ws.clone());
             let _ = self.client.set_focus(None, Some(ws));
         }
+        self.return_to_chat_after_first_run(cx);
         cx.notify();
     }
 
@@ -217,6 +219,7 @@ impl SeanceApp {
         };
         if let Some(slug) = &slug {
             self.focus_first_run_pane(slug);
+            self.show_terminal_for_first_run(cx);
         }
         if let FirstRun::Card { opened, .. } = &mut self.first_run {
             *opened = slug;
@@ -226,6 +229,23 @@ impl SeanceApp {
     }
 
     /// Bring the terminal forward.
+    /// The terminal only shows on Classic: step there without saving it, and
+    /// remember it, so landing (or "Not now") can step back to Chat.
+    fn show_terminal_for_first_run(&mut self, cx: &mut Context<Self>) {
+        if self.view.mode == ViewMode::Chat {
+            self.first_run_from_chat = true;
+            self.switch_view(ViewMode::Classic, false, cx);
+        }
+    }
+
+    /// Back to Chat if the card moved us out of it and the window is still
+    /// where the card left it.
+    fn return_to_chat_after_first_run(&mut self, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.first_run_from_chat) && self.view.mode == ViewMode::Classic {
+            self.switch_view(ViewMode::Chat, false, cx);
+        }
+    }
+
     fn focus_first_run_pane(&mut self, slug: &str) {
         let Some(ws) = self
             .panes
@@ -345,6 +365,7 @@ impl SeanceApp {
                                     // Dismissed on purpose: stop holding.
                                     claude_check::hold_new_claude(false);
                                     this.first_run = FirstRun::Off;
+                                    this.return_to_chat_after_first_run(cx);
                                     cx.notify();
                                 }),
                             ))

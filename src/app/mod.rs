@@ -371,6 +371,8 @@ pub struct SeanceApp {
     first_run: first_run::FirstRun,
     /// One re-check loop at a time while the first-run card waits on its terminal.
     first_run_watching: bool,
+    /// The first-run card stepped out of Chat to show its terminal.
+    first_run_from_chat: bool,
     /// Settings > "Use Seance on your phone".
     phone: phone::Phone,
     afk: afk_ui::AfkUi,
@@ -631,6 +633,7 @@ impl SeanceApp {
             quicklaunch_editor: None,
             first_run: first_run::FirstRun::Off,
             first_run_watching: false,
+            first_run_from_chat: false,
             phone: phone::Phone::default(),
             afk: afk_ui::AfkUi::default(),
             welcome: welcome::Welcome::default(),

@@ -156,7 +156,7 @@ impl SeanceApp {
         self.switch_view(ViewMode::Wall, false, cx);
     }
 
-    fn switch_view(&mut self, mode: ViewMode, persist: bool, cx: &mut Context<Self>) {
+    pub(super) fn switch_view(&mut self, mode: ViewMode, persist: bool, cx: &mut Context<Self>) {
         if mode == self.view.mode {
             return;
         }
