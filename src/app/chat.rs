@@ -29,10 +29,12 @@ use crate::chat_api::{
 use crate::events;
 use crate::theme::SeancePalette;
 
+use super::actions::{ActBanishSpace, ActDeleteSpace};
 use super::header::PlusAction;
 use super::lead_tasks::clock;
 use super::util::{now_ms, tip};
 use super::views::ViewMode;
+use super::workspaces::banish_arm_live;
 use super::SeanceApp;
 
 /// The long-poll waits this long for Invoke to report a change.
@@ -2758,10 +2760,20 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    /// A space's heading. A circle row dropped here moves into the space.
+    /// A space's heading. A circle row dropped here moves into the space; a
+    /// right-click offers what Classic's space menu does for closing one.
+    /// Armed by "Banish all", it shows the confirm pill Classic's row shows.
     fn chat_space_heading(&self, id: String, name: String, cx: &Context<Self>) -> AnyElement {
+        let spaces = &self.subs_pref.spaces;
+        let count = spaces.circles_in(&id, &self.workspaces()).len();
+        let is_default = spaces.default_id() == id;
+        let armed = self.space_banish_armed(&id);
+        let (id_menu, id_arm) = (id.clone(), id.clone());
         list_label(name.to_uppercase())
             .id(SharedString::from(format!("chat-space-{id}")))
+            .flex()
+            .items_center()
+            .gap_2()
             .drag_over::<super::util::DraggedCircle>(|style, _, _, _| {
                 style.bg(SeancePalette::flame_dim().opacity(0.35))
             })
@@ -2771,6 +2783,41 @@ impl SeanceApp {
                     cx.notify();
                 }),
             )
+            .context_menu(move |menu, _, _| {
+                let m = if count > 0 {
+                    menu.menu(
+                        format!("Banish all {count} circle(s)"),
+                        Box::new(ActBanishSpace(id_menu.clone())),
+                    )
+                } else {
+                    menu
+                };
+                if is_default {
+                    m
+                } else {
+                    m.menu(
+                        "Delete space (circles go to the default)",
+                        Box::new(ActDeleteSpace(id_menu.clone())),
+                    )
+                }
+            })
+            .when(armed, |d| {
+                d.child(
+                    div()
+                        .id(SharedString::from(format!("chat-space-banish-{id_arm}")))
+                        .flex_none()
+                        .px_1()
+                        .rounded_sm()
+                        .bg(SeancePalette::surface())
+                        .text_color(SeancePalette::danger())
+                        .cursor_pointer()
+                        .tooltip(tip("click again to banish every circle in this space"))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.banish_space_click(&id_arm, window, cx);
+                        }))
+                        .child(format!("banish {count}? click")),
+                )
+            })
             .into_any_element()
     }
 
@@ -2788,6 +2835,9 @@ impl SeanceApp {
         let on = self.chat.selected.as_deref() == Some(c.ws.as_str());
         let ws = c.ws.clone();
         let (menu_ws, weak) = (c.ws.clone(), cx.weak_entity());
+        let armed = banish_arm_live(self.banish_armed.as_ref(), &c.ws, Instant::now());
+        let panes = self.panes.iter().filter(|p| p.workspace == c.ws).count();
+        let arm_ws = c.ws.clone();
         let pulse = 0.45 + 0.55 * (((now_ms() / 300) % 2) as f32);
         let me = row_plate(crate::theme::active());
         div()
@@ -2817,6 +2867,7 @@ impl SeanceApp {
             .context_menu(move |menu, window, cx| {
                 let (ws, weak) = (menu_ws.clone(), weak.clone());
                 let (move_ws, move_weak, targets) = (ws.clone(), weak.clone(), targets.clone());
+                let (ban_ws, ban_weak) = (ws.clone(), weak.clone());
                 menu.item(PopupMenuItem::new("Mark unread").on_click(move |_, _, cx| {
                     let ws = ws.clone();
                     let _ = weak.update(cx, |a, cx| a.chat_unread(ws, cx));
@@ -2833,6 +2884,16 @@ impl SeanceApp {
                         }))
                     })
                 })
+                .separator()
+                // A menu can't show the armed state, so the first click arms
+                // and the row shows "banish? N"; a second click on this item
+                // or on that pill inside the arm window kills every pane.
+                .item(
+                    PopupMenuItem::new("Banish circle").on_click(move |_, window, cx| {
+                        let ws = ban_ws.clone();
+                        let _ = ban_weak.update(cx, |a, cx| a.banish_click(&ws, window, cx));
+                    }),
+                )
             })
             .child(self.chat_row_creature(c))
             .child(
@@ -2882,6 +2943,28 @@ impl SeanceApp {
                             .child(c.last.as_ref().map(preview).unwrap_or_default()),
                     ),
             )
+            .when(armed, |d| {
+                d.child(
+                    div()
+                        .id(SharedString::from(format!("chat-banish-{}", arm_ws)))
+                        .flex_none()
+                        .px_1()
+                        .rounded_sm()
+                        .text_xs()
+                        .bg(SeancePalette::surface())
+                        .text_color(SeancePalette::danger())
+                        .cursor_pointer()
+                        .tooltip(tip(
+                            "click again to banish: kills every pane in this circle",
+                        ))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            // The row's own click would select the circle.
+                            cx.stop_propagation();
+                            this.banish_click(&arm_ws, window, cx);
+                        }))
+                        .child(format!("banish? {panes}")),
+                )
+            })
             .when(c.unread > 0, |d| {
                 d.child(
                     div()

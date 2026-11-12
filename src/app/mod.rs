@@ -3259,6 +3259,9 @@ impl Render for SeanceApp {
             .on_action(cx.listener(|this, act: &ActKillWorkspace, window, cx| {
                 this.kill_workspace(&act.0.clone(), window, cx);
             }))
+            .on_action(cx.listener(|this, act: &ActBanishCircle, window, cx| {
+                this.banish_click(&act.0.clone(), window, cx);
+            }))
             .on_action(cx.listener(|this, act: &ActMoveToWorkspace, _, cx| {
                 this.move_to_workspace(&act.slug.clone(), &act.workspace.clone(), cx);
             }))

@@ -22,7 +22,9 @@ use crate::pane::{Pane, PaneBody};
 use crate::runtime::snapshot::GridSnapshot;
 use crate::theme::SeancePalette;
 
-use super::actions::{ActDeleteSpace, ActRenameSpace, ActSpaceDefault};
+use super::actions::{
+    ActBanishCircle, ActBanishSpace, ActDeleteSpace, ActRenameSpace, ActSpaceDefault,
+};
 use super::header::{NewKind, PlusAction, PLUS_SIZE};
 use super::stage_parse::{
     circle_folder, compacted_while_idle, crew_order, done_chips, ellipsize, filed_label, fit_pills,
@@ -975,6 +977,9 @@ impl SeanceApp {
             let ws = circles[i].clone();
             let on = sel_idx == Some(i);
             let glyph = self.circle_glyph(&ws);
+            let armed = banish_arm_live(self.banish_armed.as_ref(), &ws, Instant::now());
+            let panes = self.panes.iter().filter(|p| p.workspace == ws).count();
+            let menu_ws = ws.clone();
             div()
                 .id(SharedString::from(format!("stage-pill-{ws}")))
                 .flex_none()
@@ -1013,12 +1018,26 @@ impl SeanceApp {
                     }
                 }))
                 .on_click(cx.listener(move |this, _, window, cx| {
+                    if armed {
+                        this.banish_click(&ws, window, cx);
+                        return;
+                    }
                     this.select_workspace(&ws, window, cx);
                     this.stage.want_lead = true;
                     cx.notify();
                 }))
                 .child(glyph)
-                .child(labels[i].clone())
+                .child(if armed {
+                    format!("banish? {panes}")
+                } else {
+                    labels[i].clone()
+                })
+                .when(armed, |d| d.text_color(SeancePalette::danger()))
+                // Banish: the first click arms (the pill turns into "banish?
+                // N"), a second on the pill inside the arm window kills.
+                .context_menu(move |menu, _, _| {
+                    menu.menu("banish circle", Box::new(ActBanishCircle(menu_ws.clone())))
+                })
         };
         let pills: Vec<_> = shown.iter().map(|&i| pill(i)).collect();
         let more = (!hidden.is_empty()).then(|| {
@@ -1236,6 +1255,8 @@ impl SeanceApp {
             let on = on && !all;
             let id = sp.id.clone();
             let id_menu = sp.id.clone();
+            let id_arm = sp.id.clone();
+            let armed = self.space_banish_armed(&sp.id);
             let is_default = spaces.default_id() == sp.id;
             let count = match n {
                 0 => "no circles".to_string(),
@@ -1275,12 +1296,39 @@ impl SeanceApp {
                     .when_some(self.space_mark(&sp.id), |d, (glyph, color)| {
                         d.child(div().text_color(color).child(glyph))
                     })
+                    .when(armed, |d| {
+                        d.child(
+                            div()
+                                .id(SharedString::from(format!("{key}-space-banish-{id_arm}")))
+                                .flex_none()
+                                .px_1()
+                                .rounded_sm()
+                                .bg(SeancePalette::surface())
+                                .text_color(SeancePalette::danger())
+                                .cursor_pointer()
+                                .tooltip(tip("click again to banish every circle in this space"))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.banish_space_click(&id_arm, window, cx);
+                                }))
+                                .child(format!("banish {n}? click")),
+                        )
+                    })
                     // The rail's space menu, minus what only the rail can
-                    // show (new, reorder, banish), so a space can be closed
-                    // without leaving Stage or Wall.
+                    // show (new, reorder), so a space can be closed without
+                    // leaving Stage or Wall. Banish all arms; the tab then
+                    // shows the confirm pill, as the rail's row does.
                     .context_menu(move |menu, _, _| {
                         let m =
                             menu.menu("rename space", Box::new(ActRenameSpace(id_menu.clone())));
+                        let m = if n > 0 {
+                            m.separator().menu(
+                                format!("banish all {n} circle(s)…"),
+                                Box::new(ActBanishSpace(id_menu.clone())),
+                            )
+                        } else {
+                            m
+                        };
                         if is_default {
                             return m;
                         }
