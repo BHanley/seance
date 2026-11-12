@@ -17,6 +17,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.28] — 2026-11-12
+
+### Fixed
+- First-run Claude login kept opening terminals. The button now opens one terminal and reuses it; the card steps aside so you can see and type in it, checks every few seconds, and goes away by itself once you are signed in, landing you in your circle. Until then nothing starts Claude on its own (new circles, the Seance Custom helper), and "Start Claude here" no longer adds another pane when one is there.
+
 ## [0.28.27] — 2026-11-12
 
 ### Changed
