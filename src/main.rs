@@ -22,6 +22,7 @@ mod invoke;
 mod latency_probe;
 mod launch;
 mod lead_sound;
+mod linkguard;
 mod looks;
 mod mark;
 mod mdfold;
