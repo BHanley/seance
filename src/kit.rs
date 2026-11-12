@@ -87,7 +87,6 @@ pub enum Status {
     Off,
     /// Something of the user's is already there; the kit wrote nothing.
     AlreadySetUp,
-    ComingSoon,
 }
 
 impl Status {
@@ -96,7 +95,6 @@ impl Status {
             Status::On => "On",
             Status::Off => "Off",
             Status::AlreadySetUp => "Already set up",
-            Status::ComingSoon => "Coming soon",
         }
     }
 }
@@ -106,14 +104,21 @@ pub struct Env {
     pub home: PathBuf,
     /// `~/.config/seance`
     pub config: PathBuf,
+    /// Invoke's config folder (`$INVOKE_CONF`, else `~/.config/seance-chat`).
+    pub invoke_conf: PathBuf,
     pub launchctl: bool,
 }
 
 impl Env {
     pub fn real() -> Env {
         let home = PathBuf::from(shellexpand::tilde("~").as_ref());
+        let invoke_conf = match std::env::var("INVOKE_CONF") {
+            Ok(v) if !v.is_empty() => PathBuf::from(v),
+            _ => home.join(".config/seance-chat"),
+        };
         Env {
             config: crate::seance_custom::config_dir(),
+            invoke_conf,
             home,
             launchctl: cfg!(target_os = "macos"),
         }
@@ -126,6 +131,12 @@ impl Env {
     }
     fn settings(&self) -> PathBuf {
         self.home.join(".claude/settings.json")
+    }
+    fn sheets_flag(&self) -> PathBuf {
+        self.invoke_conf.join("sheets")
+    }
+    fn sheets_skill(&self) -> PathBuf {
+        self.home.join(".claude/skills/design-sheets/SKILL.md")
     }
     fn hook_script(&self) -> PathBuf {
         self.home.join(".claude/hooks/seance-context-nudge.sh")
@@ -216,7 +227,7 @@ fn s(p: &Path) -> String {
 /// The user's own thing that makes this item "already set up", if any.
 fn already(item: Item, env: &Env) -> bool {
     match item {
-        Item::DesignSheets => false,
+        Item::DesignSheets => env.sheets_flag().exists() || env.sheets_skill().exists(),
         Item::BrainNotes => env.brain().join("INDEX.md").exists(),
         Item::Rules => env.brain().join("rules.md").exists(),
         Item::Memory => {
@@ -232,9 +243,6 @@ fn already(item: Item, env: &Env) -> bool {
 }
 
 pub fn status(item: Item, env: &Env) -> Status {
-    if item == Item::DesignSheets {
-        return Status::ComingSoon;
-    }
     if load_record(env).items.contains_key(item.id()) {
         Status::On
     } else if already(item, env) {
@@ -291,7 +299,10 @@ pub fn off(item: Item, env: &Env) -> Result<Status, String> {
 
 fn write_item(item: Item, env: &Env, wrote: &mut Vec<Wrote>) -> Result<(), String> {
     match item {
-        Item::DesignSheets => Ok(()),
+        Item::DesignSheets => {
+            new_file(&env.sheets_flag(), SHEETS_FLAG.as_bytes(), false, wrote)?;
+            new_file(&env.sheets_skill(), SHEETS_SKILL.as_bytes(), false, wrote)
+        }
         Item::BrainNotes => {
             let index = env.brain().join("INDEX.md");
             new_file(&index, BRAIN_INDEX.as_bytes(), false, wrote)?;
@@ -638,6 +649,25 @@ work, and `rule-proposals/` is where a weekly review leaves suggestions.
 ## Notes
 
 (none yet)
+";
+
+/// Its presence turns Invoke's sheet pages on (read when Invoke starts).
+const SHEETS_FLAG: &str =
+    "# Written by Seance (Set up your Claude > Design sheets). Delete to turn sheets off.\n";
+
+const SHEETS_SKILL: &str = "---
+name: design-sheets
+description: Show design options as a sheet of pictures the user can check or X, instead of describing them
+---
+
+# Design sheets
+
+When you explore a design (a logo, a layout, colors, a screen), do not describe the options. Show them.
+
+1. Make each option its own image. Save them in `~/Claude/Projects/<project>/sheets/<name>/`, one file per option.
+2. In that folder write `sheet.json` with a `name`, a short `note`, and `items`: one entry per image with its file name and a one-line caption.
+3. Put one line in your answer: `sheet: ~/Claude/Projects/<project>/sheets/<name>`. The user gets a page where they check the ones they like and X the ones they don't.
+4. Before you start, read the earlier `sheet.json` files in that project. Ideas the user checked carry over. Ideas they X'd stay out.
 ";
 
 const MEMORY: &str = "# Memory

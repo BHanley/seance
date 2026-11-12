@@ -7,6 +7,7 @@ fn env(tag: &str) -> Env {
     Env {
         home: root.join("home"),
         config: root.join("home/.config/seance"),
+        invoke_conf: root.join("home/.config/seance-chat"),
         launchctl: false,
     }
 }
@@ -149,10 +150,34 @@ fn weekly_review_writes_an_agent_and_off_deletes_it() {
 }
 
 #[test]
-fn design_sheets_is_coming_soon_and_writes_nothing() {
+fn design_sheets_writes_the_flag_and_skill_and_off_removes_exactly_them() {
     let e = env("sheets");
-    assert_eq!(status(Item::DesignSheets, &e), Status::ComingSoon);
-    assert_eq!(on(Item::DesignSheets, &e), Ok(Status::ComingSoon));
+    put(&e.invoke_conf.join("other"), "keep");
+    assert_eq!(status(Item::DesignSheets, &e), Status::Off);
+    assert_eq!(on(Item::DesignSheets, &e), Ok(Status::On));
+    assert!(e.sheets_flag().exists());
+    assert!(read(&e.sheets_skill()).contains("name: design-sheets"));
+    assert!(read(&e.record_path()).contains("design-sheets"));
+    off(Item::DesignSheets, &e).unwrap();
+    assert!(!e.sheets_flag().exists() && !e.sheets_skill().exists());
+    assert!(!e.sheets_skill().parent().unwrap().exists());
+    assert_eq!(read(&e.invoke_conf.join("other")), "keep");
+    assert_eq!(status(Item::DesignSheets, &e), Status::Off);
+    cleanup(&e);
+}
+
+#[test]
+fn an_existing_design_sheets_skill_is_left_alone() {
+    let e = env("sheetsskill");
+    put(&e.sheets_skill(), "my own skill");
+    assert_eq!(status(Item::DesignSheets, &e), Status::AlreadySetUp);
+    assert_eq!(on(Item::DesignSheets, &e), Ok(Status::AlreadySetUp));
+    assert_eq!(off(Item::DesignSheets, &e), Ok(Status::AlreadySetUp));
+    assert_eq!(read(&e.sheets_skill()), "my own skill");
+    assert!(
+        !e.sheets_flag().exists(),
+        "no flag written for a skipped item"
+    );
     assert!(!e.record_path().exists());
     cleanup(&e);
 }
