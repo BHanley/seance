@@ -47,6 +47,7 @@ mod redraw;
 #[cfg(test)]
 mod redraw_bench;
 mod sidebar;
+mod signin;
 mod sprite;
 mod stage;
 mod stage_parse;
@@ -351,6 +352,8 @@ pub struct SeanceApp {
     /// This window attached with an empty subscription set (second process).
     empty_window: bool,
     kit: kit_ui::KitUi,
+    /// The corner "sign in again" card (and the flow it runs).
+    signin: signin::Ui,
     kit_checked: bool,
     /// The first-run "Seance Custom" check already ran in this process.
     custom_checked: bool,
@@ -605,6 +608,7 @@ impl SeanceApp {
             wall: wall::WallState::default(),
             empty_window: empty,
             kit: Default::default(),
+            signin: signin::Ui::default(),
             kit_checked: false,
             custom_checked: false,
             quicklaunch: Vec::new(),
@@ -629,6 +633,9 @@ impl SeanceApp {
         };
         app.announce_view();
         app.start_stage_ticker(cx);
+        if !empty {
+            app.start_relogin_watch(cx);
+        }
         // Seed the prompt-library user file on the DAEMON machine (write-if-
         // missing) and pre-warm the cache so the palette has user prompts by
         // the first refresh tick. Plain thread: bridge calls block.
@@ -3486,6 +3493,7 @@ impl Render for SeanceApp {
             .children(self.render_gui_menu(window, cx))
             .children(self.render_tasks_popover(window, cx))
             .children(self.render_kit(window, cx))
+            .children(self.render_signin(cx))
             .children(self.render_new_menu(cx))
             .children(match &self.drawer {
                 // The Wall fills the window, as the overview always did.
