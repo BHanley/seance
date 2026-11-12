@@ -3998,8 +3998,10 @@ impl SeanceApp {
             .clone()
             .or_else(|| self.chat.tapped.get(&m.id).cloned());
         let id = m.id;
+        // A definite width (a bubble's most), not a cap: a row sized by its
+        // content never shrinks a long chip, and it ran off the window.
         div()
-            .max_w(relative(0.72))
+            .w(relative(0.72))
             .flex()
             .flex_wrap()
             .gap_2()
@@ -4027,6 +4029,10 @@ impl SeanceApp {
                 .px_3()
                 .py_1()
                 .text_sm()
+                // A long answer wraps inside the row, left aligned.
+                .max_w_full()
+                .min_w_0()
+                .text_left()
                 .when(!carve::slick(), |d| {
                     d.border_1().border_color(if is_picked || lead_pick {
                         SeancePalette::violet()
