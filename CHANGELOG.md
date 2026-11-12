@@ -17,6 +17,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.26] — 2026-11-12
+
+### Changed
+- Chat without a server ends a note's "got" tick at the exact moment the lead's turn ends (the lead goes from working to idle), instead of two polls later, so it lines up with Chat on Invoke. A lead stopped on a question keeps the note at two ticks.
+
 ## [0.28.25] — 2026-11-12
 
 ### Fixed
