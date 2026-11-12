@@ -17,6 +17,18 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.20] — 2026-11-12
+
+### Added
+- **Set up your Claude…** (Seance menu): opt-in starters for your own Claude, each a switch that writes a short generic starter and records it, so off removes exactly what on wrote. Brain notes, Memory, Always-on rules, Weekly skill review, Context-full warning, Design sheets. The six tiles also show once after the first welcome.
+- **Make it yours…** (Seance menu): theme, font and lead reply sound pickers, plus prompt chips that go to the Seance Custom circle's Claude.
+- **Font** menu: Inter, Atkinson Hyperlegible, IBM Plex Sans, JetBrains Mono or System for the UI font, saved per Mac.
+- Four plain themes: Plain Dark, Plain Light, Paper, High Contrast.
+- Design sheets: the switch turns on Invoke's pick pages (the bundled Invoke reads a `sheets` flag) and restarts Invoke so it takes effect now.
+
+### Fixed
+- Right and middle clicks no longer open links in Chat bubbles or file markdown.
+
 ## [0.28.19] — 2026-11-10
 
 ### Added
