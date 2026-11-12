@@ -3515,7 +3515,7 @@ impl Render for SeanceApp {
             .children(self.render_palette(cx))
             .children(self.render_quicklaunch_editor(cx))
             .children(self.render_first_run(cx))
-            .children(self.render_phone(cx))
+            .children(self.render_phone(window, cx))
             .children(self.render_welcome(cx))
             .children(self.render_update_bar(cx))
             .children(self.render_gui_menu(cx))

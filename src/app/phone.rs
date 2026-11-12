@@ -3,7 +3,7 @@
 //! phone reaches it over the owner's own Tailscale. The checks and the
 //! `tailscale serve` commands run on the daemon (`invoke.rs`); this is the card.
 
-use gpui::{div, prelude::*, px, Context, SharedString};
+use gpui::{div, prelude::*, px, Context, SharedString, Window};
 use gpui_component::StyledExt as _;
 
 use crate::invoke::Guide;
@@ -33,6 +33,8 @@ pub(super) struct Phone {
     pub enable_url: Option<String>,
     /// Which phone's install steps are showing.
     pub tab: PhoneTab,
+    /// The guide's scroll, which the "More below" cue reads.
+    pub scroll: gpui::ScrollHandle,
 }
 
 /// The install steps come in two flavours: iPhone first.
@@ -324,7 +326,11 @@ impl SeanceApp {
         .detach();
     }
 
-    pub(super) fn render_phone(&self, cx: &Context<Self>) -> Option<gpui::AnyElement> {
+    pub(super) fn render_phone(
+        &self,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> Option<gpui::AnyElement> {
         if !self.phone.open {
             return None;
         }
@@ -417,26 +423,16 @@ impl SeanceApp {
                 .child(tick(done))
                 .child(col)
         };
-        let mut card = div()
-            .id("phone-card")
-            .w(px(480.))
-            .max_h(px(640.))
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .p_4()
-            .rounded_lg()
-            .border_1()
-            .border_color(SeancePalette::flame_dim())
-            .bg(SeancePalette::bg_elevated())
-            .child(
-                div()
-                    .text_sm()
-                    .font_semibold()
-                    .text_color(SeancePalette::text())
-                    .child("Use Seance on your phone"),
-            );
+        // The guide's steps; `phone_shell` frames them in a card that fits the
+        // window and scrolls. The padding is here, inside the scroll, so the
+        // last line keeps its room below.
+        let mut card = div().flex().flex_col().gap_3().p_4().child(
+            div()
+                .text_sm()
+                .font_semibold()
+                .text_color(SeancePalette::text())
+                .child("Use Seance on your phone"),
+        );
         let Some(g) = g else {
             card = card.child(
                 div()
@@ -444,7 +440,7 @@ impl SeanceApp {
                     .text_color(SeancePalette::text_dim())
                     .child("Checking..."),
             );
-            return Some(self.phone_shell(card, cx));
+            return Some(self.phone_shell(card, window, cx));
         };
         if !g.bundled {
             card = card.child(
@@ -453,7 +449,7 @@ impl SeanceApp {
                     .text_color(SeancePalette::text_dim())
                     .child("This build of Seance does not include the phone chat."),
             );
-            return Some(self.phone_shell(card, cx));
+            return Some(self.phone_shell(card, window, cx));
         }
         card = card.child(
             div()
@@ -604,10 +600,23 @@ impl SeanceApp {
                 .text_color(SeancePalette::text_faint())
                 .child("Your phone reaches Seance only while this Mac is awake."),
         );
-        Some(self.phone_shell(card, cx))
+        Some(self.phone_shell(card, window, cx))
     }
 
-    fn phone_shell(&self, card: gpui::Stateful<gpui::Div>, cx: &Context<Self>) -> gpui::AnyElement {
+    /// The card: sized to the window, the steps scrolling inside it with a
+    /// "More below" cue while some are out of sight, and Close inside its
+    /// bottom-right corner.
+    fn phone_shell(
+        &self,
+        content: gpui::Div,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> gpui::AnyElement {
+        let window_h = f32::from(window.viewport_size().height);
+        let scroll = &self.phone.scroll;
+        let (offset, max) = (scroll.offset(), scroll.max_offset());
+        let more = more_below(f32::from(offset.y), f32::from(max.y));
+        let bg = SeancePalette::bg_elevated();
         div()
             .id("phone-overlay")
             .absolute()
@@ -618,28 +627,101 @@ impl SeanceApp {
             .bg(gpui::black().opacity(0.5))
             .occlude()
             .child(
-                div().flex().flex_col().gap_2().child(card).child(
-                    div().flex().flex_row().justify_end().gap_2().child(
+                div()
+                    .id("phone-card")
+                    .w(px(480.))
+                    .max_h(px(card_max_height(window_h)))
+                    .flex()
+                    .flex_col()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(SeancePalette::flame_dim())
+                    .bg(bg)
+                    .overflow_hidden()
+                    .child(
                         div()
-                            .id("phone-close")
-                            .px_3()
-                            .py_1()
-                            .rounded_md()
-                            .text_sm()
-                            .cursor_pointer()
-                            .bg(SeancePalette::surface())
-                            .text_color(SeancePalette::text())
-                            .hover(|s| s.bg(SeancePalette::border()))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.phone.open = false;
-                                cx.notify();
-                            }))
-                            .child("Close"),
+                            .relative()
+                            .flex_1()
+                            .min_h_0()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .id("phone-scroll")
+                                    .flex_1()
+                                    .min_h_0()
+                                    .overflow_y_scroll()
+                                    .track_scroll(scroll)
+                                    // The cue reads the offset, which a wheel
+                                    // turn changes after this frame.
+                                    .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
+                                    .child(content),
+                            )
+                            .when(more, |d| {
+                                d.child(
+                                    div()
+                                        .absolute()
+                                        .bottom_0()
+                                        .left_0()
+                                        .right_0()
+                                        .h(px(44.))
+                                        .flex()
+                                        .items_end()
+                                        .justify_center()
+                                        .pb_1()
+                                        .bg(gpui::linear_gradient(
+                                            180.,
+                                            gpui::linear_color_stop(bg.opacity(0.), 0.),
+                                            gpui::linear_color_stop(bg, 0.75),
+                                        ))
+                                        .text_xs()
+                                        .text_color(SeancePalette::flame())
+                                        .child("More below \u{2193}"),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .justify_end()
+                            .px_4()
+                            .pb_3()
+                            .pt_1()
+                            .child(
+                                div()
+                                    .id("phone-close")
+                                    .px_3()
+                                    .py_1()
+                                    .rounded_md()
+                                    .text_sm()
+                                    .cursor_pointer()
+                                    .bg(SeancePalette::surface())
+                                    .text_color(SeancePalette::text())
+                                    .hover(|s| s.bg(SeancePalette::border()))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.phone.open = false;
+                                        cx.notify();
+                                    }))
+                                    .child("Close"),
+                            ),
                     ),
-                ),
             )
             .into_any_element()
     }
+}
+
+/// The card is at most this tall: the window less a margin, never over the
+/// old fixed height.
+fn card_max_height(window_h: f32) -> f32 {
+    (window_h - 48.).clamp(240., 640.)
+}
+
+/// Whether steps lie below the visible part: the guide overflows
+/// (`max_y` is how far it can scroll) and is not at its end (`offset_y` runs
+/// from 0 down to `-max_y`).
+fn more_below(offset_y: f32, max_y: f32) -> bool {
+    max_y > 1. && -offset_y < max_y - 1.
 }
 
 /// The QR code for `text`, drawn as a grid of dark and light squares. White
@@ -684,6 +766,24 @@ mod tests {
             port: 9667,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn the_more_below_cue_shows_until_the_end_is_reached() {
+        // Fits: nothing to scroll. Overflows: shown at the top and middle,
+        // gone at the end.
+        assert!(!more_below(0., 0.));
+        assert!(more_below(0., 220.));
+        assert!(more_below(-100., 220.));
+        assert!(!more_below(-220., 220.));
+        assert!(!more_below(-219.5, 220.));
+    }
+
+    #[test]
+    fn the_card_fits_the_window() {
+        assert_eq!(card_max_height(890.), 640.);
+        assert_eq!(card_max_height(500.), 452.);
+        assert_eq!(card_max_height(100.), 240.);
     }
 
     #[test]
