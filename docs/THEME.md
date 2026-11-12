@@ -66,6 +66,10 @@ name a scheme.
 | `herbarium` | Herbarium (light) | `#BDC5B3` | `#8E3B14` | `#43407F` |
 | `castle` | Castle (skin) | `#1B1B1D` | `#E39A43` | `#93A6C2` |
 | `neon-district` | Neon District (skin) | `#04010A` | `#FF2FB5` | `#12F7FF` |
+| `plain-dark` | Plain Dark | `#121212` | `#6AA8FF` | `#6AA8FF` |
+| `plain-light` | Plain Light (light) | `#FFFFFF` | `#1F5FD1` | `#1F5FD1` |
+| `paper` | Paper (light) | `#F8F5EE` | `#8A4B14` | `#8A4B14` |
+| `high-contrast` | High Contrast | `#000000` | `#FFD23F` | `#FFD23F` |
 
 **Skins.** A scheme may also carry a `texture` (`Texture` in
 `seance-core/src/schemes.rs`): a seamless square PNG tile, one texel per
