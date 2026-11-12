@@ -235,10 +235,7 @@ fn a_swap_must_keep_the_signing_identity_once_there_is_one() {
 
 #[test]
 fn the_default_feed_is_https_and_downloads_follow_redirects_only_to_https() {
-    assert_eq!(
-        DEFAULT_FEED,
-        "https://bike.rodeo/rwgps/seance-get-k7m2qx/latest.json"
-    );
+    assert_eq!(DEFAULT_FEED, "https://seance.bike.rodeo/get/latest.json");
     assert_eq!(
         source_of(DEFAULT_FEED).unwrap(),
         Source::Https(DEFAULT_FEED.to_string())

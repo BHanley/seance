@@ -20,7 +20,7 @@ use anyhow::{anyhow, bail, Context as _, Result};
 use serde::Deserialize;
 
 /// Where the feed is unless `seance-update-feed` says otherwise.
-pub const DEFAULT_FEED: &str = "https://bike.rodeo/rwgps/seance-get-k7m2qx/latest.json";
+pub const DEFAULT_FEED: &str = "https://seance.bike.rodeo/get/latest.json";
 /// How often the app looks again.
 pub const CHECK_EVERY: Duration = Duration::from_secs(3600);
 /// A click's consent for the sessions restart is good for this long.

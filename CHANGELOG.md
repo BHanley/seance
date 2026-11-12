@@ -17,6 +17,9 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+### Changed
+- The update feed is now https://seance.bike.rodeo/get/latest.json. The old address redirects there, so installed copies keep updating.
+
 ## [0.28.30] — 2026-11-12
 
 ### Changed
