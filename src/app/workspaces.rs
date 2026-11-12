@@ -1173,20 +1173,33 @@ impl SeanceApp {
         match custom::route(exists) {
             MenuRoute::FilePicker => crate::pick_custom_file(cx),
             MenuRoute::OpenHelper => {
-                // Defer so we don't switch views mid-render.
-                cx.defer_in(window, |this, window, cx| {
-                    this.set_view(super::views::ViewMode::Chat, cx);
-                    this.chat_select(custom::SLUG, window, cx);
-                    this.chat_post(
-                        custom::SLUG.to_string(),
-                        custom::FIRST_MESSAGE.to_string(),
-                        None,
-                        false,
-                        cx,
-                    );
-                });
+                self.open_custom_with(custom::FIRST_MESSAGE, window, cx);
             }
         }
+    }
+
+    /// Open the Seance Custom circle in Chat and send it `message`. False when
+    /// the circle is gone (the user deleted it; it is never re-made).
+    pub(super) fn open_custom_with(
+        &mut self,
+        message: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        use crate::seance_custom as custom;
+        let exists = self.known_workspace_names().contains(custom::SLUG)
+            || self.workspace_order.iter().any(|w| w == custom::SLUG);
+        if !exists {
+            return false;
+        }
+        let message = message.to_string();
+        // Defer so we don't switch views mid-render.
+        cx.defer_in(window, move |this, window, cx| {
+            this.set_view(super::views::ViewMode::Chat, cx);
+            this.chat_select(custom::SLUG, window, cx);
+            this.chat_post(custom::SLUG.to_string(), message, None, false, cx);
+        });
+        true
     }
 
     pub(super) fn select_workspace(

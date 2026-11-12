@@ -35,6 +35,7 @@ pub(crate) mod chat;
 mod chrome;
 mod dock;
 mod header;
+pub(crate) mod kit_ui;
 mod layout;
 mod lead_tasks;
 mod menus;
@@ -349,6 +350,8 @@ pub struct SeanceApp {
     wall: wall::WallState,
     /// This window attached with an empty subscription set (second process).
     empty_window: bool,
+    kit: kit_ui::KitUi,
+    kit_checked: bool,
     /// The first-run "Seance Custom" check already ran in this process.
     custom_checked: bool,
     /// Quicklaunch strip entries (~/.config/seance/quicklaunch.json).
@@ -597,6 +600,8 @@ impl SeanceApp {
             stage: stage::StageState::default(),
             wall: wall::WallState::default(),
             empty_window: empty,
+            kit: Default::default(),
+            kit_checked: false,
             custom_checked: false,
             quicklaunch: Vec::new(),
             quicklaunch_mtime: None,
@@ -972,6 +977,9 @@ impl SeanceApp {
                     .chain(selected_workspace.iter().cloned())
                     .collect();
                 self.reconcile_subscriptions(&known);
+                // Before the helper circle is made: a fresh install is the one
+                // whose Seance Custom has not been made yet.
+                self.start_kit_first_run(cx);
                 self.ensure_custom_circle(&known, cx);
 
                 // Re-seed busy from the daemon's verdict — a full state push is
@@ -3148,6 +3156,7 @@ impl Render for SeanceApp {
         self.sync_nav_history();
 
         // "Lead Reply Sound > Custom…" raised a flag; one window picks it up.
+        self.poll_kit_request(cx);
         if !self.empty_window && crate::seance_custom::take_open_request() {
             self.open_custom_helper(window, cx);
         }
@@ -3470,6 +3479,7 @@ impl Render for SeanceApp {
             .children(self.render_quicklaunch_editor(cx))
             .children(self.render_gui_menu(cx))
             .children(self.render_tasks_popover(window, cx))
+            .children(self.render_kit(cx))
             .children(self.render_new_menu(cx))
             .children(match &self.drawer {
                 // The Wall fills the window, as the overview always did.
