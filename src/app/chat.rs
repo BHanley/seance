@@ -4228,84 +4228,84 @@ impl SeanceApp {
                 )
                 .into_any_element()
         });
-        let pills = div()
-            .max_w(relative(0.72))
-            .flex()
-            .flex_wrap()
-            .gap_2()
-            .children(
-                m.choices
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, c)| *c != chat_local::CODE_BOX)
-                    .map(|(i, choice)| {
-                        let is_picked = picked.as_deref() == Some(choice.as_str());
-                        let lead_pick = i == 0 && picked.is_none();
-                        let fill = if is_picked {
-                            SeancePalette::violet()
-                        } else if lead_pick {
-                            SeancePalette::violet().opacity(0.14)
+        // A definite width (a bubble's most), not a cap: a row sized by its
+        // content never shrinks a long chip, and it ran off the window.
+        let pills = div().w(relative(0.72)).flex().flex_wrap().gap_2().children(
+            m.choices
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| *c != chat_local::CODE_BOX)
+                .map(|(i, choice)| {
+                    let is_picked = picked.as_deref() == Some(choice.as_str());
+                    let lead_pick = i == 0 && picked.is_none();
+                    let fill = if is_picked {
+                        SeancePalette::violet()
+                    } else if lead_pick {
+                        SeancePalette::violet().opacity(0.14)
+                    } else {
+                        SeancePalette::surface()
+                    };
+                    let pill = carve::plate(
+                        div().id(SharedString::from(format!("choice-{id}-{i}"))),
+                        // Slick paints the pill's own fill; stone bevels from surface.
+                        if carve::slick() {
+                            fill
                         } else {
                             SeancePalette::surface()
-                        };
-                        let pill = carve::plate(
-                            div().id(SharedString::from(format!("choice-{id}-{i}"))),
-                            // Slick paints the pill's own fill; stone bevels from surface.
-                            if carve::slick() {
-                                fill
-                            } else {
-                                SeancePalette::surface()
-                            },
-                            Stock::Full,
-                            Cut::Control,
-                        )
-                        .px_3()
-                        .py_1()
-                        .text_sm()
-                        .when(!carve::slick(), |d| {
-                            d.border_1().border_color(if is_picked || lead_pick {
-                                SeancePalette::violet()
-                            } else {
-                                SeancePalette::border()
-                            })
-                        })
-                        .text_color(if is_picked {
-                            SeancePalette::bg()
-                        } else if lead_pick {
+                        },
+                        Stock::Full,
+                        Cut::Control,
+                    )
+                    .px_3()
+                    .py_1()
+                    .text_sm()
+                    // A long answer wraps inside the row, left aligned.
+                    .max_w_full()
+                    .min_w_0()
+                    .text_left()
+                    .when(!carve::slick(), |d| {
+                        d.border_1().border_color(if is_picked || lead_pick {
                             SeancePalette::violet()
                         } else {
-                            SeancePalette::text()
+                            SeancePalette::border()
                         })
-                        .when(is_picked || lead_pick, |d| carve::bg(d, fill))
-                        .when(picked.is_some() && !is_picked, |d| d.opacity(0.4))
-                        .child(choice.clone());
-                        if picked.is_some() {
-                            return pill;
-                        }
-                        let spec_change = changes_spec(m, choice);
-                        let choice = choice.clone();
-                        pill.cursor_pointer()
-                            .when(!carve::slick(), |d| {
-                                d.hover(|s| s.bg(SeancePalette::violet().opacity(0.25)))
-                            })
-                            .when(carve::slick(), |d| d.hover(|s| s.opacity(0.8)))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                if spec_change {
-                                    this.chat.focus_input = true;
-                                    cx.notify();
-                                } else if chat_local::is_local()
-                                    && choice == chat_local::SHOW_TERMINAL
-                                {
-                                    // The way out of any dialog card: the pane itself.
-                                    if let Some(ws) = this.chat.selected.clone() {
-                                        this.chat_show_terminal(&ws, window, cx);
-                                    }
-                                } else {
-                                    this.chat_answer(id, choice.clone(), cx);
+                    })
+                    .text_color(if is_picked {
+                        SeancePalette::bg()
+                    } else if lead_pick {
+                        SeancePalette::violet()
+                    } else {
+                        SeancePalette::text()
+                    })
+                    .when(is_picked || lead_pick, |d| carve::bg(d, fill))
+                    .when(picked.is_some() && !is_picked, |d| d.opacity(0.4))
+                    .child(choice.clone());
+                    if picked.is_some() {
+                        return pill;
+                    }
+                    let spec_change = changes_spec(m, choice);
+                    let choice = choice.clone();
+                    pill.cursor_pointer()
+                        .when(!carve::slick(), |d| {
+                            d.hover(|s| s.bg(SeancePalette::violet().opacity(0.25)))
+                        })
+                        .when(carve::slick(), |d| d.hover(|s| s.opacity(0.8)))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            if spec_change {
+                                this.chat.focus_input = true;
+                                cx.notify();
+                            } else if chat_local::is_local() && choice == chat_local::SHOW_TERMINAL
+                            {
+                                // The way out of any dialog card: the pane itself.
+                                if let Some(ws) = this.chat.selected.clone() {
+                                    this.chat_show_terminal(&ws, window, cx);
                                 }
-                            }))
-                    }),
-            );
+                            } else {
+                                this.chat_answer(id, choice.clone(), cx);
+                            }
+                        }))
+                }),
+        );
         div()
             .flex()
             .flex_col()

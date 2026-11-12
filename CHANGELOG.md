@@ -17,6 +17,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.23] — 2026-11-12
+
+### Fixed
+- Chat's choice buttons under a lead's answer wrap long text onto more lines, left aligned, inside the thread column instead of running off the window.
+
 ## [0.28.22] — 2026-11-12
 
 ### Changed
