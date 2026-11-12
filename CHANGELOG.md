@@ -17,6 +17,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.22] — 2026-11-12
+
+### Changed
+- Chat without a server now matches Chat on Invoke for every circle: a circle is working when any of its panes is mid-turn and waiting when its lead's task is open and the lead is idle (a lead stopped on a question is asking for you, not waiting). List rows get the ember, dots and "simmering" hint, and the open thread gets "Running in the background", exactly as on Invoke.
+
 ## [0.28.21] — 2026-11-12
 
 ### Added
