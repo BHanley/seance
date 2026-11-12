@@ -17,6 +17,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.31] — 2026-11-12
+
+### Added
+- Chat and Stage can close circles and spaces, with Classic's two-click confirm. Right-click a circle in Chat or Stage: "Banish circle" arms it and the row shows "banish? N", a second click inside two seconds kills every pane. Right-click a space heading in Chat or a space tab in Stage: "Banish all N circles" arms it and the heading or tab shows "banish N? click"; Chat's space menu also has "Delete space".
+
 ### Changed
 - The update feed is now https://seance.bike.rodeo/get/latest.json. The old address redirects there, so installed copies keep updating.
 
