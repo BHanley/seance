@@ -378,9 +378,10 @@ impl Engine {
         // A brand-new install's first pane. On the standalone Mac build it is
         // Claude, as the lead of "main" (Chat needs someone to talk to); with
         // no Claude installed, or anywhere else, it is a plain shell.
-        let claude = (!cfg!(test) && crate::claude_check::starts_claude_here())
-            .then(crate::claude_check::find_claude)
-            .flatten();
+        let claude =
+            (!cfg!(test) && eng.panes.is_empty() && crate::claude_check::starts_claude_here())
+                .then(crate::claude_check::find_claude)
+                .flatten();
         if eng.panes.is_empty() && claude.is_some() {
             let _ = eng.start_first_pane("", claude.as_deref());
         }

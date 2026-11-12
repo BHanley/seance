@@ -104,28 +104,89 @@ pub fn check() -> Verdict {
     decide(find_claude(), auth_status)
 }
 
-/// A login shell sees what Terminal sees (PATH from `.zprofile`, brew, mise);
-/// the native installer's default home is the fallback.
-pub(crate) fn find_claude() -> Option<PathBuf> {
-    let out = Command::new("bash")
-        .args(["-lc", "command -v claude"])
+/// How long the user's login shell gets to report its PATH.
+const SHELL_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Where `claude` usually lands, in the order we look when the user's shell
+/// doesn't say: the native installer, Homebrew (Apple silicon, then Intel),
+/// npm's global prefix, and the old `claude migrate-installer` home.
+fn fallback_paths(home: &Path) -> Vec<PathBuf> {
+    vec![
+        home.join(".local/bin/claude"),
+        PathBuf::from("/opt/homebrew/bin/claude"),
+        PathBuf::from("/usr/local/bin/claude"),
+        home.join(".npm-global/bin/claude"),
+        home.join(".claude/local/claude"),
+    ]
+}
+
+/// The first `claude` that exists: along the login shell's PATH, in PATH
+/// order (what Terminal would run), then the usual install spots. A path
+/// that isn't absolute is skipped. `exists` is a parameter so the order is
+/// testable without touching the disk.
+fn pick_claude(
+    shell_path: Option<&str>,
+    home: &Path,
+    exists: impl Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    shell_path
+        .into_iter()
+        .flat_map(|p| p.split(':'))
+        .filter(|d| d.starts_with('/'))
+        .map(|d| Path::new(d).join("claude"))
+        .chain(fallback_paths(home))
+        .find(|p| exists(p))
+}
+
+/// The PATH of the user's login shell. Interactive too (`-lic`), so what
+/// `.zshrc` adds (nvm, mise, brew shellenv) counts, which `bash -lc` never
+/// saw. We read PATH rather than ask `command -v`, which answers with alias
+/// text when `claude` is an alias. Our own marker line picks the answer out
+/// of whatever the rc files print.
+fn login_shell_path() -> Option<String> {
+    let shell = std::env::var("SHELL")
+        .ok()
+        .filter(|s| s.starts_with('/'))
+        .unwrap_or_else(|| "/bin/zsh".into());
+    let mut child = Command::new(shell)
+        .args(["-lic", "printf '\\n__SEANCE_PATH__%s\\n' \"$PATH\""])
         .stdin(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .output()
+        .spawn()
         .ok()?;
-    let line = String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .last()
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    // `command -v` can print an alias or function body; only a path counts.
-    if out.status.success() && line.starts_with('/') && Path::new(&line).is_file() {
-        return Some(PathBuf::from(line));
+    let mut stdout = child.stdout.take();
+    let reader = std::thread::spawn(move || {
+        let mut buf = String::new();
+        if let Some(s) = stdout.as_mut() {
+            let _ = std::io::Read::read_to_string(s, &mut buf);
+        }
+        buf
+    });
+    let deadline = std::time::Instant::now() + SHELL_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
     }
-    let home = std::env::var_os("HOME")?;
-    let local = PathBuf::from(home).join(".local/bin/claude");
-    local.is_file().then_some(local)
+    let out = reader.join().unwrap_or_default();
+    out.lines()
+        .rev()
+        .find_map(|l| l.strip_prefix("__SEANCE_PATH__"))
+        .map(str::to_string)
+}
+
+pub(crate) fn find_claude() -> Option<PathBuf> {
+    let home = PathBuf::from(std::env::var_os("HOME")?);
+    pick_claude(login_shell_path().as_deref(), &home, |p| p.is_file())
 }
 
 fn auth_status(claude: &Path) -> Auth {
@@ -203,6 +264,58 @@ mod tests {
 
     fn at(p: &str) -> Option<PathBuf> {
         Some(PathBuf::from(p))
+    }
+
+    #[test]
+    fn claude_is_found_in_the_shell_path_first_then_the_usual_spots() {
+        let home = Path::new("/Users/me");
+        let has = |present: &'static [&'static str]| {
+            move |p: &Path| present.iter().any(|x| Path::new(x) == p)
+        };
+        let all = &[
+            "/opt/homebrew/bin/claude",
+            "/Users/me/.local/bin/claude",
+            "/usr/local/bin/claude",
+            "/Users/me/.npm-global/bin/claude",
+            "/Users/me/.claude/local/claude",
+            "/Users/me/.nvm/v22/bin/claude",
+        ];
+        // The shell's PATH wins, in PATH order (an nvm install from .zshrc).
+        assert_eq!(
+            pick_claude(
+                Some("/x:/Users/me/.nvm/v22/bin:/opt/homebrew/bin"),
+                home,
+                has(all)
+            ),
+            at("/Users/me/.nvm/v22/bin/claude")
+        );
+        // No shell answer: the fixed list, native installer first.
+        assert_eq!(
+            pick_claude(None, home, has(all)),
+            at("/Users/me/.local/bin/claude")
+        );
+        let rest = &all[2..5];
+        let order: Vec<_> = (0..3)
+            .map(|i| pick_claude(None, home, has(&rest[i..])))
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                at("/usr/local/bin/claude"),
+                at("/Users/me/.npm-global/bin/claude"),
+                at("/Users/me/.claude/local/claude"),
+            ]
+        );
+        assert_eq!(
+            pick_claude(
+                None,
+                home,
+                has(&["/opt/homebrew/bin/claude", "/usr/local/bin/claude"])
+            ),
+            at("/opt/homebrew/bin/claude")
+        );
+        // Relative PATH entries are ignored; nothing anywhere is None.
+        assert_eq!(pick_claude(Some("bin:.:"), home, has(&[])), None);
     }
 
     #[test]
