@@ -45,6 +45,7 @@ mod theme;
 mod torch;
 mod tube;
 mod tunnel;
+mod ui_font;
 mod webbridge;
 
 use gpui::*;
@@ -348,6 +349,7 @@ fn main() {
             gpui::KeyBinding::new("tab", gpui::NoAction {}, Some("Root")),
             gpui::KeyBinding::new("shift-tab", gpui::NoAction {}, Some("Root")),
         ]);
+        ui_font::register(cx);
         theme::init(cx);
 
         // Kill the ssh forward on quit — the tunnel lives and dies with the GUI.
@@ -389,6 +391,12 @@ fn install_app_menu(cx: &mut gpui::App) {
     // gpui's restart: waits for this process to exit, then `open`s the bundle.
     cx.on_action(|_: &app::actions::ActRestart, cx| cx.restart());
     cx.on_action(|_: &app::actions::ActSuggestChange, _| suggest::open());
+    cx.on_action(|act: &app::actions::ActUiFont, cx| {
+        ui_font::save(&act.0);
+        theme::init(cx);
+        set_app_menu(cx);
+        cx.refresh_windows();
+    });
     cx.on_action(|act: &app::actions::ActLeadSound, cx| {
         let choice = match act.0.as_str() {
             "thump" => lead_sound::Choice::Thump,
@@ -458,9 +466,15 @@ fn set_app_menu(cx: &mut gpui::App) {
             MenuItem::action(*label, app::actions::ActLeadSound(tags[i].into())).checked(ticked)
         }
     });
+    let font_saved = ui_font::load();
+    let font_rows = ui_font::FONTS.iter().map(|f| {
+        MenuItem::action(f.label, app::actions::ActUiFont(f.id.into()))
+            .checked(ui_font::ticked(font_saved, f.id))
+    });
     cx.set_menus([Menu::new("Seance").items([
         MenuItem::action("Suggest a Change…", app::actions::ActSuggestChange),
         MenuItem::separator(),
+        MenuItem::submenu(Menu::new("Font").items(font_rows)),
         MenuItem::submenu(Menu::new("Lead Reply Sound").items(rows)),
         MenuItem::separator(),
         MenuItem::action("Restart Seance", app::actions::ActRestart),

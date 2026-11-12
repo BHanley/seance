@@ -24,6 +24,11 @@ pub struct ActRestart;
 #[action(namespace = seance, no_json)]
 pub struct ActSuggestChange;
 
+/// "Font" submenu rows in the Seance menu: the UI font, by `ui_font` id.
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActUiFont(pub String);
+
 /// "Lead Reply Sound" submenu rows in the Seance menu.
 #[derive(Action, Clone, PartialEq, Deserialize)]
 #[action(namespace = seance, no_json)]
