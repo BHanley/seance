@@ -127,7 +127,7 @@ impl SeanceApp {
 
     /// Drawn only when the Claude check is not showing its own card.
     pub(super) fn render_welcome(&self, cx: &Context<Self>) -> Option<gpui::AnyElement> {
-        if !self.welcome.open || !matches!(self.first_run, super::first_run::FirstRun::Off) {
+        if !self.welcome.open || self.signin.first_run_up() {
             return None;
         }
         let card = self.welcome.card.min(CARDS.len() - 1);

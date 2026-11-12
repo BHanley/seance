@@ -8,6 +8,7 @@ mod chain;
 mod chat_api;
 mod chat_local;
 mod claude_check;
+mod claude_signin;
 mod clipboard;
 mod cmdlog;
 mod control;

@@ -34,40 +34,8 @@ pub fn starts_claude_here() -> bool {
     )
 }
 
-static HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// While Claude is missing or logged out, nothing starts a Claude pane on its
-/// own (new circles, the Seance Custom helper): each would only show a login
-/// screen, and the first-run card is where that gets sorted out. Set while the
-/// check runs and the card is up; released when it passes or is dismissed.
-pub fn hold_new_claude(on: bool) {
-    HELD.store(on, std::sync::atomic::Ordering::SeqCst);
-}
-
-pub fn claude_held() -> bool {
-    HELD.load(std::sync::atomic::Ordering::SeqCst)
-}
-
-/// May a new circle or helper start Claude now?
-pub fn may_start_claude(starts_here: bool, held: bool) -> bool {
-    starts_here && !held
-}
-
-/// Anthropic's official native installer.
-pub const INSTALL_COMMAND: &str = "curl -fsSL https://claude.ai/install.sh | bash";
-
-/// What the install pane runs: the installer, then a pause so the output stays
-/// readable instead of the pane closing the moment it finishes.
-pub fn install_pane_command() -> String {
-    format!(
-        "bash -c '{INSTALL_COMMAND}; echo; echo \"Done. Go back to the Seance card and press Check again.\"; read -n 1 -s'"
-    )
-}
-
 /// How long `claude auth status` gets before the answer is "unknown".
 const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
-
-const MARKER: &str = "claude_ready";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Verdict {
@@ -104,90 +72,9 @@ pub fn check() -> Verdict {
     decide(find_claude(), auth_status)
 }
 
-/// How long the user's login shell gets to report its PATH.
-const SHELL_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Where `claude` usually lands, in the order we look when the user's shell
-/// doesn't say: the native installer, Homebrew (Apple silicon, then Intel),
-/// npm's global prefix, and the old `claude migrate-installer` home.
-fn fallback_paths(home: &Path) -> Vec<PathBuf> {
-    vec![
-        home.join(".local/bin/claude"),
-        PathBuf::from("/opt/homebrew/bin/claude"),
-        PathBuf::from("/usr/local/bin/claude"),
-        home.join(".npm-global/bin/claude"),
-        home.join(".claude/local/claude"),
-    ]
-}
-
-/// The first `claude` that exists: along the login shell's PATH, in PATH
-/// order (what Terminal would run), then the usual install spots. A path
-/// that isn't absolute is skipped. `exists` is a parameter so the order is
-/// testable without touching the disk.
-fn pick_claude(
-    shell_path: Option<&str>,
-    home: &Path,
-    exists: impl Fn(&Path) -> bool,
-) -> Option<PathBuf> {
-    shell_path
-        .into_iter()
-        .flat_map(|p| p.split(':'))
-        .filter(|d| d.starts_with('/'))
-        .map(|d| Path::new(d).join("claude"))
-        .chain(fallback_paths(home))
-        .find(|p| exists(p))
-}
-
-/// The PATH of the user's login shell. Interactive too (`-lic`), so what
-/// `.zshrc` adds (nvm, mise, brew shellenv) counts, which `bash -lc` never
-/// saw. We read PATH rather than ask `command -v`, which answers with alias
-/// text when `claude` is an alias. Our own marker line picks the answer out
-/// of whatever the rc files print.
-fn login_shell_path() -> Option<String> {
-    let shell = std::env::var("SHELL")
-        .ok()
-        .filter(|s| s.starts_with('/'))
-        .unwrap_or_else(|| "/bin/zsh".into());
-    let mut child = Command::new(shell)
-        .args(["-lic", "printf '\\n__SEANCE_PATH__%s\\n' \"$PATH\""])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let mut stdout = child.stdout.take();
-    let reader = std::thread::spawn(move || {
-        let mut buf = String::new();
-        if let Some(s) = stdout.as_mut() {
-            let _ = std::io::Read::read_to_string(s, &mut buf);
-        }
-        buf
-    });
-    let deadline = std::time::Instant::now() + SHELL_TIMEOUT;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(25));
-            }
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-        }
-    }
-    let out = reader.join().unwrap_or_default();
-    out.lines()
-        .rev()
-        .find_map(|l| l.strip_prefix("__SEANCE_PATH__"))
-        .map(str::to_string)
-}
-
-pub(crate) fn find_claude() -> Option<PathBuf> {
-    let home = PathBuf::from(std::env::var_os("HOME")?);
-    pick_claude(login_shell_path().as_deref(), &home, |p| p.is_file())
-}
+pub(crate) use crate::claude_signin::{
+    already_passed, claude_held, find_claude, hold_new_claude, mark_passed, may_start_claude,
+};
 
 fn auth_status(claude: &Path) -> Auth {
     let Ok(mut child) = Command::new(claude)
@@ -235,98 +122,12 @@ fn parse_auth(json: &str) -> Auth {
     }
 }
 
-/// The command a login pane runs: the path we found, quoted, else `claude`.
-pub fn login_command(found: &Path) -> String {
-    format!("'{}'", found.display().to_string().replace('\'', r"'\''"))
-}
-
-fn marker_path() -> Option<PathBuf> {
-    crate::state::state_dir().ok().map(|d| d.join(MARKER))
-}
-
-/// Has the check passed on this machine before?
-pub fn already_passed() -> bool {
-    marker_path().is_some_and(|p| p.exists())
-}
-
-pub fn mark_passed() {
-    if let Some(p) = marker_path() {
-        if let Some(dir) = p.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let _ = std::fs::write(p, b"1");
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn at(p: &str) -> Option<PathBuf> {
         Some(PathBuf::from(p))
-    }
-
-    #[test]
-    fn claude_is_found_in_the_shell_path_first_then_the_usual_spots() {
-        let home = Path::new("/Users/me");
-        let has = |present: &'static [&'static str]| {
-            move |p: &Path| present.iter().any(|x| Path::new(x) == p)
-        };
-        let all = &[
-            "/opt/homebrew/bin/claude",
-            "/Users/me/.local/bin/claude",
-            "/usr/local/bin/claude",
-            "/Users/me/.npm-global/bin/claude",
-            "/Users/me/.claude/local/claude",
-            "/Users/me/.nvm/v22/bin/claude",
-        ];
-        // The shell's PATH wins, in PATH order (an nvm install from .zshrc).
-        assert_eq!(
-            pick_claude(
-                Some("/x:/Users/me/.nvm/v22/bin:/opt/homebrew/bin"),
-                home,
-                has(all)
-            ),
-            at("/Users/me/.nvm/v22/bin/claude")
-        );
-        // No shell answer: the fixed list, native installer first.
-        assert_eq!(
-            pick_claude(None, home, has(all)),
-            at("/Users/me/.local/bin/claude")
-        );
-        let rest = &all[2..5];
-        let order: Vec<_> = (0..3)
-            .map(|i| pick_claude(None, home, has(&rest[i..])))
-            .collect();
-        assert_eq!(
-            order,
-            vec![
-                at("/usr/local/bin/claude"),
-                at("/Users/me/.npm-global/bin/claude"),
-                at("/Users/me/.claude/local/claude"),
-            ]
-        );
-        assert_eq!(
-            pick_claude(
-                None,
-                home,
-                has(&["/opt/homebrew/bin/claude", "/usr/local/bin/claude"])
-            ),
-            at("/opt/homebrew/bin/claude")
-        );
-        // Relative PATH entries are ignored; nothing anywhere is None.
-        assert_eq!(pick_claude(Some("bin:.:"), home, has(&[])), None);
-    }
-
-    #[test]
-    fn a_hold_stops_new_claude_starts_until_the_check_passes() {
-        assert!(may_start_claude(true, false));
-        assert!(!may_start_claude(true, true), "held: logged out or missing");
-        assert!(!may_start_claude(false, false), "not the standalone build");
-        hold_new_claude(true);
-        assert!(claude_held());
-        hold_new_claude(false);
-        assert!(!claude_held());
     }
 
     #[test]
@@ -370,11 +171,5 @@ mod tests {
         assert_eq!(parse_auth(r#"{"loggedIn": false}"#), Auth::LoggedOut);
         assert_eq!(parse_auth("not json"), Auth::Unknown);
         assert_eq!(parse_auth("{}"), Auth::Unknown);
-    }
-
-    #[test]
-    fn login_command_quotes_paths() {
-        assert_eq!(login_command(Path::new("/a b/claude")), "'/a b/claude'");
-        assert_eq!(login_command(Path::new("/a'b/claude")), r"'/a'\''b/claude'");
     }
 }

@@ -51,6 +51,7 @@ mod redraw;
 #[cfg(test)]
 mod redraw_bench;
 mod sidebar;
+mod signin;
 mod sprite;
 mod stage;
 mod stage_parse;
@@ -368,11 +369,8 @@ pub struct SeanceApp {
     quicklaunch_checked: Option<std::time::Instant>,
     /// Open quicklaunch create/edit modal (None = closed).
     quicklaunch_editor: Option<quicklaunch::QuickLaunchEditor>,
-    first_run: first_run::FirstRun,
-    /// One re-check loop at a time while the first-run card waits on its terminal.
-    first_run_watching: bool,
-    /// The first-run card stepped out of Chat to show its terminal.
-    first_run_from_chat: bool,
+    /// The sign-in card (first run, and the corner "sign in again" one).
+    signin: signin::Ui,
     /// Settings > "Use Seance on your phone".
     phone: phone::Phone,
     afk: afk_ui::AfkUi,
@@ -631,9 +629,7 @@ impl SeanceApp {
             quicklaunch_mtime: None,
             quicklaunch_checked: None,
             quicklaunch_editor: None,
-            first_run: first_run::FirstRun::Off,
-            first_run_watching: false,
-            first_run_from_chat: false,
+            signin: signin::Ui::default(),
             phone: phone::Phone::default(),
             afk: afk_ui::AfkUi::default(),
             welcome: welcome::Welcome::default(),
@@ -658,6 +654,7 @@ impl SeanceApp {
         app.start_stage_ticker(cx);
         if !empty {
             app.start_first_run_check(cx);
+            app.start_relogin_watch(cx);
             app.start_update_checks(cx);
             app.start_welcome(cx);
             app.start_afk(cx);
@@ -3526,7 +3523,7 @@ impl Render for SeanceApp {
             .children(self.render_host_menu_scrim(window, cx))
             .children(self.render_palette(cx))
             .children(self.render_quicklaunch_editor(cx))
-            .children(self.render_first_run(cx))
+            .children(self.render_signin(cx))
             .children(self.render_phone(window, cx))
             .children(self.render_welcome(cx))
             .children(self.render_update_bar(cx))
