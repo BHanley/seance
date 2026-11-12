@@ -51,6 +51,7 @@ pub(super) struct KitUi {
     view: KitView,
     statuses: Vec<Status>,
     error: Option<String>,
+    note: Option<String>,
     picker: Option<Picker>,
 }
 
@@ -62,13 +63,12 @@ const PROMPTS: [&str; 4] = [
     "Every Monday, summarize what I shipped",
 ];
 
-/// "4 of 5 on": the switches that can be on, not the coming-soon one.
+/// "4 of 6 on": the switches that are on, of all of them.
 fn on_count(statuses: &[Status]) -> (usize, usize) {
-    let live = statuses
-        .iter()
-        .filter(|s| **s != Status::ComingSoon)
-        .count();
-    (statuses.iter().filter(|s| **s == Status::On).count(), live)
+    (
+        statuses.iter().filter(|s| **s == Status::On).count(),
+        statuses.len(),
+    )
 }
 
 impl SeanceApp {
@@ -81,6 +81,7 @@ impl SeanceApp {
         self.kit_refresh();
         self.kit.view = view;
         self.kit.error = None;
+        self.kit.note = None;
         self.kit.picker = None;
         cx.notify();
     }
@@ -114,7 +115,10 @@ impl SeanceApp {
             Status::Off => kit::on(item, &env),
             _ => return,
         };
-        self.kit.error = result.err();
+        self.kit.error = result.as_ref().err().cloned();
+        // This build does not run Invoke, so it cannot restart it.
+        self.kit.note = (item == Item::DesignSheets && result.is_ok())
+            .then(|| "Takes effect the next time Invoke starts.".to_string());
         self.kit_refresh();
         cx.notify();
     }
@@ -179,13 +183,18 @@ impl SeanceApp {
     }
 
     fn kit_error_line(&self) -> Option<AnyElement> {
-        self.kit.error.as_ref().map(|e| {
+        let (text, color) = match (&self.kit.error, &self.kit.note) {
+            (Some(e), _) => (e.clone(), SeancePalette::danger()),
+            (None, Some(n)) => (n.clone(), SeancePalette::text_faint()),
+            _ => return None,
+        };
+        Some(
             div()
                 .text_xs()
-                .text_color(SeancePalette::danger())
-                .child(e.clone())
-                .into_any_element()
-        })
+                .text_color(color)
+                .child(text)
+                .into_any_element(),
+        )
     }
 
     /// First run: six tiles. Tap one to turn it on or off.
@@ -193,7 +202,7 @@ impl SeanceApp {
         let tiles = ITEMS.iter().enumerate().map(|(i, item)| {
             let item = *item;
             let status = self.kit_status(i);
-            let live = status != Status::ComingSoon;
+            let live = matches!(status, Status::On | Status::Off);
             let t = div()
                 .id(("kit-tile", i))
                 .w(px(230.))
@@ -316,7 +325,7 @@ impl SeanceApp {
                                 .text_sm()
                                 .text_color(SeancePalette::text_faint())
                                 .child(match status {
-                                    Status::AlreadySetUp | Status::ComingSoon => {
+                                    Status::AlreadySetUp => {
                                         format!("{}. {}", status.label(), item.why())
                                     }
                                     _ => item.why().to_string(),
@@ -619,11 +628,8 @@ mod tests {
     }
 
     #[test]
-    fn the_count_leaves_out_coming_soon() {
+    fn the_count_is_the_switches_that_are_on() {
         use Status::*;
-        assert_eq!(
-            on_count(&[ComingSoon, On, On, AlreadySetUp, Off, On]),
-            (3, 5)
-        );
+        assert_eq!(on_count(&[Off, On, On, AlreadySetUp, Off, On]), (3, 6));
     }
 }
