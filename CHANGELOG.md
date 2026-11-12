@@ -17,6 +17,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.27] — 2026-11-12
+
+### Changed
+- Updates come from a feed on bike.rodeo and a GitHub release, so a downloaded Seance keeps itself current. Downloads follow redirects only to https, and the zip's sha256 is still checked against the feed.
+
 ## [0.28.26] — 2026-11-12
 
 ### Changed
