@@ -106,6 +106,13 @@ pub struct ActTogglePopout(pub String);
 #[action(namespace = seance, no_json)]
 pub struct ActKillWorkspace(pub String);
 
+/// Arm (first) / fire (second, inside the arm window) banishing one circle:
+/// Classic's × as a menu item, for views whose circle row shows the armed
+/// state itself (Stage's pills).
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = seance, no_json)]
+pub struct ActBanishCircle(pub String);
+
 /// Sleep a circle: every pane's process exits, the last frame stays readable,
 /// and it wakes back onto the same conversations. Daemon-side and global.
 #[derive(Action, Clone, PartialEq, Deserialize)]
