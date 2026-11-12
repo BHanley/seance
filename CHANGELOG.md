@@ -17,6 +17,13 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.30] — 2026-11-12
+
+### Changed
+- Signing in to Claude no longer opens a terminal. The first-run card installs Claude Code itself with a progress bar if it is missing, runs the sign-in for you (your browser opens), shows "Signed in as <you>", and lands you in your circle. If the browser doesn't open, "Copy link" and a paste-your-code step cover it.
+- A small card in Chat now offers "Sign in again" when your Claude sign-in expires within 3 days or already has. Checked on launch and every 30 minutes; "Later" hides it until the next check.
+- Claude Code is found through your login shell's PATH (Homebrew, npm and nvm installs set up in zsh files are no longer missed), then the usual install folders.
+
 ## [0.28.29] — 2026-11-12
 
 ### Changed
