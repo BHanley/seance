@@ -17,6 +17,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.29] — 2026-11-12
+
+### Changed
+- Seance opens in Chat on a fresh install. If you already picked a layout it stays; the first-run Claude sign-in still brings its terminal forward (stepping out of Chat for it) and returns you to Chat once you are signed in.
+
 ## [0.28.28] — 2026-11-12
 
 ### Fixed
