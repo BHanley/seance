@@ -369,6 +369,8 @@ pub struct SeanceApp {
     /// Open quicklaunch create/edit modal (None = closed).
     quicklaunch_editor: Option<quicklaunch::QuickLaunchEditor>,
     first_run: first_run::FirstRun,
+    /// One re-check loop at a time while the first-run card waits on its terminal.
+    first_run_watching: bool,
     /// Settings > "Use Seance on your phone".
     phone: phone::Phone,
     afk: afk_ui::AfkUi,
@@ -628,6 +630,7 @@ impl SeanceApp {
             quicklaunch_checked: None,
             quicklaunch_editor: None,
             first_run: first_run::FirstRun::Off,
+            first_run_watching: false,
             phone: phone::Phone::default(),
             afk: afk_ui::AfkUi::default(),
             welcome: welcome::Welcome::default(),

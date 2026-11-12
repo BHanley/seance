@@ -50,6 +50,29 @@ fn target_circle(asked: &str, selected: Option<&str>) -> String {
     }
 }
 
+/// What "start Claude here" does in a circle.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum StartPlan {
+    /// There is already one: return it, spawn nothing. The flag is whether it
+    /// is a Claude.
+    Reuse(String, bool),
+    Spawn,
+}
+
+/// A circle that already has its Claude lead is not given a second one, and
+/// with no Claude installed a circle that already has a pane is not given
+/// another shell: each click on a "Start Claude" button would otherwise open
+/// one more terminal. `panes` are the circle's non-file panes, in order.
+pub(crate) fn plan_start(lead: Option<&str>, claude_found: bool, panes: &[&str]) -> StartPlan {
+    if let Some(l) = lead {
+        return StartPlan::Reuse(l.to_string(), true);
+    }
+    match (claude_found, panes.first()) {
+        (false, Some(first)) => StartPlan::Reuse((*first).to_string(), false),
+        _ => StartPlan::Spawn,
+    }
+}
+
 impl Engine {
     /// Open the circle's first pane (Claude when `claude` is found, else a
     /// shell) and, for Claude, record it as the circle's lead. Returns the pane
@@ -60,6 +83,19 @@ impl Engine {
         claude: Option<&Path>,
     ) -> Result<(String, bool)> {
         let circle = target_circle(circle, self.selected_workspace.as_deref());
+        let in_circle: Vec<String> = self
+            .panes
+            .iter()
+            .filter(|p| p.workspace == circle && p.kind != "file")
+            .map(|p| p.slug.clone())
+            .collect();
+        let refs: Vec<&str> = in_circle.iter().map(String::as_str).collect();
+        let lead = self.local_lead(&circle);
+        if let StartPlan::Reuse(slug, is_claude) =
+            plan_start(lead.as_deref(), claude.is_some(), &refs)
+        {
+            return Ok((slug, is_claude));
+        }
         let (name, command, is_claude) = match plan_first_pane(claude) {
             FirstPane::Claude(c) => ("claude", Some(c), true),
             FirstPane::Shell => ("term", None, false),
@@ -92,6 +128,26 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn start_claude_here_never_adds_a_second_one() {
+        use StartPlan::*;
+        // A Claude lead is there: reuse it, however many times you click.
+        assert_eq!(
+            plan_start(Some("claude"), true, &["claude", "term"]),
+            Reuse("claude".into(), true)
+        );
+        // No Claude installed, a pane already there: no extra shell.
+        assert_eq!(
+            plan_start(None, false, &["term"]),
+            Reuse("term".into(), false)
+        );
+        // Nothing there yet: spawn (new circle, first click).
+        assert_eq!(plan_start(None, true, &[]), Spawn);
+        assert_eq!(plan_start(None, false, &[]), Spawn);
+        // Claude installed, only a shell in the circle: add Claude beside it.
+        assert_eq!(plan_start(None, true, &["term"]), Spawn);
+    }
 
     #[test]
     fn claude_when_installed_else_a_shell() {

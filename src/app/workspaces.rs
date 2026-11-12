@@ -1087,7 +1087,12 @@ impl SeanceApp {
         self.ensure_workspace_at_bottom(&name);
         // Standalone Mac: the circle opens with Claude as its lead (the
         // request follows the create on the same connection).
-        if crate::claude_check::starts_claude_here() {
+        // (Held while Claude is missing or logged out: the first-run card
+        // sorts that out, and each of these would only show a login screen.)
+        if crate::claude_check::may_start_claude(
+            crate::claude_check::starts_claude_here(),
+            crate::claude_check::claude_held(),
+        ) {
             let client = std::sync::Arc::clone(&self.client);
             let ws = name.clone();
             std::thread::spawn(move || {
@@ -1117,6 +1122,12 @@ impl SeanceApp {
     ) {
         use crate::seance_custom::{self as custom, Step};
         if self.empty_window || self.custom_checked {
+            return;
+        }
+        // Not while Claude is missing or logged out: the helper's lead would
+        // only show a login screen. Nothing is marked, so the next daemon
+        // state after the check passes makes it.
+        if crate::claude_check::claude_held() {
             return;
         }
         self.custom_checked = true;

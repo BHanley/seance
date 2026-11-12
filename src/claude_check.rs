@@ -34,6 +34,25 @@ pub fn starts_claude_here() -> bool {
     )
 }
 
+static HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// While Claude is missing or logged out, nothing starts a Claude pane on its
+/// own (new circles, the Seance Custom helper): each would only show a login
+/// screen, and the first-run card is where that gets sorted out. Set while the
+/// check runs and the card is up; released when it passes or is dismissed.
+pub fn hold_new_claude(on: bool) {
+    HELD.store(on, std::sync::atomic::Ordering::SeqCst);
+}
+
+pub fn claude_held() -> bool {
+    HELD.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// May a new circle or helper start Claude now?
+pub fn may_start_claude(starts_here: bool, held: bool) -> bool {
+    starts_here && !held
+}
+
 /// Anthropic's official native installer.
 pub const INSTALL_COMMAND: &str = "curl -fsSL https://claude.ai/install.sh | bash";
 
@@ -184,6 +203,17 @@ mod tests {
 
     fn at(p: &str) -> Option<PathBuf> {
         Some(PathBuf::from(p))
+    }
+
+    #[test]
+    fn a_hold_stops_new_claude_starts_until_the_check_passes() {
+        assert!(may_start_claude(true, false));
+        assert!(!may_start_claude(true, true), "held: logged out or missing");
+        assert!(!may_start_claude(false, false), "not the standalone build");
+        hold_new_claude(true);
+        assert!(claude_held());
+        hold_new_claude(false);
+        assert!(!claude_held());
     }
 
     #[test]
