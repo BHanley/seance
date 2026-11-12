@@ -239,6 +239,25 @@ const HERBARIUM: Chrome = chrome([
     0x43407F, 0x7471A6, 0x2E5A1E, 0x9A1040,
 ]);
 
+// Plain themes: flat grounds with one accent, no atmosphere. `violet` repeats
+// the accent. Terminal colors are all at least 4.5:1 on their ground.
+const PLAIN_DARK: Chrome = chrome([
+    0x121212, 0x181818, 0x1F1F1F, 0x2C2C2C, 0xECECEC, 0xB4B4B4, 0x8A8A8A, 0x6AA8FF, 0x24364F,
+    0x6AA8FF, 0x24364F, 0x7CC48A, 0xFF7B7B,
+]);
+const PLAIN_LIGHT: Chrome = chrome([
+    0xFFFFFF, 0xF4F4F5, 0xF4F4F5, 0xDEDEE2, 0x141414, 0x4A4A4F, 0x76767C, 0x1F5FD1, 0xE3ECFB,
+    0x1F5FD1, 0xE3ECFB, 0x1F7A3A, 0xC42B2B,
+]);
+const PAPER: Chrome = chrome([
+    0xF8F5EE, 0xEFEBE1, 0xEFEBE1, 0xDCD6C8, 0x22201C, 0x4F4A41, 0x7A7366, 0x8A4B14, 0xECE2CF,
+    0x8A4B14, 0xECE2CF, 0x3D6B2C, 0xA32F22,
+]);
+const HIGH_CONTRAST: Chrome = chrome([
+    0x000000, 0x0A0A0A, 0x111111, 0x4A4A4A, 0xFFFFFF, 0xE0E0E0, 0xB8B8B8, 0xFFD23F, 0x2A2A2A,
+    0xFFD23F, 0x2A2A2A, 0x5CFF8A, 0xFF6B6B,
+]);
+
 // Castle: grey stone blocks with a little moss on the chrome, torchlight for
 // the accent. The terminal ground stays flat stone, a step below the tile.
 const CASTLE: Chrome = chrome([
@@ -275,7 +294,7 @@ pub const NEON_STEEL: Texture = Texture {
 };
 
 /// Every scheme, in menu order.
-pub static SCHEMES: [Scheme; 14] = [
+pub static SCHEMES: [Scheme; 18] = [
     Scheme {
         id: "candlelit",
         label: "Candlelit",
@@ -518,6 +537,74 @@ pub static SCHEMES: [Scheme; 14] = [
         }),
         lead_bubble: None,
     },
+    Scheme {
+        id: "plain-dark",
+        label: "Plain Dark",
+        light: false,
+        chrome: PLAIN_DARK,
+        term: Some(term(
+            false,
+            &PLAIN_DARK,
+            spec([
+                0x121212, 0xECECEC, 0x7CC48A, 0xE5C07B, 0x6AA8FF, 0xC792EA, 0xFF7B7B, 0x6FD3D0,
+                0x8A8A8A,
+            ]),
+        )),
+        texture: None,
+        me_bubble: None,
+        lead_bubble: None,
+    },
+    Scheme {
+        id: "plain-light",
+        label: "Plain Light",
+        light: true,
+        chrome: PLAIN_LIGHT,
+        term: Some(term(
+            true,
+            &PLAIN_LIGHT,
+            spec([
+                0xFFFFFF, 0x141414, 0x1F7A3A, 0x7A5A00, 0x1F5FD1, 0x8A2BA8, 0xC42B2B, 0x0F6B73,
+                0x5C5C62,
+            ]),
+        )),
+        texture: None,
+        me_bubble: None,
+        lead_bubble: None,
+    },
+    Scheme {
+        id: "paper",
+        label: "Paper",
+        light: true,
+        chrome: PAPER,
+        term: Some(term(
+            true,
+            &PAPER,
+            spec([
+                0xF8F5EE, 0x22201C, 0x3D6B2C, 0x7A5800, 0x24527A, 0x7A3A6E, 0xA32F22, 0x1E5F5F,
+                0x5E574B,
+            ]),
+        )),
+        texture: None,
+        me_bubble: None,
+        lead_bubble: None,
+    },
+    Scheme {
+        id: "high-contrast",
+        label: "High Contrast",
+        light: false,
+        chrome: HIGH_CONTRAST,
+        term: Some(term(
+            false,
+            &HIGH_CONTRAST,
+            spec([
+                0x000000, 0xFFFFFF, 0x5CFF8A, 0xFFD23F, 0x6AB0FF, 0xE08AFF, 0xFF6B6B, 0x4FE8F0,
+                0xB8B8B8,
+            ]),
+        )),
+        texture: None,
+        me_bubble: None,
+        lead_bubble: None,
+    },
 ];
 
 /// Look a scheme up by id. Ids are lowercase; input is trimmed and
@@ -596,7 +683,17 @@ mod tests {
             assert!(id_list().contains(s.id));
         }
         let light: Vec<_> = SCHEMES.iter().filter(|s| s.light).map(|s| s.id).collect();
-        assert_eq!(light, ["ouija", "riso", "parlor", "herbarium"]);
+        assert_eq!(
+            light,
+            [
+                "ouija",
+                "riso",
+                "parlor",
+                "herbarium",
+                "plain-light",
+                "paper"
+            ]
+        );
     }
 
     #[test]
@@ -606,8 +703,9 @@ mod tests {
         let neon = find("neon-district").expect("neon-district scheme");
         assert_eq!(neon.label, "Neon District");
         assert_eq!(neon.texture.as_ref().unwrap().lamp, Some(Lamp::Tube));
-        // Appended last, so no saved index moves.
-        assert_eq!(index_of("neon-district"), Some(SCHEMES.len() - 1));
+        // Appended after the others, so no saved index moves; the plain
+        // themes come after it.
+        assert_eq!(index_of("neon-district"), Some(13));
         assert_eq!(index_of("castle"), Some(12));
         let skinned: Vec<_> = SCHEMES
             .iter()
@@ -665,6 +763,21 @@ mod tests {
                 "{}",
                 s.id
             );
+        }
+    }
+
+    #[test]
+    fn the_plain_themes_are_flat_and_their_terminal_colors_read() {
+        let ids: Vec<_> = SCHEMES[14..].iter().map(|s| s.id).collect();
+        assert_eq!(ids, ["plain-dark", "plain-light", "paper", "high-contrast"]);
+        for s in &SCHEMES[14..] {
+            assert!(s.texture.is_none() && s.me_bubble.is_none() && s.lead_bubble.is_none());
+            let t = s.term.unwrap();
+            // The six colors programs print in, and gray, on the ground.
+            for slot in [1, 2, 3, 4, 5, 6, 8] {
+                assert!(contrast(t.ansi[slot], t.bg) >= 4.5, "{} ansi {slot}", s.id);
+            }
+            assert!(contrast(t.fg, t.bg) >= 4.5, "{}", s.id);
         }
     }
 
