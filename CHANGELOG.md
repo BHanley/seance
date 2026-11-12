@@ -17,6 +17,12 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.25] — 2026-11-12
+
+### Fixed
+- The theme list in the mark menu and the Make it yours pickers (theme, font, sound) fit the window: they scroll inside the room the window has and open with the ticked row in view.
+- "Use Seance on your phone": the card is sized to the window and shows "More below" with a fade while steps are out of sight, Close sits inside the card, and the QR link has room under it.
+
 ## [0.28.24] — 2026-11-12
 
 ### Changed
