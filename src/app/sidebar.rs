@@ -64,8 +64,13 @@ impl SeanceApp {
     /// window and the client quits on `Kicked`). Anchored under the brand
     /// header; a transparent full-window backdrop behind it eats the
     /// click-away, same trick as the quicklaunch editor overlay.
-    pub(super) fn render_gui_menu(&self, cx: &Context<Self>) -> Option<gpui::AnyElement> {
+    pub(super) fn render_gui_menu(
+        &self,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> Option<gpui::AnyElement> {
         if !self.gui_menu_open {
+            self.gui_menu_scrolled.set(false);
             return None;
         }
         let self_id = self.window_id.clone();
@@ -87,6 +92,18 @@ impl SeanceApp {
             .iter()
             .map(|w| (w.id.clone(), w.label.clone(), w.workspace_count))
             .collect();
+        // The theme list takes what the window has left after the rows above
+        // it (a line each) and the version and grimoire rows below; it scrolls
+        // inside that, and opens with the active theme in view.
+        let list_h = super::util::list_max_height(
+            f32::from(window.viewport_size().height),
+            top + 24. * rows.len() as f32 + 190.,
+        );
+        if !self.gui_menu_scrolled.replace(true) {
+            if let Some(ix) = theme_list_index(crate::theme::active().id) {
+                self.gui_menu_scroll.scroll_to_item(ix);
+            }
+        }
         Some(
             div()
                 .id("gui-menu-backdrop")
@@ -185,9 +202,19 @@ impl SeanceApp {
                                 })
                         }))
                         .child(div().my_1().h(px(1.)).bg(SeancePalette::border()))
-                        .children(self.render_theme_rows(ThemeGroup::Dark, cx))
-                        .children(self.render_theme_rows(ThemeGroup::Light, cx))
-                        .children(self.render_theme_rows(ThemeGroup::Textured, cx))
+                        .child(
+                            div()
+                                .id("gui-theme-list")
+                                .flex()
+                                .flex_col()
+                                .gap_0p5()
+                                .max_h(px(list_h))
+                                .overflow_y_scroll()
+                                .track_scroll(&self.gui_menu_scroll)
+                                .children(self.render_theme_rows(ThemeGroup::Dark, cx))
+                                .children(self.render_theme_rows(ThemeGroup::Light, cx))
+                                .children(self.render_theme_rows(ThemeGroup::Textured, cx)),
+                        )
                         .child(div().my_1().h(px(1.)).bg(SeancePalette::border()))
                         .child(
                             div()
@@ -1603,6 +1630,25 @@ impl SeanceApp {
     }
 }
 
+/// The position of the active scheme among the theme list's children: a
+/// heading per group, then its schemes, in the order the menu draws them.
+fn theme_list_index(active: &str) -> Option<usize> {
+    let mut ix = 0;
+    for group in [ThemeGroup::Dark, ThemeGroup::Light, ThemeGroup::Textured] {
+        ix += 1;
+        for s in seance_core::schemes::SCHEMES
+            .iter()
+            .filter(|s| ThemeGroup::of(s) == group)
+        {
+            if s.id == active {
+                return Some(ix);
+            }
+            ix += 1;
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -1624,6 +1670,22 @@ mod tests {
         assert_eq!(total, SCHEMES.len());
         assert!(!ids(ThemeGroup::Dark).contains(&"castle"));
         assert!(!ids(ThemeGroup::Light).contains(&"neon-district"));
+    }
+
+    #[test]
+    fn the_active_theme_has_its_own_row_in_the_list() {
+        use seance_core::schemes::SCHEMES;
+        let mut seen: Vec<usize> = SCHEMES
+            .iter()
+            .map(|s| theme_list_index(s.id).expect(s.id))
+            .collect();
+        let n = seen.len();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), n, "every theme has a distinct row");
+        // Three headings sit among the rows.
+        assert_eq!(*seen.last().unwrap(), n + 2);
+        assert_eq!(theme_list_index("no-such-theme"), None);
     }
 
     use super::*;

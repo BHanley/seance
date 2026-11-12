@@ -516,3 +516,25 @@ mod tests {
         assert!(!arrow_stands_in_for_page("k", &mods(false, true), true));
     }
 }
+
+/// A popover list is never shorter than this, however small the window.
+const MIN_LIST_H: f32 = 120.;
+
+/// The tallest a list inside a popover may be so the popover stays inside
+/// the window: the window's height less `chrome`, the room everything else
+/// in it (and the margin) takes. It scrolls inside this.
+pub(super) fn list_max_height(window_h: f32, chrome: f32) -> f32 {
+    (window_h - chrome).max(MIN_LIST_H)
+}
+
+#[cfg(test)]
+mod list_height_tests {
+    use super::*;
+
+    #[test]
+    fn a_popover_list_fits_the_window_but_never_collapses() {
+        assert_eq!(list_max_height(890., 390.), 500.);
+        assert_eq!(list_max_height(300., 390.), MIN_LIST_H);
+        assert_eq!(list_max_height(0., 0.), MIN_LIST_H);
+    }
+}
