@@ -282,6 +282,7 @@ pub fn init(cx: &mut App) {
     let p = palette();
     let installed_fonts: std::collections::HashSet<String> =
         cx.text_system().all_font_names().into_iter().collect();
+    let all_fonts = installed_fonts.clone();
     let theme = Theme::global_mut(cx);
 
     // 2. Overwrite ThemeColor fields with the scheme's palette. `theme` derefs
@@ -332,6 +333,12 @@ pub fn init(cx: &mut App) {
         ]) {
             theme.mono_font_family = f;
         }
+    }
+
+    // 5. The UI font pick (Seance menu > Font). Only `font_family` moves, the
+    //    mono family stays; a pick whose family doesn't resolve is System.
+    if let Some(family) = crate::ui_font::resolve(crate::ui_font::load(), &all_fonts) {
+        theme.font_family = family.into();
     }
 }
 
