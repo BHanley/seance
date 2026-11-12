@@ -20,7 +20,7 @@ use anyhow::{anyhow, bail, Context as _, Result};
 use serde::Deserialize;
 
 /// Where the feed is unless `seance-update-feed` says otherwise.
-pub const DEFAULT_FEED: &str = "file:///Users/Shared/Seance-test/latest.json";
+pub const DEFAULT_FEED: &str = "https://bike.rodeo/rwgps/seance-get-k7m2qx/latest.json";
 /// How often the app looks again.
 pub const CHECK_EVERY: Duration = Duration::from_secs(3600);
 /// A click's consent for the sessions restart is good for this long.
@@ -166,9 +166,24 @@ pub fn location_message(loc: &Location) -> Option<&'static str> {
 
 // ---- fetching ---------------------------------------------------------------
 
+/// What every download starts with: fail on an HTTP error, follow redirects (a
+/// GitHub release asset answers with one to its storage host) but only to
+/// https and only a few, so a redirect cannot downgrade the download.
+fn curl_base_args() -> [&'static str; 7] {
+    [
+        "-fsSL",
+        "--max-time",
+        "900",
+        "--proto-redir",
+        "=https",
+        "--max-redirs",
+        "5",
+    ]
+}
+
 fn curl(args: &[&str]) -> Result<Vec<u8>> {
     let out = Command::new("curl")
-        .args(["-fsSL", "--max-time", "900"])
+        .args(curl_base_args())
         .args(args)
         .output()
         .context("could not run curl")?;

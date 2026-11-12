@@ -232,3 +232,25 @@ fn a_swap_must_keep_the_signing_identity_once_there_is_one() {
     assert!(e.contains("different certificate"), "{e}");
     assert!(identity_allows_swap(&leaf, &SigningId::Other).is_err());
 }
+
+#[test]
+fn the_default_feed_is_https_and_downloads_follow_redirects_only_to_https() {
+    assert_eq!(
+        DEFAULT_FEED,
+        "https://bike.rodeo/rwgps/seance-get-k7m2qx/latest.json"
+    );
+    assert_eq!(
+        source_of(DEFAULT_FEED).unwrap(),
+        Source::Https(DEFAULT_FEED.to_string())
+    );
+    // A GitHub release asset redirects to its storage host: follow it, but
+    // never to plain http, and not forever.
+    let args = curl_base_args();
+    assert!(args[0].contains('L'), "redirects are followed");
+    let at = |flag: &str| args.iter().position(|a| *a == flag).unwrap();
+    assert_eq!(args[at("--proto-redir") + 1], "=https");
+    assert_eq!(args[at("--max-redirs") + 1], "5");
+    // The zip is still checked against the feed's sha256 after any redirect.
+    assert!(sha_matches(SHA, &SHA.to_uppercase()));
+    assert!(!sha_matches(SHA, &"0".repeat(64)));
+}
