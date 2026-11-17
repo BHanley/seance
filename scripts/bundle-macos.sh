@@ -106,6 +106,9 @@ rmdir "$APP/Contents/Resources/sounds" 2>/dev/null || true
 
 mkdir -p "$APP/Contents/Resources/skills"
 cp -R "$ROOT/skills/seance-control" "$APP/Contents/Resources/skills/"
+# The commit this app was built from, so a check can tell when the hub on the
+# other machine runs different code.
+git -C "$ROOT" rev-parse HEAD > "$APP/Contents/Resources/build-commit" 2>/dev/null || true
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
