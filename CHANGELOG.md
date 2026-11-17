@@ -17,6 +17,14 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.32] — 2026-11-17
+
+### Fixed
+- Chat: right-click on a bubble where you selected some text now offers "Copy selection", which copies just that text. With nothing selected it stays "Copy text" for the whole message. (Cmd+C already copied only the selection.)
+
+### Changed
+- Invoke chat is bundled from its latest build: message text is selectable with the menu only on the ··· button, and a permission prompt's countdown no longer makes it look new.
+
 ## [0.28.31] — 2026-11-12
 
 ### Added
