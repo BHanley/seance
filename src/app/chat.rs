@@ -1436,6 +1436,17 @@ fn attachment_link(id: i64, a: &Attachment, ink: Option<Hsla>) -> AnyElement {
         .into_any_element()
 }
 
+/// What the bubble menu's copy item says and copies: the selected text when
+/// something is selected, else the whole message.
+fn copy_choice(selected: &str, whole: &str) -> (&'static str, String) {
+    let sel = selected.trim();
+    if sel.is_empty() {
+        ("Copy text", whole.to_string())
+    } else {
+        ("Copy selection", sel.to_string())
+    }
+}
+
 /// A bubble's right-click menu. It reads the circle list when it opens, so
 /// no bubble holds a copy of it.
 fn bubble_menu(
@@ -1456,8 +1467,10 @@ fn bubble_menu(
             let _ = weak.update(cx, |a, cx| a.chat_reply_to(draft, cx));
         }));
     }
-    let text = m.text.clone();
-    menu = menu.item(PopupMenuItem::new("Copy text").on_click(move |_, _, cx| {
+    // Read the selection as the menu opens: a right-click does not clear it
+    // (only a left press does), and the item is built on that same click.
+    let (label, text) = copy_choice(&window.selected_text(cx), &m.text);
+    menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
         let _ = crate::clipboard::copy_text_to_clipboard(&text, cx);
     }));
     if local {
@@ -4449,6 +4462,25 @@ impl SeanceApp {
 
 #[cfg(test)]
 mod tests {
+    use super::copy_choice;
+
+    #[test]
+    fn copy_takes_the_selection_and_falls_back_to_the_whole_message() {
+        let whole = "Hello brave new world";
+        assert_eq!(
+            copy_choice("brave", whole),
+            ("Copy selection", "brave".to_string())
+        );
+        // Selecting by drag often catches a trailing newline or space.
+        assert_eq!(
+            copy_choice("  brave \n", whole),
+            ("Copy selection", "brave".to_string())
+        );
+        for none in ["", "   ", "\n"] {
+            assert_eq!(copy_choice(none, whole), ("Copy text", whole.to_string()));
+        }
+    }
+
     #[test]
     fn move_to_space_lists_every_other_space_and_moves_the_circle() {
         let mut spaces = seance_core::spaces::Spaces::default();
