@@ -390,13 +390,25 @@ fn curl(path: &str, secs: u64, post: Option<&serde_json::Value>) -> Result<Vec<u
 fn outcome(out: std::process::Output) -> Result<Vec<u8>> {
     if !out.status.success() {
         if let Some(said) = refusal(&out.stdout) {
-            return Err(anyhow!("{said}"));
+            return Err(anyhow::Error::new(Refused(said)));
         }
         let err = String::from_utf8_lossy(&out.stderr);
         return Err(anyhow!("{}", err.trim()));
     }
     Ok(out.stdout)
 }
+
+/// Invoke answered and said no (as opposed to not answering).
+#[derive(Debug)]
+pub struct Refused(pub String);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Refused {}
 
 /// What Invoke said when it refused a request: its `{"error": ...}` text.
 fn refusal(body: &[u8]) -> Option<String> {

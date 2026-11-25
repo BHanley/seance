@@ -298,15 +298,28 @@ pub(super) struct Dialog {
     named: bool,
     paste: Entity<InputState>,
     name: Entity<InputState>,
+    /// A pasted link is being looked up.
+    resolving: bool,
     mine: Mine,
     hits: Option<Vec<Issue>>,
     picked: Option<Issue>,
+}
+
+/// Chords the dialog keeps from the app behind it (new pane, kill pane, next
+/// circle...). Plain keys and editing chords go to the inputs.
+fn swallows(key: &str, mods: &gpui::Modifiers) -> bool {
+    let editing =
+        mods.platform && !mods.control && !mods.alt && matches!(key, "a" | "c" | "v" | "x" | "z");
+    (mods.control || mods.alt || mods.platform) && !editing
 }
 
 /// What the app keeps for the dialog.
 #[derive(Default)]
 pub(super) struct NewCircleUi {
     dlg: Option<Dialog>,
+    /// Counts openings, so an answer that comes back after Esc and a reopen
+    /// is dropped.
+    gen: u64,
     /// Set by Create for the first pane's command; taken when it spawns.
     spawn_kind: Option<Kind>,
 }
@@ -352,13 +365,19 @@ impl SeanceApp {
             named: false,
             paste,
             name,
+            resolving: false,
             mine: Mine::Loading,
             hits: None,
             picked: None,
         });
+        self.new_circle.gen += 1;
+        let g = self.new_circle.gen;
         cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
             let got = cx.background_executor().spawn(async { fetch_mine() }).await;
             let _ = this.update(cx, |this, cx| {
+                if this.new_circle.gen != g {
+                    return;
+                }
                 if let Some(d) = this.new_circle.dlg.as_mut() {
                     d.mine = mine_from(got);
                 }
@@ -373,6 +392,7 @@ impl SeanceApp {
     pub(super) fn new_circle_key(
         &mut self,
         key: &str,
+        mods: gpui::Modifiers,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -380,25 +400,31 @@ impl SeanceApp {
             return false;
         };
         let first = d.kind.is_none();
+        if key != "escape" && swallows(key, &mods) {
+            return true;
+        }
         match key {
             "escape" => {
                 // The plain circle, as "+" made it before the dialog.
                 self.new_circle.dlg = None;
                 self.make_new_circle(None, window, cx);
             }
-            "p" if first => self.nc_kind(Kind::Personal, window, cx),
-            "w" if first => self.nc_kind(Kind::Work, window, cx),
+            "p" if first && !mods.modified() => self.nc_kind(Kind::Personal, window, cx),
+            "w" if first && !mods.modified() => self.nc_kind(Kind::Work, window, cx),
             _ => return first,
         }
         true
     }
 
+    /// Focus an input once it is drawn (next frame), not before.
     fn nc_focus(&self, name: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(d) = self.new_circle.dlg.as_ref() {
-            let input = if name { &d.name } else { &d.paste };
-            let handle = input.read(cx).focus_handle(cx);
-            window.focus(&handle, cx);
-        }
+        cx.defer_in(window, move |this, window, cx| {
+            if let Some(d) = this.new_circle.dlg.as_ref() {
+                let input = if name { &d.name } else { &d.paste };
+                let handle = input.read(cx).focus_handle(cx);
+                window.focus(&handle, cx);
+            }
+        });
     }
 
     fn nc_kind(&mut self, kind: Kind, window: &mut Window, cx: &mut Context<Self>) {
@@ -436,13 +462,39 @@ impl SeanceApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let g = self.new_circle.gen;
+        if pick {
+            if let Some(d) = self.new_circle.dlg.as_mut() {
+                d.resolving = true;
+            }
+        }
         cx.spawn_in(window, async move |this: gpui::WeakEntity<Self>, cx| {
             let got = cx
                 .background_executor()
-                .spawn(async move { fetch_issue(&owner, &repo, n) })
+                .spawn({
+                    let (o, r) = (owner.clone(), repo.clone());
+                    async move { fetch_issue(&o, &r, n) }
+                })
                 .await;
             let _ = this.update_in(cx, |this, window, cx| {
-                let Some(i) = got else { return };
+                if this.new_circle.gen != g {
+                    return;
+                }
+                if let Some(d) = this.new_circle.dlg.as_mut() {
+                    d.resolving = false;
+                }
+                // Without gh a pasted link still works: the link is all the
+                // lead needs.
+                let found = got.or_else(|| {
+                    pick.then(|| Issue {
+                        url: format!("https://github.com/{owner}/{repo}/issues/{n}"),
+                        owner,
+                        repo,
+                        number: n,
+                        ..Default::default()
+                    })
+                });
+                let Some(i) = found else { return };
                 if pick {
                     this.nc_named(Some(i), window, cx);
                 } else if let Some(p) = this.new_circle.dlg.as_mut().and_then(|d| d.picked.as_mut())
@@ -463,6 +515,9 @@ impl SeanceApp {
             return;
         };
         let text = d.paste.read(cx).value().trim().to_string();
+        if d.resolving {
+            return;
+        }
         if let Some(found) = parse_issue_ref(&text) {
             self.nc_resolve(found, true, window, cx);
         } else if !text.is_empty() {
@@ -470,12 +525,16 @@ impl SeanceApp {
                 Mine::Got(m) => m.clone(),
                 _ => Vec::new(),
             };
+            let g = self.new_circle.gen;
             cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
                 let got = cx
                     .background_executor()
                     .spawn(async move { fetch_search(&text, &mine) })
                     .await;
                 let _ = this.update(cx, |this, cx| {
+                    if this.new_circle.gen != g {
+                        return;
+                    }
                     if let Some(d) = this.new_circle.dlg.as_mut() {
                         d.hits = Some(got.unwrap_or_default());
                     }
@@ -520,23 +579,29 @@ impl SeanceApp {
         let space = target_space(kind, &self.shown_space(), &list, spaces.default_id());
         let command = crate::term_config::get().seance_new_circle_command.clone();
         let sends = command_takes_tasks(command.as_deref());
-        self.new_circle.spawn_kind = Some(kind);
         let Some(ws) = self.make_new_circle(Some(space), window, cx) else {
             return;
         };
         let name = d.name.read(cx).value().trim().to_string();
+        self.new_circle.spawn_kind = Some(kind);
         self.commit_rename(&name, cx);
-        self.restore_keyboard_focus(window, cx);
+        // The rename box queued a focus of its own; take focus back after it.
+        cx.defer_in(window, |this, window, cx| {
+            this.restore_keyboard_focus(window, cx)
+        });
         if let (Some(issue), true, true) = (d.picked, kind == Kind::Work, sends) {
             let text = first_message(&issue.url);
-            // The hub refuses until it lists a pane in the circle: try until
-            // it takes it, once.
+            // The hub refuses until it lists a pane in the circle: try again
+            // while it refuses. Any other failure (no answer, a timeout) may
+            // have been delivered, so it is not repeated.
             std::thread::spawn(move || {
                 for _ in 0..20 {
-                    if crate::chat_api::send_when_ready(&ws, &text).is_ok() {
-                        return;
+                    match crate::chat_api::send_when_ready(&ws, &text) {
+                        Err(e) if e.downcast_ref::<crate::chat_api::Refused>().is_some() => {
+                            std::thread::sleep(Duration::from_millis(1500));
+                        }
+                        _ => return,
                     }
-                    std::thread::sleep(Duration::from_millis(1500));
                 }
             });
         }
@@ -679,46 +744,42 @@ impl SeanceApp {
                     )
                     .child(Input::new(&d.paste))
                     .child(
-                        div().flex().flex_col().children(
-                            list.unwrap_or_default()
-                                .iter()
-                                .take(6)
-                                .enumerate()
-                                .map(|(n, i)| {
-                                    let pick = i.clone();
-                                    div()
-                                        .id(SharedString::from(format!("nc-issue-{n}")))
-                                        .flex()
-                                        .justify_between()
-                                        .gap_3()
-                                        .px_2()
-                                        .py_1()
-                                        .rounded_md()
-                                        .text_sm()
-                                        .cursor_pointer()
-                                        .hover(|s| s.bg(SeancePalette::surface()))
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            let (found, issue) = (
-                                                (
-                                                    pick.owner.clone(),
-                                                    pick.repo.clone(),
-                                                    pick.number,
-                                                ),
-                                                pick.clone(),
-                                            );
-                                            this.nc_named(Some(issue), window, cx);
-                                            this.nc_resolve(found, false, window, cx);
-                                        }))
-                                        .child(div().truncate().child(i.title.clone()))
-                                        .child(
-                                            div()
-                                                .flex_none()
-                                                .text_xs()
-                                                .text_color(SeancePalette::text_faint())
-                                                .child(format!("{} {}", i.repo, i.number)),
-                                        )
-                                }),
-                        ),
+                        div()
+                            .id("nc-issues")
+                            .max_h(px(240.))
+                            .overflow_y_scroll()
+                            .flex()
+                            .flex_col()
+                            .children(list.unwrap_or_default().iter().enumerate().map(|(n, i)| {
+                                let pick = i.clone();
+                                div()
+                                    .id(SharedString::from(format!("nc-issue-{n}")))
+                                    .flex()
+                                    .justify_between()
+                                    .gap_3()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .text_sm()
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(SeancePalette::surface()))
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        let (found, issue) = (
+                                            (pick.owner.clone(), pick.repo.clone(), pick.number),
+                                            pick.clone(),
+                                        );
+                                        this.nc_named(Some(issue), window, cx);
+                                        this.nc_resolve(found, false, window, cx);
+                                    }))
+                                    .child(div().truncate().child(i.title.clone()))
+                                    .child(
+                                        div()
+                                            .flex_none()
+                                            .text_xs()
+                                            .text_color(SeancePalette::text_faint())
+                                            .child(format!("{} {}", i.repo, i.number)),
+                                    )
+                            })),
                     )
                     .child(
                         div()
@@ -755,12 +816,13 @@ impl SeanceApp {
                             .rounded_md()
                             .border_1()
                             .border_color(SeancePalette::border())
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(gpui::FontWeight::BOLD)
-                                    .child(i.title.clone()),
-                            )
+                            .child(div().text_sm().font_weight(gpui::FontWeight::BOLD).child(
+                                if i.title.is_empty() {
+                                    i.url.clone()
+                                } else {
+                                    i.title.clone()
+                                },
+                            ))
                             .child(faint(meta.join(" · ").into()))
                             .children(
                                 [
@@ -929,6 +991,23 @@ mod tests {
         assert!(!command_takes_tasks(None));
         assert!(first_message("https://github.com/acme/widgets/issues/1")
             .starts_with("Start from this issue: https://github.com/acme/widgets/issues/1\n"));
+    }
+
+    #[test]
+    fn the_dialog_keeps_app_chords_but_not_typing_or_editing() {
+        let m = |platform, control, alt| gpui::Modifiers {
+            platform,
+            control,
+            alt,
+            ..Default::default()
+        };
+        assert!(!swallows("p", &m(false, false, false)));
+        assert!(!swallows("v", &m(true, false, false)));
+        assert!(swallows("w", &m(true, false, false)));
+        assert!(swallows("n", &m(true, false, false)));
+        assert!(swallows("w", &m(false, true, false)));
+        assert!(swallows("pageup", &m(false, true, false)));
+        assert!(swallows("n", &m(false, false, true)));
     }
 
     #[test]

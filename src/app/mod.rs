@@ -1860,7 +1860,7 @@ impl SeanceApp {
         let key = ks.key.as_str();
 
         // ---- the New circle dialog: Esc, and P or W on its first step ----
-        if self.new_circle_key(key, window, cx) {
+        if self.new_circle_key(key, ks.modifiers, window, cx) {
             cx.stop_propagation();
             return;
         }
