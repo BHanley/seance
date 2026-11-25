@@ -17,6 +17,13 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.34] — 2026-11-25
+
+### Fixed
+- Drag a circle in Chat to reorder it or move it to another space.
+- Picks on a design sheet go to the circle that showed it.
+- The Invoke chat's bundled Python no longer carries compiled cache files, which held a build path.
+
 ## [0.28.33] — 2026-11-24
 
 ### Fixed

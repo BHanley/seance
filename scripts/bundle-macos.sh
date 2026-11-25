@@ -129,6 +129,8 @@ if [[ -n "${SEANCE_INVOKE_DIR:-}${SEANCE_PYTHON_DIR:-}" ]]; then
   INV="$APP/Contents/Resources/invoke"
   mkdir -p "$INV"
   cp -R "$SEANCE_PYTHON_DIR" "$INV/python"
+  # Compiled caches record the build machine's paths; Python rebuilds them.
+  find "$INV/python" -name __pycache__ -type d -prune -exec rm -rf {} +
   cp "$SEANCE_INVOKE_DIR/seance-chat" "$INV/seance-chat"
   cp -R "$SEANCE_INVOKE_DIR/seance-chat-web" "$INV/seance-chat-web"
   chmod +x "$INV/seance-chat"
