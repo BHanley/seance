@@ -17,6 +17,11 @@ Unreleased work can sit under `## [Unreleased]` until the version bump.
 
 ## [Unreleased]
 
+## [0.28.33] — 2026-11-24
+
+### Fixed
+- Chat: dragging a circle in the list now works. Drop it on another circle in the same space to take its place, on a circle in another space to move it there and into that place, or on a space heading to move it to that space. A circle in ACTIVE only reorders with circles of its own space. Rows show the same purple tint Stage's pills do while you drag over them.
+
 ## [0.28.32] — 2026-11-17
 
 ### Fixed
