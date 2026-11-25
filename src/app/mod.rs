@@ -39,6 +39,7 @@ pub(crate) mod kit_ui;
 mod layout;
 mod lead_tasks;
 mod menus;
+mod new_circle;
 mod pads;
 mod palette;
 mod panels;
@@ -384,6 +385,8 @@ pub struct SeanceApp {
     gui_menu_scrolled: std::cell::Cell<bool>,
     /// Where the "+" menu (New circle / New space) was opened; None when closed.
     new_menu: Option<gpui::Point<gpui::Pixels>>,
+    /// The New circle dialog (see `new_circle`).
+    new_circle: new_circle::NewCircleUi,
     /// Render-safe cache of daemon-side files (pad sidecars, phone binds,
     /// prompt library) — refreshed by a ~2s background loop.
     remote_cache: Arc<crate::remote_cache::RemoteCache>,
@@ -624,6 +627,7 @@ impl SeanceApp {
             gui_menu_scroll: gpui::ScrollHandle::new(),
             gui_menu_scrolled: std::cell::Cell::new(false),
             new_menu: None,
+            new_circle: Default::default(),
             remote_cache,
             daemon_error: None,
             render_probe: RenderProbe::default(),
@@ -1855,6 +1859,12 @@ impl SeanceApp {
         let ks = &event.keystroke;
         let key = ks.key.as_str();
 
+        // ---- the New circle dialog: Esc, and P or W on its first step ----
+        if self.new_circle_key(key, window, cx) {
+            cx.stop_propagation();
+            return;
+        }
+
         // ---- palette is open: own all keys until dismissed ----
         if !matches!(self.palette, PaletteMode::Closed) {
             if key == "escape" {
@@ -2422,6 +2432,7 @@ impl SeanceApp {
             if new_circle.as_ref() == Some(slug) {
                 let n = self.session_counter + 1;
                 let command = crate::term_config::get().seance_new_circle_command.clone();
+                let command = self.new_circle.first_pane_command(command);
                 self.spawn_internal(
                     SpawnRequest {
                         name: format!("term-{n}"),
@@ -3498,6 +3509,7 @@ impl Render for SeanceApp {
             .children(self.render_kit(window, cx))
             .children(self.render_signin(cx))
             .children(self.render_new_menu(cx))
+            .children(self.render_new_circle(cx))
             .children(match &self.drawer {
                 // The Wall fills the window, as the overview always did.
                 _ if walled => None,

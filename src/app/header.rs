@@ -102,30 +102,45 @@ impl SeanceApp {
     /// Make a circle or a space the way the view's own "+" does.
     pub(super) fn run_new(&mut self, kind: NewKind, window: &mut Window, cx: &mut Context<Self>) {
         self.new_menu = None;
-        let Some(flow) = new_flow(self.view.mode, kind) else {
-            cx.notify();
+        if self.new_circle.is_open() {
             return;
-        };
+        }
+        match new_flow(self.view.mode, kind) {
+            Some(NewFlow::Space) => self.create_space(window, cx),
+            // A circle asks first; Esc there makes the plain one.
+            Some(_) => self.open_new_circle_dialog(window, cx),
+            None => {}
+        }
+        cx.notify();
+    }
+
+    /// Make a circle the way the view's own "+" does. With `space` (the
+    /// dialog's Create) it lands there, and a Classic circle gets its first
+    /// pane like the others. Returns the circle's slug.
+    pub(super) fn make_new_circle(
+        &mut self,
+        space: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<String> {
+        let flow = new_flow(self.view.mode, NewKind::Circle)?;
+        let chosen = space.is_some();
+        if chosen || flow != NewFlow::ClassicCircle {
+            // New circles land in the space shown; make that this one.
+            self.rail_space = Some(space.unwrap_or_else(|| self.shown_space()));
+        }
+        let name = self.create_workspace(window, cx);
         match flow {
             NewFlow::ChatCircle => {
-                // New circles land in the space shown, and open here.
-                self.rail_space = Some(self.shown_space());
-                let name = self.create_workspace(window, cx);
                 self.stage.new_circle = Some(name.clone());
                 self.chat.open_new_circle(&name);
             }
-            NewFlow::ClassicCircle => {
-                let _ = self.create_workspace(window, cx);
-            }
-            NewFlow::StageCircle => {
-                // New circles land in the rail's space; make that this one.
-                self.rail_space = Some(self.shown_space());
-                let name = self.create_workspace(window, cx);
-                self.stage.new_circle = Some(name);
-            }
-            NewFlow::Space => self.create_space(window, cx),
+            NewFlow::StageCircle => self.stage.new_circle = Some(name.clone()),
+            NewFlow::ClassicCircle if chosen => self.stage.new_circle = Some(name.clone()),
+            _ => {}
         }
         cx.notify();
+        Some(name)
     }
 
     /// The logo row (mark, AFK chip) with the view switch under it at full

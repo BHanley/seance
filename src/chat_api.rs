@@ -440,6 +440,15 @@ pub fn send(ws: &str, text: &str, reply: Option<i64>) -> Result<()> {
     curl("/api/send", REQUEST_SECS, Some(&send_body(ws, text, reply))).map(|_| ())
 }
 
+/// The New circle dialog's first message: Invoke holds it until the circle's
+/// Claude is at its prompt. It refuses (400) until the hub lists a pane in
+/// the circle, so the caller retries.
+pub fn send_when_ready(ws: &str, text: &str) -> Result<()> {
+    let mut body = send_body(ws, text, None);
+    body["when_ready"] = true.into();
+    curl("/api/send", REQUEST_SECS, Some(&body)).map(|_| ())
+}
+
 /// The body of a send. Without a reply it is exactly `{ws, text}`.
 fn send_body(ws: &str, text: &str, reply: Option<i64>) -> serde_json::Value {
     let mut body = serde_json::json!({ "ws": ws, "text": text });

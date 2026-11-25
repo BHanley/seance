@@ -54,7 +54,7 @@ fn pick_claude(
 /// saw. We read PATH rather than ask `command -v`, which answers with alias
 /// text when `claude` is an alias. Our own marker line picks the answer out
 /// of whatever the rc files print.
-fn login_shell_path() -> Option<String> {
+pub(crate) fn login_shell_path() -> Option<String> {
     let shell = std::env::var("SHELL")
         .ok()
         .filter(|s| s.starts_with('/'))
@@ -244,7 +244,7 @@ pub fn now_secs() -> i64 {
 }
 
 /// Run `cmd` and return its stdout, or None if it didn't finish in `limit`.
-fn capture(mut cmd: Command, limit: Duration) -> Option<String> {
+pub(crate) fn capture(mut cmd: Command, limit: Duration) -> Option<String> {
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
