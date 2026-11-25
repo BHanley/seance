@@ -726,7 +726,7 @@ impl SeanceApp {
         // The middle scrolls on a short window; the footer (buttons) stays.
         let mut body = div()
             .id("nc-body")
-            .flex_1()
+            .flex_initial()
             .min_h_0()
             .overflow_y_scroll()
             .flex()
@@ -899,7 +899,11 @@ impl SeanceApp {
                 );
             }
         }
-        card = card.child(body).children(footer);
+        // Step 1 has nothing in the middle: no empty box, no extra gap.
+        if d.kind.is_some() {
+            card = card.child(body);
+        }
+        card = card.children(footer);
         Some(
             gpui::deferred(
                 div()
