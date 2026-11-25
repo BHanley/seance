@@ -618,6 +618,7 @@ impl SeanceApp {
             div()
                 .id(id)
                 .flex_1()
+                .min_w_0()
                 .p_3()
                 .rounded_md()
                 .border_1()
@@ -684,7 +685,7 @@ impl SeanceApp {
         let mut card = div()
             .id("new-circle-card")
             .w(px(520.))
-            .max_h(px(620.))
+            .max_h(gpui::relative(0.9))
             .p_4()
             .flex()
             .flex_col()
@@ -722,8 +723,18 @@ impl SeanceApp {
                         "W",
                     )),
             );
+        // The middle scrolls on a short window; the footer (buttons) stays.
+        let mut body = div()
+            .id("nc-body")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap_3();
+        let mut footer: Option<AnyElement> = None;
         match (d.kind, d.named) {
-            (None, _) => card = card.child(faint("Skip with Esc".into())),
+            (None, _) => footer = Some(faint("Skip with Esc".into()).into_any_element()),
             (Some(_), false) => {
                 let list: Option<&[Issue]> = match (&d.hits, &d.mine) {
                     (Some(h), _) => Some(h),
@@ -736,7 +747,7 @@ impl SeanceApp {
                     (None, Mine::Got(_)) => "Your open issues, newest first",
                     (None, Mine::NoGh) => "Paste an issue link",
                 };
-                card = card
+                body = body
                     .child(
                         div()
                             .text_sm()
@@ -771,7 +782,9 @@ impl SeanceApp {
                                         this.nc_named(Some(issue), window, cx);
                                         this.nc_resolve(found, false, window, cx);
                                     }))
-                                    .child(div().truncate().child(i.title.clone()))
+                                    .child(
+                                        div().flex_1().min_w_0().truncate().child(i.title.clone()),
+                                    )
                                     .child(
                                         div()
                                             .flex_none()
@@ -780,17 +793,18 @@ impl SeanceApp {
                                             .child(format!("{} {}", i.repo, i.number)),
                                     )
                             })),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .child(faint(caption.into()))
-                            .child(button("nc-none", "No issue", false).on_click(
-                                cx.listener(|this, _, window, cx| this.nc_named(None, window, cx)),
-                            )),
                     );
+                footer = Some(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .child(faint(caption.into()).flex_1().min_w_0())
+                        .child(button("nc-none", "No issue", false).flex_none().on_click(
+                            cx.listener(|this, _, window, cx| this.nc_named(None, window, cx)),
+                        ))
+                        .into_any_element(),
+                );
             }
             (Some(kind), true) => {
                 if let Some(i) = &d.picked {
@@ -807,7 +821,7 @@ impl SeanceApp {
                             i.subs.join(", ")
                         ),
                     };
-                    card = card.child(div().text_sm().child("Issue")).child(
+                    body = body.child(div().text_sm().child("Issue")).child(
                         div()
                             .p_3()
                             .flex()
@@ -838,9 +852,12 @@ impl SeanceApp {
                                         .gap_2()
                                         .text_sm()
                                         .child(
-                                            div().text_color(SeancePalette::success()).child("✓"),
+                                            div()
+                                                .flex_none()
+                                                .text_color(SeancePalette::success())
+                                                .child("✓"),
                                         )
-                                        .child(t)
+                                        .child(div().flex_1().min_w_0().child(t))
                                 }),
                             ),
                     );
@@ -856,31 +873,32 @@ impl SeanceApp {
                     .get(&into)
                     .map(|s| s.name.clone())
                     .unwrap_or_default();
-                card = card
+                body = body
                     .child(div().text_sm().child("Name"))
-                    .child(Input::new(&d.name))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .child(faint(format!("Goes in {into}").into()))
-                            .child(
-                                div()
-                                    .flex()
-                                    .gap_2()
-                                    .child(button("nc-back", "Back", false).on_click(
-                                        cx.listener(|this, _, window, cx| this.nc_back(window, cx)),
-                                    ))
-                                    .child(button("nc-create", "Create", true).on_click(
-                                        cx.listener(|this, _, window, cx| {
-                                            this.nc_create(window, cx)
-                                        }),
-                                    )),
-                            ),
-                    );
+                    .child(Input::new(&d.name));
+                footer = Some(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .child(faint(format!("Goes in {into}").into()).flex_1().min_w_0())
+                        .child(
+                            div()
+                                .flex_none()
+                                .flex()
+                                .gap_2()
+                                .child(button("nc-back", "Back", false).on_click(
+                                    cx.listener(|this, _, window, cx| this.nc_back(window, cx)),
+                                ))
+                                .child(button("nc-create", "Create", true).on_click(
+                                    cx.listener(|this, _, window, cx| this.nc_create(window, cx)),
+                                )),
+                        )
+                        .into_any_element(),
+                );
             }
         }
+        card = card.child(body).children(footer);
         Some(
             gpui::deferred(
                 div()

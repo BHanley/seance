@@ -1037,10 +1037,7 @@ a later note\n";
             "",
             "",
         ]);
-        assert_eq!(
-            last_output_line(&shell).as_deref(),
-            Some("sam@desktop:~$")
-        );
+        assert_eq!(last_output_line(&shell).as_deref(), Some("sam@desktop:~$"));
         assert_eq!(
             last_output_lines(&claude, 2),
             ["  Three ideas, ranked".trim(), "✻ Cooked for 48s"]
