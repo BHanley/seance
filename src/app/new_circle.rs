@@ -757,6 +757,7 @@ impl SeanceApp {
                     .child(
                         div()
                             .id("nc-issues")
+                            .flex_none()
                             .max_h(px(240.))
                             .overflow_y_scroll()
                             .flex()
