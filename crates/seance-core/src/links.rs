@@ -665,10 +665,10 @@ mod tests {
             70,
             &[
                 "● Filed it under the epic: https://github.com/ridewithgps/ri",
-                "  dewithgps/issues/24265 and set the roadmap fields.",
+                "  dewithgps/issues/12345 and set the roadmap fields.",
             ],
         );
-        let want = Some("https://github.com/ridewithgps/ridewithgps/issues/24265");
+        let want = Some("https://github.com/ridewithgps/ridewithgps/issues/12345");
         assert_eq!(url_at_cell(&snap, 0, 40).as_deref(), want);
         assert_eq!(url_at_cell(&snap, 1, 4).as_deref(), want);
     }
