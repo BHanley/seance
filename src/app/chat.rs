@@ -34,7 +34,7 @@ use crate::theme::SeancePalette;
 use super::actions::{ActBanishSpace, ActDeleteSpace};
 use super::header::PlusAction;
 use super::lead_tasks::clock;
-use super::util::{now_ms, tip, tip_s};
+use super::util::{now_ms, sidebar_press_no_select, tip, tip_s, DraggedCircle};
 use super::views::ViewMode;
 use super::workspaces::banish_arm_live;
 use super::SeanceApp;
@@ -1322,7 +1322,30 @@ enum ListItem {
         id: String,
         name: String,
     },
-    Circle(CircleRow),
+    /// A circle row; the flag is true for a row lifted into ACTIVE.
+    Circle(CircleRow, bool),
+}
+
+/// What a circle dropped on another circle's row does.
+#[derive(Debug, PartialEq)]
+enum CircleDrop {
+    Nothing,
+    /// Same space: take the row's place.
+    Reorder,
+    /// Another space: move there, then take the row's place.
+    MoveThenReorder,
+}
+
+/// A row in ACTIVE shows its circle out of its space, so a drop on it only
+/// reorders when both circles share a space.
+fn circle_drop(moved_space: &str, target_space: &str, target_in_active: bool) -> CircleDrop {
+    if moved_space == target_space {
+        CircleDrop::Reorder
+    } else if target_in_active {
+        CircleDrop::Nothing
+    } else {
+        CircleDrop::MoveThenReorder
+    }
 }
 
 /// A list heading: a space's name, or Active.
@@ -2661,7 +2684,7 @@ impl SeanceApp {
         };
         self.chat.list_dancing.clear();
         for (i, item) in items.iter().enumerate() {
-            if let ListItem::Circle(c) = item {
+            if let ListItem::Circle(c, _) = item {
                 if let Some(d) = self.chat.list_dances.get_mut(&c.ws) {
                     if seen.contains(&i) {
                         d.advance(now, &mut rand::thread_rng());
@@ -2693,7 +2716,7 @@ impl SeanceApp {
         // the header, wears the ember and dots: the dance timer redraws it.
         let waiting =
             items.iter().enumerate().any(|(i, item)| match item {
-                ListItem::Circle(c) => seen.contains(&i) && self.chat_row_waits(c),
+                ListItem::Circle(c, _) => seen.contains(&i) && self.chat_row_waits(c),
                 _ => false,
             }) || self.chat.selected.as_deref().is_some_and(|ws| {
                 self.chat_header_waits(ws) || self.chat_status_line(ws).is_some()
@@ -2755,7 +2778,7 @@ impl SeanceApp {
         let active = active_circles(&self.chat.circles, now_ms());
         if !active.is_empty() {
             items.push(ListItem::Label("ACTIVE".to_string()));
-            items.extend(active.iter().cloned().map(ListItem::Circle));
+            items.extend(active.iter().cloned().map(|c| ListItem::Circle(c, true)));
         }
         let mut space = String::new();
         for c in self.chat_circles_in_order() {
@@ -2772,7 +2795,7 @@ impl SeanceApp {
                 }
                 space = id;
             }
-            items.push(ListItem::Circle(c));
+            items.push(ListItem::Circle(c, false));
         }
         // A new space has no circle yet: its label still shows, so it is there
         // to be named and filled.
@@ -2812,7 +2835,7 @@ impl SeanceApp {
             col = col.child(match item {
                 ListItem::Label(text) => list_label(text).into_any_element(),
                 ListItem::Space { id, name } => self.chat_space_heading(id, name, cx),
-                ListItem::Circle(c) => self.chat_circle_row(&c, cx),
+                ListItem::Circle(c, lifted) => self.chat_circle_row(&c, lifted, cx),
             });
         }
         div()
@@ -2923,15 +2946,13 @@ impl SeanceApp {
             .flex()
             .items_center()
             .gap_2()
-            .drag_over::<super::util::DraggedCircle>(|style, _, _, _| {
+            .drag_over::<DraggedCircle>(|style, _, _, _| {
                 style.bg(SeancePalette::flame_dim().opacity(0.35))
             })
-            .on_drop(
-                cx.listener(move |this, drag: &super::util::DraggedCircle, _, cx| {
-                    this.move_circle_to_space(&drag.slug, &id);
-                    cx.notify();
-                }),
-            )
+            .on_drop(cx.listener(move |this, drag: &DraggedCircle, _, cx| {
+                this.move_circle_to_space(&drag.slug, &id);
+                cx.notify();
+            }))
             .context_menu(move |menu, _, _| {
                 let m = if count > 0 {
                     menu.menu(
@@ -2970,7 +2991,7 @@ impl SeanceApp {
             .into_any_element()
     }
 
-    fn chat_circle_row(&self, c: &CircleRow, cx: &Context<Self>) -> AnyElement {
+    fn chat_circle_row(&self, c: &CircleRow, lifted: bool, cx: &Context<Self>) -> AnyElement {
         let targets = move_targets(
             self.subs_pref
                 .spaces
@@ -2987,6 +3008,7 @@ impl SeanceApp {
         let armed = banish_arm_live(self.banish_armed.as_ref(), &c.ws, Instant::now());
         let panes = self.panes.iter().filter(|p| p.workspace == c.ws).count();
         let arm_ws = c.ws.clone();
+        let drop_ws = c.ws.clone();
         let pulse = 0.45 + 0.55 * (((now_ms() / 300) % 2) as f32);
         let me = row_plate(crate::theme::active());
         div()
@@ -3006,13 +3028,27 @@ impl SeanceApp {
             })
             .hover(|s| s.bg(SeancePalette::surface()))
             .on_click(cx.listener(move |this, _, window, cx| this.chat_select(&ws, window, cx)))
-            .on_drag(
-                super::util::DraggedCircle { slug: drag_slug },
-                move |_, _, _, cx| {
-                    let label = format!("◈ {drag_label}");
-                    cx.new(|_| super::util::DragPill { label })
-                },
+            // The row owns its press, so a drag never starts a text selection.
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|_, _, window, cx| sidebar_press_no_select(window, cx)),
             )
+            .on_drag(DraggedCircle { slug: drag_slug }, move |_, _, _, cx| {
+                let label = format!("◈ {drag_label}");
+                cx.new(|_| super::util::DragPill { label })
+            })
+            .drag_over::<DraggedCircle>(|style, _, _, _| style.bg(SeancePalette::violet_dim()))
+            .on_drop(cx.listener(move |this, drag: &DraggedCircle, _, cx| {
+                let spaces = &this.subs_pref.spaces;
+                let target = spaces.space_of(&drop_ws).to_string();
+                match circle_drop(spaces.space_of(&drag.slug), &target, lifted) {
+                    CircleDrop::Nothing => return,
+                    CircleDrop::Reorder => {}
+                    CircleDrop::MoveThenReorder => this.move_circle_to_space(&drag.slug, &target),
+                }
+                this.reorder_circle(&drag.slug, &drop_ws);
+                cx.notify();
+            }))
             .context_menu(move |menu, window, cx| {
                 let (ws, weak) = (menu_ws.clone(), weak.clone());
                 let (move_ws, move_weak, targets) = (ws.clone(), weak.clone(), targets.clone());
@@ -4462,7 +4498,16 @@ impl SeanceApp {
 
 #[cfg(test)]
 mod tests {
-    use super::copy_choice;
+    use super::{circle_drop, copy_choice, CircleDrop};
+
+    #[test]
+    fn a_drop_on_a_row_reorders_within_a_space_and_moves_across_spaces() {
+        assert_eq!(circle_drop("a", "a", false), CircleDrop::Reorder);
+        assert_eq!(circle_drop("a", "b", false), CircleDrop::MoveThenReorder);
+        // ACTIVE rows lift a circle out of its space.
+        assert_eq!(circle_drop("a", "a", true), CircleDrop::Reorder);
+        assert_eq!(circle_drop("a", "b", true), CircleDrop::Nothing);
+    }
 
     #[test]
     fn copy_takes_the_selection_and_falls_back_to_the_whole_message() {
