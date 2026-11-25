@@ -981,7 +981,7 @@ a later note\n";
 
     #[test]
     fn bare_shells_are_shells_with_nothing_running() {
-        assert!(is_bare_shell("bash -l", Some("bhanley@omarchy:~"), false));
+        assert!(is_bare_shell("bash -l", Some("sam@desktop:~"), false));
         assert!(is_bare_shell("", None, false));
         assert!(is_bare_shell("/usr/bin/zsh", None, false));
         assert!(!is_bare_shell("bash -l", Some("✳ Claude Code"), false));
@@ -1033,13 +1033,13 @@ a later note\n";
         let shell = rows(&[
             "$ cargo build",
             "   Finished release",
-            "bhanley@omarchy:~$ ",
+            "sam@desktop:~$ ",
             "",
             "",
         ]);
         assert_eq!(
             last_output_line(&shell).as_deref(),
-            Some("bhanley@omarchy:~$")
+            Some("sam@desktop:~$")
         );
         assert_eq!(
             last_output_lines(&claude, 2),

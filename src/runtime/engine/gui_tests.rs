@@ -1143,7 +1143,7 @@ fn hosted_claude_records_titles_and_launch() {
     assert_eq!(parse_hosted("not json"), None);
     assert!(title_is_claude(Some("\u{2733} Q4 roadmap review")));
     assert!(title_is_claude(Some("\u{25D0} working")));
-    assert!(!title_is_claude(Some("bhanley@omarchy:~")));
+    assert!(!title_is_claude(Some("sam@desktop:~")));
     assert!(!title_is_claude(None));
     assert_eq!(
         hosted_launch("abc", "/home/b/it's here"),

@@ -778,7 +778,7 @@ mod tests {
         assert_eq!(t("Fix the tiles"), None);
         assert_eq!(task_title("Fix the tiles", "claude-mac"), None);
         assert_eq!(task_title("Fix the tiles", "bash -l"), None);
-        assert_eq!(task_title("bhanley@omarchy:~/x", "bash -l"), None);
+        assert_eq!(task_title("sam@desktop:~/x", "bash -l"), None);
         assert_eq!(task_title("zsh", "/usr/bin/env claude-mac"), None);
         assert_eq!(
             task_title("✳ Review", "/usr/bin/env A=1 claude").as_deref(),
